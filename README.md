@@ -31,7 +31,7 @@ and standings.
 Your data
 Everything stays on your machine, in:
 ```
-%LOCALAPPDATA%\\\\EveTradeLedger
+%LOCALAPPDATA%\\\\\\\\EveTradeLedger
 ```
 Settings, your trade journal and the item database live there. Uninstalling does
 not delete this folder — if you want your data gone, remove it yourself.
