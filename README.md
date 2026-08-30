@@ -13,48 +13,38 @@ you actually earned.
   one needs.
 - **Material reservation** — a saved plan holds on to the material it needs, so
   a second plan does not tell you to buy the same stack twice.
-- **Trade journal** — imports your transactions via ESI and shows real profit
-  after sales tax and broker fees, calculated from your actual skills and
-  standings.
-- **Deal finder** — daytrade and swing suggestions per hub, with your own fees
-  applied.
+- **Trade journal** — real profit after sales tax and broker fees, calculated
+  from your actual skills and standings.
+- **Deal finder** — daytrade and swing suggestions per hub.
 
 ## Install
 
-1. Download `EVE Motor Market.exe` from
-   [Releases](https://github.com/PeanutMotor/eve-motor-market/releases).
-2. Run it. No installation, no administrator rights, no Python.
-3. Windows will warn you on first launch because the file is not code-signed —
-   click "More info", then "Run anyway".
+Download `EVE Motor Market.exe` from
+[Releases](https://github.com/PeanutMotor/eve-motor-market/releases) and run it.
+Windows 10 or later.
 
-Windows 10 or later. Nothing else to install.
+Windows warns on first launch because the file is not code-signed — click
+"More info", then "Run anyway".
 
 ## First start
 
-Open the **Charaktere** tab and link a character. Until you do, the tool has no
-idea about your skills or standings and calculates with the untrained base case
-(7.5 % sales tax, 3 % broker fee) — deliberately pessimistic, so nothing ever
-looks better than it is.
-
-After linking, use **Einstellungen → Aus EVE holen** to pull your real skills
-and standings.
+Open the **Charaktere** tab and link a character, then
+**Einstellungen → Aus EVE holen** for your skills and standings. Until then the
+tool calculates with untrained base values, so nothing looks better than it is.
 
 ## Your data
 
-Everything stays on your machine, in:
+Everything stays on your machine, in `%APPDATA%\EVE Motor Market`. Nothing is
+uploaded anywhere. The tool talks to EVE's ESI servers, and to GitHub when you
+check for updates.
 
-```
-%APPDATA%\EVE Motor Market
-```
+## Bugs and requests
 
-Settings, your trade journal and the item database live there. Deleting the
-program does **not** delete this folder — if you want your data gone, remove it
-yourself.
+Open an [issue](https://github.com/PeanutMotor/eve-motor-market/issues) — what
+you did and what you expected is enough.
 
-Nothing is uploaded anywhere. The tool talks to EVE's own ESI servers and to
-GitHub when you press the update button, and to nothing else.
+---
 
-## Updates
-
-The tool does not update itself. **Einstellungen → Auf neue Programm-Version
-prüfen** asks GitHub
+Not a CCP Games product, not endorsed by CCP. The developer has signed the EVE
+Online Developer License Agreement. EVE Online and all related trademarks belong
+to CCP hf.
