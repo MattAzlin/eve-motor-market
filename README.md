@@ -21,10 +21,11 @@ you actually earned.
 
 ## Install
 
-1. Download the installer from
+1. Download `EVE Motor Market.exe` from
    [Releases](https://github.com/PeanutMotor/eve-motor-market/releases).
-2. Run it. No administrator rights needed — it installs to your user folder.
-3. Start **EVE Motor Market** from the start menu.
+2. Run it. No installation, no administrator rights, no Python.
+3. Windows will warn you on first launch because the file is not code-signed —
+   click "More info", then "Run anyway".
 
 Windows 10 or later. Nothing else to install.
 
@@ -46,4 +47,14 @@ Everything stays on your machine, in:
 %APPDATA%\EVE Motor Market
 ```
 
-Settings, your trade journal and the item database
+Settings, your trade journal and the item database live there. Deleting the
+program does **not** delete this folder — if you want your data gone, remove it
+yourself.
+
+Nothing is uploaded anywhere. The tool talks to EVE's own ESI servers and to
+GitHub when you press the update button, and to nothing else.
+
+## Updates
+
+The tool does not update itself. **Einstellungen → Auf neue Programm-Version
+prüfen** asks GitHub
