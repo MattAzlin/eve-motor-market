@@ -48,3 +48,6 @@ you did and what you expected is enough.
 Not a CCP Games product, not endorsed by CCP. The developer has signed the EVE
 Online Developer License Agreement. EVE Online and all related trademarks belong
 to CCP hf.
+<img width="2096" height="1180" alt="Tab_Profit" src="https://github.com/user-attachments/assets/a2bb8ddb-08e6-4ea9-a7d1-ffdf27d2c1e7" />
+<img width="2096" height="1180" alt="Buidlplan_Recipe" src="https://github.com/user-attachments/assets/dbffe277-2974-4849-a137-3b4dc6f7641e" />
+
