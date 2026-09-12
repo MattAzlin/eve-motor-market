@@ -40,7 +40,7 @@ come with its own source under the same licence.
 
 COMMUNITY
 
-Questions, bug reports and ideas: https://discord.gg/Vf6jmYTkj3
+Questions, bug reports and ideas: https://discord.gg/Atuqe6c2Rj
 
 YOUR DATA
 
