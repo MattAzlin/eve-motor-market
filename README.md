@@ -1,55 +1,74 @@
 # EVE Motor Market
 
-Industry and trading tool for EVE Online. Plans builds down to the raw
-materials, spreads the jobs across your characters, and keeps a journal of what
-you actually earned.
+Industry and trading tool for EVE Online — for players who build and trade
+across several characters.
 
-## What it does
+Windows desktop app, free, no account, no ads. Your data never leaves your
+machine.
 
-- **Build planning** — full recipe tree from the finished item down to ore and
-  reactions, with ME/TE per item category.
-- **Run planner** — distributes jobs across your characters based on their real
-  skills, job slots and implants, and tells you how many blueprint copies each
-  one needs.
-- **Material reservation** — a saved plan holds on to the material it needs, so
-  a second plan does not tell you to buy the same stack twice.
-- **Trade journal** — real profit after sales tax and broker fees, calculated
-  from your actual skills and standings.
-- **Deal finder** — daytrade and swing suggestions per hub.
+## Build
+
+- Full recipe tree from the finished item down to ore and reactions.
+- Decide per stage what you build yourself and what you buy.
+- ME/TE taken from your own blueprints, including structure and rig bonuses.
+- Invention: attempts, decryptors and datacores for the T2 version of your
+  T1 blueprints.
+- Run planner spreads the jobs across your characters by skills and job slots.
+- Shopping list with order-book prices; saved plans reserve their material, so
+  you never buy the same stack twice.
+- Freeze a plan to keep the prices and quantities of the day you bought.
+
+## Trade
+
+- Trade journal with real profit after your own sales tax and broker fees.
+- Deal finders: daytrade, swing and regional, each with presets.
+- Order update shows which of your orders were undercut, and the new price.
+- Price history for any item before you commit to a big buy.
+
+## Multi-character
+
+Link as many characters as you like. Wallets, orders, assets, skills and
+industry jobs are combined — one view across all of them.
 
 ## Install
 
-Download `EVE Motor Market.exe` from
+Download the `.exe` from
 [Releases](https://github.com/PeanutMotor/eve-motor-market/releases) and run it.
-Windows 10 or later.
+Windows 10 or later. Windows warns on first launch because the file is not
+code-signed — click "More info", then "Run anyway".
 
-Windows warns on first launch because the file is not code-signed — click
-"More info", then "Run anyway".
+A one-time setup links your first character and downloads the recipe data
+(about 140 MB). A guided tour walks you through the tool on first start, and
+can be restarted any time from the button on the bottom left.
 
-## First start
-
-Open the **Charaktere** tab and link a character, then
-**Einstellungen → Aus EVE holen** for your skills and standings. Until then the
-tool calculates with untrained base values, so nothing looks better than it is.
+Updating? Just replace the old `.exe` — your settings, plans and characters
+stay where they are.
 
 ## Your data
 
-Everything stays on your machine, in `%APPDATA%\EVE Motor Market`. Nothing is
-uploaded anywhere. The tool talks to EVE's ESI servers, and to GitHub when you
-check for updates.
+Everything stays on your machine, in `%APPDATA%\EVE Motor Market`. No account,
+no server, no telemetry. The tool connects only to `login.eveonline.com`,
+`esi.evetech.net`, `images.evetech.net`, `www.fuzzwork.co.uk` (recipe data) and
+`api.github.com` (update check).
 
-## Bugs and requests
+EVE login goes through CCP's official flow. Only a refresh token is stored —
+never your password.
 
-Open an [issue](https://github.com/PeanutMotor/eve-motor-market/issues) — what
-you did and what you expected is enough.
+## Community
+
+Questions, bug reports and ideas: [Discord](https://discord.gg/Vf6jmYTkj3).
+
+## Language
+
+English and German. Switch it at the top right of the window.
+
+## License
+
+Copyright (C) 2026 PeanutMotor.
+Licensed under the GNU General Public License v3.0 — see [LICENSE](LICENSE).
 
 ---
 
 Not a CCP Games product, not endorsed by CCP. The developer has signed the EVE
 Online Developer License Agreement. EVE Online and all related trademarks belong
 to CCP hf.
-
-<img src="https://github.com/user-attachments/assets/88e6db48-40eb-4d83-981b-31d1329bbe7c" width="700" alt="Tab_Profit"><br><br>
-<img src="https://github.com/user-attachments/assets/44c5919b-8d38-46ca-9c4b-b3e9d4c53e58" width="700" alt="Daytrade"><br><br>
-<img src="https://github.com/user-attachments/assets/f5236920-fe3d-4695-b94f-eefb04a31591" width="700" alt="Buidlplan_Recipe"><br><br>
-<img src="https://github.com/user-attachments/assets/48a4a5e7-e3e0-4fd2-b383-96c6b9f36876" width="700" alt="Invention">
