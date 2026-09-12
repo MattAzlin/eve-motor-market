@@ -49,6 +49,9 @@ Not a CCP Games product, not endorsed by CCP. The developer has signed the EVE
 Online Developer License Agreement. EVE Online and all related trademarks belong
 to CCP hf.
 
-<img width="2096" height="1180" alt="Buidlplan_Recipe" src="https://github.com/user-attachments/assets/d612f9b4-e47b-4983-9129-bd9b85071136" />
-<img width="2096" height="1180" alt="Tab_Profit" src="https://github.com/user-attachments/assets/cf023c5b-c6be-40dd-957d-c028ebb569f9" />
+<img width="2096" height="1180" alt="Tab_Profit" src="https://github.com/user-attachments/assets/690782bd-bf32-4d43-9ffc-0d4c63167641" />
+<img width="2096" height="1180" alt="Invention" src="https://github.com/user-attachments/assets/6507ff4a-5a73-4a9f-aec0-660adfcf23c3" />
+<img width="2096" height="1180" alt="Buidlplan_Recipe" src="https://github.com/user-attachments/assets/78d38f30-f6a6-4e4b-961a-4fcced2780cb" />
+<img width="2096" height="1180" alt="Daytrade" src="https://github.com/user-attachments/assets/67c8dca0-8fe1-442f-bde4-022b41b8ea67" />
+
 
