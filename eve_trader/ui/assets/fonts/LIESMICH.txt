@@ -1,0 +1,23 @@
+EIGENE SCHRIFT EINSETZEN
+========================
+
+Standard ist "Bahnschrift" - Microsofts technische DIN-Schrift, die auf
+jedem Windows 10/11 bereits installiert ist. Schmal, gerade, industriell.
+
+Eigene Schrift verwenden:
+1. .ttf- oder .otf-Datei in DIESEN Ordner legen.
+2. Tool neu starten. Fertig - kein Code-Eingriff noetig.
+
+Liegen mehrere Dateien hier, gewinnt die alphabetisch erste. Eine kaputte
+Datei wird stillschweigend uebersprungen, das Tool startet trotzdem.
+
+Gut passende, kostenlose Vorschlaege (Google Fonts):
+  Rajdhani       - kantig, schmal, sehr nah an EVEs eigener UI
+  Chakra Petch   - technisch mit abgeschraegten Ecken, Sci-Fi-Anmutung
+  Saira Condensed- schmal und sachlich, gut fuer viele Zahlen
+  Titillium Web  - runder, ruhiger, gut fuer lange Lesetexte
+  Orbitron       - stark futuristisch (nur fuer Ueberschriften empfohlen,
+                   als Grundschrift schlecht lesbar)
+
+EVEs eigene Schrift (Shentox) ist lizenziert und darf nicht mitgeliefert
+werden - wer sie besitzt, kann sie hier ablegen.

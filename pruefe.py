@@ -1,0 +1,125 @@
+"""EIN Befehl vor jeder Veroeffentlichung:  python pruefe.py
+
+Laeuft die vier Pruefungen, die zusammen den Stand absichern, und sagt am
+Ende in einer Zeile, ob veroeffentlicht werden darf.
+
+WARUM ZUSAMMEN: jede findet etwas, das die anderen NICHT finden.
+  * aa/b-Suiten  - die Zusagen des Werkzeugs (rechnet es richtig?)
+  * lint_order   - Reihenfolge/Struktur im Quelltext
+  * pyflakes     - undefinierte Namen. Sitzung 16: 38 Stueck, alle erst
+                   beim AUSFUEHREN sichtbar. Kompilieren zeigt sie nicht,
+                   und beide Suiten waren dabei gruen.
+
+Die Rotprobe laeuft hier NICHT mit (--check dauert 2 Min, der volle Lauf
+Stunden). Sie ist eine eigene Runde: `python rotprobe.py --check`.
+"""
+import os
+import subprocess
+import sys
+
+os.chdir(os.path.dirname(os.path.abspath(__file__)) or ".")
+PY = sys.executable
+
+
+def lauf(titel, befehl, umgebung=None, muster_ok=None):
+    u = dict(os.environ)
+    u.update(umgebung or {})
+    print(f"\n=== {titel} " + "=" * max(0, 56 - len(titel)))
+    # ZEICHENTABELLE FESTNAGELN: Windows liest sonst mit cp1252, und ein
+    # Umlaut in der Ausgabe kann den ganzen Text verschlucken (Sitzung 16:
+    # beim Nutzer stand unter zwei Ueberschriften GAR NICHTS, bei mir die
+    # Gruen-Zeile). `errors="replace"` heisst: lieber ein Fragezeichen im
+    # Text als eine leere Ausgabe.
+    p = subprocess.run(befehl, capture_output=True, text=True, env=u,
+                       encoding="utf-8", errors="replace")
+    aus = (p.stdout or "") + (p.stderr or "")
+    _zeilen = [z for z in aus.splitlines() if z.strip()]
+    for z in _zeilen:
+        if "FEHLER" in z or "Befund" in z or "gruen" in z or "undefined" in z:
+            print("  " + z.strip()[:110])
+    if not _zeilen:
+        print("  (keine Ausgabe - lief die Pruefung ueberhaupt?)")
+    _ok = muster_ok(aus) if muster_ok is not None else (p.returncode == 0)
+    if not _ok:
+        # BEI ROT DEN ECHTEN TEXT ZEIGEN (Sitzung 16): sonst steht da nur
+        # "ROT" und niemand weiss, woran es liegt. Der Nutzer sah genau
+        # das - zwei rote Zeilen ohne einen einzigen Hinweis darauf, was
+        # schiefging.
+        print(f"  -- Rueckgabewert {p.returncode}, letzte Zeilen: --")
+        for z in (_zeilen[-12:] or ["(gar nichts)"]):
+            print("  | " + z.rstrip()[:110])
+    return _ok
+
+
+def _warte():
+    """Beim DOPPELKLICK offen bleiben.
+
+    Windows schliesst das Fenster sonst sofort, und der Nutzer sieht nichts
+    (Sitzung 16: "dann geht das cmd fuer 1 Sekunde auf und schliesst sich
+    direkt"). Laeuft es aus einer schon offenen Kommandozeile, ist die
+    Pause ueberfluessig - dann steht der Text ohnehin da; wer Enter
+    drueckt, verliert nichts.
+    """
+    try:
+        input("\nEnter zum Schliessen ...")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
+ergebnis = {}
+def _suite_ok(aus):
+    """Gruen ist NUR, was auch wirklich gelaufen ist.
+
+    Erste Fassung fragte bloss "steht FEHLER drin?" - bei LEERER Ausgabe
+    war das falsch und meldete OK, obwohl gar nichts lief. Der Nutzer sah
+    genau das (Sitzung 16): vier Haken, aber unter zwei Ueberschriften
+    stand nichts. Jetzt muss die Abschlusszeile "N/N gruen" da sein.
+    """
+    import re
+    m = re.search(r"(\d+)/(\d+) gruen", aus)
+    return bool(m) and m.group(1) == m.group(2) and "FEHLER" not in aus
+
+
+ergebnis["Bestand-Herkunft (aa)"] = lauf(
+    "Bestand-Herkunft", [PY, "test_bestand_herkunft.py"],
+    muster_ok=_suite_ok)
+ergebnis["Bauplan-Aufbau (b)"] = lauf(
+    "Bauplan-Aufbau", [PY, "test_bauplan_aufbau.py"],
+    umgebung={"QT_QPA_PLATFORM": "offscreen", "PYTHONPATH": os.getcwd()},
+    muster_ok=_suite_ok)
+
+_dateien = []
+for wurzel, _d, _f in os.walk("eve_trader"):
+    _dateien += [os.path.join(wurzel, n) for n in _f if n.endswith(".py")]
+ergebnis["Lint (Reihenfolge)"] = lauf(
+    "Lint", [PY, "lint_order.py"] + _dateien + ["main.py"],
+    muster_ok=lambda a: "0 Befund" in a)
+
+try:
+    ergebnis["pyflakes (undefinierte Namen)"] = lauf(
+        "pyflakes", [PY, "-m", "pyflakes", "eve_trader/"],
+        muster_ok=lambda a: "undefined name" not in a)
+except FileNotFoundError:                            # pragma: no cover
+    print("  pyflakes fehlt - mit `pip install pyflakes` nachruesten")
+    ergebnis["pyflakes (undefinierte Namen)"] = None
+
+print("\n" + "=" * 62)
+schlecht = [k for k, v in ergebnis.items() if v is False]
+for k, v in ergebnis.items():
+    print(f"  {'OK  ' if v else 'FEHLT' if v is None else 'ROT '}  {k}")
+if schlecht:
+    print("\nNICHT VEROEFFENTLICHEN - erst reparieren: " + ", ".join(schlecht))
+    _warte()
+    sys.exit(1)
+print("\nAlles gruen. Veroeffentlichen ist in Ordnung.")
+# DIE VERSIONSNUMMER ZEIGEN (Sitzung 17). Das Programm meldete sich als
+# 0.1.0, waehrend auf Github 0.1.2 stand - die Update-Pruefung meldete
+# damit jedem die eigene Fassung als "neu". Keine Pruefung kann die
+# Github-Marke kennen; also steht die Zahl hier, wo vor dem Hochladen
+# ohnehin jemand hinsieht. Gelesen wie in build.bat - dieselbe Quelle.
+_ver = subprocess.run([PY, "-c", "import eve_trader;print(eve_trader.__version__)"],
+                      capture_output=True, text=True, encoding="utf-8",
+                      errors="replace").stdout.strip() or "?"
+print(f"Programmversion: {_ver}  -  die Release-Marke auf Github muss "
+      f"genau so heissen (neue Fassung = hoehere Zahl).")
+_warte()

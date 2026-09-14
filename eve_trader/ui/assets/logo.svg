@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs><linearGradient id="mmg" x1="0" y1="0" x2="0.6" y2="1">
+    <stop offset="0" stop-color="#FFD98A"/>
+    <stop offset="0.55" stop-color="#F2A23C"/>
+    <stop offset="1" stop-color="#B87326"/></linearGradient></defs>
+  <path d="M32 4 L56.2 18 V46 L32 60 L7.8 46 V18 Z" fill="#0B0F17"
+        stroke="url(#mmg)" stroke-width="2.8" stroke-linejoin="round"/>
+  <path d="M32 10 L51 21 V43 L32 54 L13 43 V21 Z" fill="none"
+        stroke="#B87326" stroke-width="1.2" stroke-linejoin="round"
+        opacity="0.75"/>
+  <polyline points="16,40 16,25 23,33 30,25 30,40" fill="none"
+        stroke="url(#mmg)" stroke-width="3.4" stroke-linecap="round"
+        stroke-linejoin="round"/>
+  <polyline points="34,40 34,25 41,33 48,25 48,40" fill="none"
+        stroke="url(#mmg)" stroke-width="3.4" stroke-linecap="round"
+        stroke-linejoin="round"/>
+</svg>

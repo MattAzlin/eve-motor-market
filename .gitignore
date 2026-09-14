@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller / Inno Setup
+build/
+dist/
+*.spec
+Output/
+
+# Laufzeit- und Nutzerdaten (gehoeren NIE ins Repo)
+.smoke_home/
+fehler.log
+settings.json
+ledger.db
+industry.db
+sde_kompakt.db
+sde_kompakt.zip
+tokens.json
+
+# Sitzungsunterlagen und Pruefwerkzeug
+OFFENE_PUNKTE*.md
+PROMPT_NAECHSTER_CHAT.md
+START_SITZUNG_*.txt
+PATCHNOTES_OFFEN.txt
+CLAUDE.md
+rotprobe_stand.json
+
+# Release-Dateien (gehoeren ans Release auf Github, nicht ins Repo;
+# die Fassungen je Version liegen in Backup_MotorMarket\)
+RELEASE_*.txt
+PATCHNOTES_*_DISCORD.txt
+README_*.txt
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
