@@ -3,6 +3,10 @@
 Industry and trading tool for EVE Online — for players who build and trade
 across several characters.
 
+![Regional trading: route strategy, freight costs and live margins across two hubs](docs/screenshot-regional-trading.png)
+
+**[Download the latest release](https://github.com/PeanutMotor/eve-motor-market/releases)** · Windows 10 or later · GPL-3.0
+
 ## Build
 
 - Full recipe tree from the finished item down to ore and reactions.
@@ -10,6 +14,8 @@ across several characters.
 - Run planner spreads the jobs across your characters by skills and job slots.
 - Shopping list with order-book prices; saved plans reserve their material, so
   you never buy the same stack twice.
+
+![A build plan: recipe tree with buy-or-build per item, build cost, total profit and margin](docs/screenshot-build-plan.png)
 
 ## Trade
 
@@ -34,9 +40,22 @@ A one-time setup links your first character and downloads the recipe data
 
 ## Source code
 
-The full source is attached to every release as a zip, under the GPL-3.0
-licence. You may read it, change it and pass it on; a changed version has to
-come with its own source under the same licence.
+The full source is in this repository, and is also attached to every release as
+a zip, under the GPL-3.0 licence. You may read it, change it and pass it on; a
+changed version has to come with its own source under the same licence.
+
+## Checks
+
+Numbers are what the tool is for, so the calculations are guarded rather than
+trusted. The repository ships the check tooling alongside the program:
+
+- two test suites, 3'598 and 996 checks, run with `python pruefe.py`
+- a mutation harness (`rotprobe.py`) that breaks the code on purpose, 827
+  mutations, to prove the checks actually catch a regression
+- source-order lint, `pyflakes`, and four scanners that keep the English and
+  German texts in step
+
+`bash start.sh` runs the lot and prints the expected result at the end.
 
 ## Community
 
