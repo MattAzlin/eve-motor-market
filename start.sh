@@ -2,7 +2,7 @@
 # SITZUNGSSTART in EINEM Befehl:  bash start.sh
 # Installiert die Abhaengigkeiten und faehrt die Pflicht-Pruefungen.
 # SOLL-Ergebnis steht am Ende - weicht etwas ab, ERST das klaeren, dann bauen.
-# (Eingerichtet in Sitzung 7, Zahlen zuletzt nachgezogen in Sitzung 17.)
+# (Eingerichtet in Sitzung 7, Zahlen zuletzt nachgezogen in Sitzung 20.)
 set -u
 cd "$(dirname "$0")"
 
@@ -10,10 +10,10 @@ echo "== 1/6 Abhaengigkeiten =="
 python3 -c "import PySide6, pyflakes" 2>/dev/null || \
     pip install --break-system-packages --quiet -r requirements.txt pyflakes
 
-echo "== 2/6 aa-Suite (SOLL 3171/3171) =="
+echo "== 2/6 aa-Suite (SOLL 3598/3598) =="
 timeout 280 python3 test_bestand_herkunft.py | tail -3
 
-echo "== 3/6 b-Suite (SOLL 932/932, endet nach wenigen Sekunden) =="
+echo "== 3/6 b-Suite (SOLL 996/996, endet nach wenigen Sekunden) =="
 QT_QPA_PLATFORM=offscreen PYTHONPATH="$PWD" timeout 120 \
     python3 test_bauplan_aufbau.py 2>/dev/null | tail -1
 
@@ -23,11 +23,11 @@ python3 lint_order.py $(find eve_trader -name "*.py") main.py | tail -1
 echo "== 5/6 pyflakes (SOLL keine 'undefined name') =="
 python3 -m pyflakes eve_trader/ main.py | grep -c "undefined name"
 
-echo "== 6/6 Rotprobe-Anwendbarkeit (SOLL 699/699) =="
+echo "== 6/6 Rotprobe-Anwendbarkeit (SOLL 827/827) =="
 python3 rotprobe.py --check
 
 echo ""
-echo "SOLL: aa 3171 | b 932 | Lint 0 | pyflakes 0 | Mutationen 699/699 anwendbar."
+echo "SOLL: aa 3598 | b 996 | Lint 0 | pyflakes 0 | Mutationen 827/827 anwendbar."
 echo "      de_scan 0 | de_scan2 0 | de_scan3 0 | de_scan4 0."
 echo "Vor jeder Veroeffentlichung beim Nutzer: python pruefe.py"
 echo ""
