@@ -52,7 +52,12 @@ KATALOG = {
         "Hub: ": "Hub: ",
         "Structure": "Struktur",
         "Market scan": "Markt-Scan",
-        "Load blueprints": "Baurezepte laden",
+        # ZWEI KNOEPFE, ZWEI WIRKUNGEN (17.09.2026): "Load recipes" laedt die
+        # SDE (Rezeptdaten), "Load blueprints" holt die eigenen Blaupausen
+        # aus ESI. Vorher hiessen beide "Load blueprints" - und die deutsche
+        # Fassung nannte auch die Blaupausen-Seite "Baurezepte laden".
+        "Load recipes": "Baurezepte laden",
+        "Load blueprints": "Blaupausen laden",
         "Character:": "Charakter:",
         "EVE data": "EVE-Daten",
         "Updates": "Updates",
@@ -154,7 +159,6 @@ KATALOG = {
         "Price from": "Preis ab",
         "Price to (0=\u221e)": "Preis bis (0=\u221e)",
         # ---- Bauen-Reiter ----
-        "Load blueprints": "Baurezepte laden",
         "Find blueprints": "Blaupausen suchen",
         "Delete": "L\u00f6schen",
         "Close": "Schlie\u00dfen",
@@ -240,7 +244,7 @@ KATALOG = {
         "Set up. Now use \u201eLink character\u201c.":
             "Eingerichtet. Jetzt \u201eCharakter verkn\u00fcpfen\u201c.",
         "The category/meta filter needs the SDE data \u2013 please run "
-        "\u201eLoad blueprints\u201c once.":
+        "\u201eLoad recipes\u201c once.":
             "Kategorie-/Meta-Filter braucht die SDE-Daten \u2013 bitte "
             "einmal \u201eBaurezepte laden\u201c.",
         # ---- Trichterzeile: warum so wenige Treffer? ----
@@ -869,10 +873,10 @@ KATALOG = {
             'Sofortverkauf (schnell raus)',
         "{n} items captured in {hub}. Now „Load deals“.":
             "{n} Items in {hub} erfasst. Jetzt „Deals laden“.",
-        "{hub}: {n} items captured. „Load blueprints“ (once), then „Find blueprints“.":
+        "{hub}: {n} items captured. „Load recipes“ (once), then „Find blueprints“.":
             "{hub}: {n} Items erfasst. „Baurezepte laden“ (einmalig), dann „Blaupausen suchen“.",
         "„Load deals“.": "„Deals laden“.",
-        "„Load blueprints“, then „Find blueprints“.":
+        "„Load recipes“, then „Find blueprints“.":
             "„Baurezepte laden“, dann „Blaupausen suchen“.",
         # ---- Industrie-Reiter: rechte Leiste und Plan-Karten ----
         'PLANNING':
@@ -1883,6 +1887,8 @@ KATALOG = {
             "\u26a0 Orderbuch reicht nicht: {n} St\u00fcck fehlen (im Tool konservativ zum teuersten Preis gesch\u00e4tzt).",
         "\u2705 Reactions only (from preset)":
             "\u2705 Nur Reaktionen (aus Preset)",
+        "\u2705 Rigs only (from preset)":
+            "\u2705 Nur Rigs (aus Preset)",
         "Run \u201eFind blueprints\u201c first.":
             "Erst \u201eBlaupausen suchen\u201c ausf\u00fchren.",
         "(just now)":
@@ -3530,8 +3536,6 @@ KATALOG = {
             "Aus meinen Skills berechnen",
         "Level ":
             "Level ",
-        "Instructions":
-            "Anleitung",
         "Program version":
             "Programm-Version",
         "Accounting (sales tax)":
@@ -3752,7 +3756,7 @@ KATALOG = {
             "Zieht die 15 besten Treffer (\u2605) nach oben und pinnt sie fest. Solange aktiv, sortiert ein Klick auf einen Spaltenkopf (z. B. Volatil. % oder Gewinn/Tag) NUR diese Stern-Items \u2013 die anderen bleiben unangetastet darunter.",
         "All five are genuine daytrading (buy cheap via buy order, sell higher via sell order) \u2013 they just hunt for different things:\n\u2022 Spread: the highest realistic profit per day.\n\u2022 Hour trader: items you reliably flip many times per hour (high tradability + margin).\n\u2022 Little competition: hardly any competitors, \u201eset & forget\u201c.\n\u2022 Niche: overlooked mid-sized items with a solid margin.\n\u2022 Capital efficiency: best profit/day per ISK tied up \u2013 ideal when your capital is tight and has to work as hard as possible.":
             "Alle f\u00fcnf sind echtes Daytrading (per Buy-Order billig kaufen, per Sell-Order teurer verkaufen) \u2013 sie jagen nur Unterschiedliches:\n\u2022 Spanne: der h\u00f6chste realistische Gewinn pro Tag.\n\u2022 Stunden-Trader: Items, die du zuverl\u00e4ssig viele Male pro Stunde umschl\u00e4gst (hohe Handelbarkeit + Marge).\n\u2022 Wenig Konkurrenz: kaum Mitbewerber, \u201eset & forget\u201c.\n\u2022 Nische: \u00fcbersehene mittelgro\u00dfe Items mit solider Marge.\n\u2022 Kapitaleffizienz: bester Gewinn/Tag pro gebundenem ISK \u2013 ideal, wenn dein Kapital knapp ist und maximal arbeiten soll.",
-        "Only show items of this category (e.g. ships, modules, charges/ammo, drones). Needs the SDE data \u2013 run \u201eLoad blueprints\u201c once.":
+        "Only show items of this category (e.g. ships, modules, charges/ammo, drones). Needs the SDE data \u2013 run \u201eLoad recipes\u201c once.":
             "Nur Items dieser Kategorie zeigen (z. B. Schiffe, Module, Ladungen/Munition, Drohnen). Braucht die SDE-Daten \u2013 einmal \u201eBaurezepte laden\u201c.",
         "Purchase price unknown \u2013 this item was not bought on the market (loot, self-built, contract) or the purchase predates the transaction import. Hence \u201e\u2014\u201c. Run \u201eFetch transactions\u201c in the Characters tab and the margin appears.":
             "Kaufpreis unbekannt \u2013 dieses Item wurde nicht \u00fcber den Markt gekauft (Loot, selbst gebaut, Contract) oder der Kauf liegt vor dem Transaktions-Import. Darum \u201e\u2014\u201c. Im Charaktere-Tab \u201eTransaktionen holen\u201c, dann erscheint die Marge.",
@@ -3923,8 +3927,6 @@ KATALOG = {
             "Holt die neuesten Transaktionen direkt aus EVE (umgeht die 30-Minuten-Drosselung). Hinweis: EVE selbst aktualisiert das Wallet nur etwa st\u00fcndlich.",
         "Exports the currently filtered transactions as a CSV file \u2013 stores nothing permanently in the app.":
             "Exportiert die aktuell gefilterten Transaktionen als CSV-Datei \u2013 speichert nichts dauerhaft in der App.",
-        "Step by step: create your own ESI application at CCP and enter its client ID here.\nOnly needed if you do NOT want to use the built-in application.":
-            "Schritt-f\u00fcr-Schritt: eigene ESI-Anwendung bei CCP anlegen und ihre Client-ID hier eintragen.\nBrauchst du nur, wenn du NICHT die eingebaute Anwendung benutzen willst.",
         "Detects plugged-in manufacturing time implants (Zainou 'Beancounter' Industry BX-80X) via ESI and includes their bonus in the build time. Needs a new login (new scope) - visible afterwards under 'Build characters' in the build plan.":
             "Erkennt per ESI eingesteckte Fertigungszeit-Implantate (Zainou 'Beancounter' Industry BX-80X) und rechnet deren Bonus in die Bauzeit ein. Braucht einen erneuten Login (neuer Scope) - danach im Bauplan bei 'Bau-Charaktere' sichtbar.",
         "NET margin (after tax + broker of your order character) IF you reprice to the new price \u2013 i.e. undercut the best sell.":
@@ -4329,6 +4331,64 @@ KATALOG = {
             "Reiner Kaufpreis derselben Menge: {v}.",
         "Blueprints: {name}":
             "Blaupausen: {name}",
+        # ---- Corp-Hangar (1.0.8) ----
+        "Corp roles: {name}":
+            "Corp-Rollen: {name}",
+        "Corp assets: {name}":
+            "Corp-Assets: {name}",
+        "Corp blueprints: {name}":
+            "Corp-Blaupausen: {name}",
+        "Corp jobs: {name}":
+            "Corp-Jobs: {name}",
+        "Corp":
+            "Corp",
+        "Market scanned \u2013 now load the deals":
+            "Markt gescannt \u2013 jetzt die Deals laden",
+        # ---- Runs statt Stueck (Discord, 16.09.2026) ----
+        "Runs":
+            "Runs",
+        "Runs:":
+            "Runs:",
+        "Number of runs. One run yields {n} units - the plan keeps calculating in units.":
+            "Anzahl Runs. Ein Run liefert {n} St\u00fcck \u2013 der Plan rechnet weiter in St\u00fcck.",
+        "Switch the field between units and runs. Only offered for products that yield more than one unit per run.":
+            "Schaltet das Feld zwischen St\u00fcck und Runs um. Gibt es nur bei Produkten, die mehr als ein St\u00fcck je Run liefern.",
+        "= {q} units ({n} per run)":
+            "= {q} St\u00fcck ({n} je Run)",
+        "On (count corp hangars when building)":
+            "An (Corp-Hangar beim Bauen mitzählen)",
+        "Division {n}":
+            "Division {n}",
+        "Load names":
+            "Namen laden",
+        "Fetches the division names of your corporation from ESI. Needs a linked character with the Director role and the corp permission.":
+            "Holt die Division-Namen deiner Corporation aus ESI. Braucht einen verknüpften Charakter mit Director-Rolle und der Corp-Berechtigung.",
+        "Corporation hangars (build)":
+            "Corporation-Hangar (Bauen)",
+        "Corp divisions":
+            "Corp-Divisions",
+        "On: the build plan, run planner and blueprints also count the hangar divisions ticked below - of every corporation your linked characters are in. One fetch per corporation, never per character. Needs the Director role in game and re-linking. Portfolio and Profits are NOT affected.":
+            "An: Bauplan, Runplaner und Blaupausen zählen auch die unten angekreuzten Hangar-Divisions mit – von jeder Corporation, in der deine verknüpften Charaktere sind. Ein Abruf je Corporation, nie je Charakter. Braucht die Director-Rolle im Spiel und ein Neu-Verknüpfen. Portfolio und Profits sind NICHT betroffen.",
+        "Which of the seven corp hangar divisions count as build stock. Nothing is counted until at least one is ticked.":
+            "Welche der sieben Corp-Hangar-Divisions als Baubestand zählen. Solange keine angekreuzt ist, wird nichts gezählt.",
+        "Corp divisions saved: {n}":
+            "Corp-Divisions gespeichert: {n}",
+        "No corp division selected – corp hangars count nothing.":
+            "Keine Corp-Division gewählt – Corp-Hangar zählt nichts.",
+        "Division names loaded.":
+            "Division-Namen geladen.",
+        "Re-link {names} first – the login has no corp permission yet.":
+            "Erst {names} neu verknüpfen – die Anmeldung hat noch keine Corp-Berechtigung.",
+        "No linked character holds the Director role – names cannot be loaded.":
+            "Kein verknüpfter Charakter hat die Director-Rolle – Namen können nicht geladen werden.",
+        "⚠ Corp hangars are ON, but no division is selected – Settings → Corporation.":
+            "⚠ Corp-Hangar ist AN, aber keine Division gewählt – Einstellungen → Corporation.",
+        "Corp stock: {corp} via {char} – {divs} ({n} rows)":
+            "Corp-Bestand: {corp} über {char} – {divs} ({n} Zeilen)",
+        "⚠ Re-link {names}: linked before the corp switch was turned on, the login has no corp permission yet.":
+            "⚠ {names} neu verknüpfen: vor dem Einschalten des Corp-Schalters verknüpft, die Anmeldung hat noch keine Corp-Berechtigung.",
+        "⚠ No linked character holds the Director role in {corps} – that corp hangar is NOT counted.":
+            "⚠ Kein verknüpfter Charakter hat die Director-Rolle in {corps} – dieser Corp-Hangar wird NICHT gezählt.",
         "No matching assets found in stock":
             "Keine passenden Assets auf Lager gefunden",
         "Assets subtracted (build structures only) \u2013 {n} material(s) reduced \u2713":
@@ -4576,6 +4636,8 @@ KATALOG = {
             "Lohnende Produktion (T2)",
         "Reactions only":
             "Reaktionen",
+        "Rigs (T1 + T2)":
+            "Rigs (T1 + T2)",
         "Reaction \u2212{p} % time":
             "Reaktion \u2212{p} % Zeit",
         "Skills: ":
@@ -4905,6 +4967,125 @@ KATALOG = {
             "Klick den blinkenden Knopf und tippe ein Item, zum Beispiel \u201eRetribution\u201c - die n\u00e4chsten Schritte erkl\u00e4ren dann die Reiter an DEINEM Plan.",
         "The button on this page fetches YOUR blueprints from EVE; the one at the top loads the recipe data. It also shows what the T2 version of your T1 blueprint would earn.":
             "Der Knopf auf dieser Seite holt DEINE Blaupausen aus EVE, der oben l\u00e4dt die Rezeptdaten. Es zeigt auch, was die T2-Fassung deiner T1-Blaupause bringen w\u00fcrde.",
+        # ---- Sitzung 22: Texte, die bis dahin DEUTSCH in der englischen
+        # Oberflaeche standen. Kein Scanner meldete sie - sie laufen ueber
+        # eigene Helfer (_flash_tip, parts.append, _dv_label) oder ihre
+        # Woerter fehlten in de_scan4s Handliste. Gefunden hat sie
+        # de_scan5.py, der sein Vokabular aus genau diesem Katalog zieht.
+        "{v}% success": "{v}% Erfolg",
+        "at {n} in parallel": "bei {n} parallel",
+        "Material cost ({me}% ME)": "Materialkosten ({me}% ME)",
+        "No decryptor": "Kein Decryptor",
+        "realistically you sell ~{n}/week": "realistisch verkaufst du ~{n}/Woche",
+        "Best profit: {qty} \u00b7 {isk}": "Bester Gewinn: {qty} \u00b7 {isk}",
+        "Profitable throughout the calculated range (up to {qty})":
+            "Im gerechneten Bereich durchgehend profitabel (bis {qty})",
+        "Blueprint name copied: {name}": "Blueprint-Name kopiert: {name}",
+        "applies \u2713": "gilt \u2713",
+        " (+{n} more)": " (+{n} weitere)",
+        "= total build cost": "= Baukosten gesamt",
+        "No characters / client ID": "Keine Charaktere / Client-ID",
+        "Recalculated with frozen prices": "Mit eingefrorenen Preisen neu gerechnet",
+        "{label}: {cov}/{tot} items covered": "{label}: {cov}/{tot} Items abgedeckt",
+        "Mfg. {mfg} \u00b7 React. {react}": "Fert. {mfg} \u00b7 Reakt. {react}",
+        "{name} (fixed assignment)": "{name} (fest zugewiesen)",
+        "Profile \u201e{name}\u201c saved \u2713": "Profil \u201e{name}\u201c gespeichert \u2713",
+        "{n} copied \u2713": "{n} kopiert \u2713",
+        "copied \u2713": "kopiert \u2713",
+        "copied: {name}": "kopiert: {name}",
+        "\u2212{v}% time": "\u2212{v}% Zeit",
+        " (automatic)": " (automatisch)",
+        "(example)": "(Beispiel)",
+        "missing item(s)": "fehlende Position(en)",
+        "manual/portfolio": "manuell/Portfolio",
+        "Nothing to adjust \u2713": "Nichts nachzubessern \u2713",
+        "{n} prices copied \u2713": "{n} Preise kopiert \u2713",
+        "Nothing to process \u2713": "Nichts abzuarbeiten \u2713",
+        "Nothing to copy": "Nichts zu kopieren",
+        "{item} \u00b7 {days} days history \u00b7 \u00d8 {avg} \u00b7 \u03a3 volume {vol}":
+            "{item} \u00b7 {days} Tage Historie \u00b7 \u00d8 {avg} \u00b7 \u03a3 Volumen {vol}",
+        # Einzelne deutsche Woerter, die de_scan5 in zweiter Runde fand -
+        # sie standen ohne t() direkt in einer Tabellenzelle oder Statuszeile.
+        "{n} shown": "{n} sichtbar",
+        "{n} ticked off": "{n} abgehakt",
+        "{n} hits": "{n} Treffer",
+        "Daily volume": "Tagesvolumen",
+        "inventable": "erfindbar",
+        "Build time": "Bauzeit",
+        "Invention time": "Invention-Zeit",
+        "Gold": "Gold",
+        "Silver": "Silber",
+        "Bronze": "Bronze",
+        "{n} trip(s) \u00e0 ": "{n} Fahrt(en) \u00e0 ",
+        # Zweite Runde (de_scan6, Variablen-Verfolgung): Texte, die erst
+        # ueber eine lokale Variable in die Anzeige wandern.
+        "assigned": "zugewiesen",
+        "transactions.csv": "transaktionen.csv",
+        "{n} runs in reserve": "{n} Runs Reserve",
+        # Handsortierung der Bauplan-Karten (Nutzer-Wunsch 15.09.2026).
+        "Arrange plans yourself": "Bauplaene selber anordnen",
+        # HIER STAND DIE WARNUNG BEIM AUSSCHALTEN DER HANDSORTIERUNG.
+        # RAUS (Nutzer, 15.09.2026): sie warnte davor, dass die eigene
+        # Reihenfolge gleich umgeworfen wird - seit "Sort by progress" ein
+        # eigener Knopf ist, passiert das nicht mehr.
+        # Warnung vor dem New-Eden-Contract-Scan (Nutzer, 15.09.2026).
+        "This searches the public contracts of ALL regions and then "
+        "looks into every hit individually \u2013 that takes SEVERAL "
+        "MINUTES (around five is normal).\n\nIt runs in the "
+        "background, you can keep working. Start now?":
+            "Das durchsucht die \u00f6ffentlichen Contracts ALLER Regionen und "
+            "sieht danach in jeden Treffer einzeln hinein \u2013 das dauert "
+            "MEHRERE MINUTEN (f\u00fcnf sind normal).\n\nEs l\u00e4uft im "
+            "Hintergrund, du kannst weiterarbeiten. Jetzt starten?",
+        # Anordnen-Modus und Automatik sind seit 15.09.2026 getrennt: der
+        # Modus laesst nur noch ZIEHEN zu, zurueck zur Fortschritts-Folge
+        # geht es allein ueber diesen Knopf.
+        "Drag the cards into the order you want with the left mouse "
+        "button held down; the wheel keeps scrolling, and the buttons on "
+        "the cards keep working. Your order is kept – also after closing "
+        "the program and after an update. Switching this off only stops "
+        "the dragging; your order stays until you click „Sort by "
+        "progress“.":
+            "Zieh die Karten mit gedrückter linker Maustaste in die "
+            "Reihenfolge, die du willst; das Mausrad scrollt weiter, und die "
+            "Knöpfe auf den Karten funktionieren weiterhin. Deine "
+            "Reihenfolge bleibt erhalten – auch nach dem Schließen und "
+            "nach einem Update. Ausschalten beendet nur das Ziehen; deine "
+            "Reihenfolge bleibt, bis du „Nach Fortschritt sortieren“ "
+            "drückst.",
+        "Sort by progress": "Nach Fortschritt sortieren",
+        # Rueckfrage beim Verlassen der Einstellungsseite (Nutzer, 15.09.2026).
+        "Unsaved settings": "Nicht gespeicherte Einstellungen",
+        "You changed settings but did not save them.":
+            "Du hast Einstellungen geändert und nicht gespeichert.",
+        "Without saving they have no effect – the program keeps "
+        "working with the old values.":
+            "Ohne Speichern wirken sie nicht – das Programm rechnet weiter "
+            "mit den alten Werten.",
+        "Save and continue": "Speichern und weiter",
+        "Discard changes": "Änderungen verwerfen",
+        "Back to settings": "Zurück zu den Einstellungen",
+        "Sorts the cards by progress again: started plans on top, the "
+        "furthest along first, finished ones at the bottom. Your own "
+        "order stays saved – drag a card again and it applies once more.":
+            "Sortiert die Karten wieder nach Fortschritt: angefangene "
+            "Pläne oben, der am weitesten fortgeschrittene zuerst, fertige "
+            "unten. Deine eigene Reihenfolge bleibt gespeichert – zieh "
+            "eine Karte, dann gilt sie wieder.",
+        "No progress known yet – click „Check finished status (ESI)“ "
+        "first.":
+            "Noch kein Fortschritt bekannt – drück zuerst „Fertig-Status "
+            "prüfen (ESI)“.",
+        # Der sichtbare Contract-Knopf im Bauplan (Nutzer-Wunsch 15.09.2026).
+        "Load contract prices": "Contract-Preise laden",
+        "There is no market price for this item \u2013 capitals are hardly "
+        "ever sold through sell orders. This takes the median of the "
+        "public New Eden contracts. The saved scan is used first; only "
+        "an item that is missing from it is fetched fresh.":
+            "F\u00fcr dieses Item gibt es keinen Marktpreis \u2013 Capitals werden "
+            "kaum \u00fcber Sell-Orders verkauft. Das hier nimmt den Median der "
+            "\u00f6ffentlichen New-Eden-Contracts. Zuerst gilt der gespeicherte "
+            "Scan; nur ein Item, das darin fehlt, wird frisch geholt.",
     },
 }
 

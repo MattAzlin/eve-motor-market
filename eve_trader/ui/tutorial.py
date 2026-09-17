@@ -149,7 +149,15 @@ def schritte(zweig):
         ("bd:tab:" + t("Recipe structure"), t("Recipe structure"),
          t("The full tree from the finished item down to ore. Blue means you "
            "build it, grey means you buy it."), None, None),
-        ("_bd_karte_bauenkaufen", t("Build or buy?"),
+        # DER REITER GEHOERT ZUM SCHRITT (Nutzer-Befund 16.09.2026): "gehe ich
+        # Back einen Schritt zurueck, haengt es im Invention-Tab fest". Die
+        # Karte "Build or buy?" steht neben der REZEPTSTRUKTUR, schaltete den
+        # Reiter aber nicht - wer von Schritt 10 (Invention) zurueckging,
+        # blieb dort. Ein Schritt muss seinen Zustand selbst herstellen,
+        # sonst haengt er davon ab, WOHER man kommt. Dieselbe Schreibweise
+        # wie bei "Materials" weiter unten: Reiter zuerst, dann das Element.
+        (("bd:tab:" + t("Recipe structure"), "_bd_karte_bauenkaufen"),
+         t("Build or buy?"),
          t("Decides what you make yourself. 'Production depth' switches whole "
            "stages at once."), None, None),
         ("bd:tab:" + t("Invention"), t("Invention"),
@@ -528,9 +536,65 @@ class TutorialFenster(QFrame):
                 QPoint(0, w.height())).y()) if _sicht else None)
             if _anker is not None:
                 _win = _anker.window()
+                _r = _win.frameGeometry()
                 _p = _anker.mapToGlobal(QPoint(0, _anker.height() + 8))
                 x, y = _p.x(), _p.y()
-                _r = _win.frameGeometry()
+                # SEITENLEISTE: DANEBEN STATT DARUNTER (Nutzer, 15.09.2026:
+                # "Tutorial verdeckt Production Steps, das Tutorialfenster
+                # muesste weiter links sein, damit man die rechte Sidebar
+                # komplett sehen kann").
+                #
+                # "Unter den Anker" ist die richtige Regel, solange der Anker
+                # in der breiten Mitte sitzt - darunter ist dann Platz. Sitzt
+                # er aber in der schmalen Leiste RECHTS, ist unter ihm der
+                # Rest genau dieser Leiste, und die Tour deckt zu, worueber
+                # sie gerade spricht. Dann gehoert sie links DANEBEN, auf
+                # Hoehe des Ankers.
+                #
+                # DIE GRENZE IST DAS RECHTE DRITTEL des Fensters, nicht die
+                # Haelfte: die Leiste ist schmal, die Mitte soll weiter die
+                # bewaehrte Platzierung behalten.
+                #
+                # NUR IM BAUPLAN-FENSTER (Nutzer-Befund 16.09.2026, Schritt
+                # 7/15): im HAUPTFENSTER schob dieselbe Regel die Tour nach
+                # links - mitten unter das modale "New build plan"-Fenster,
+                # das dort aufgeht. Vorher stand sie am rechten Rand und war
+                # frei. Die Regel war fuer die schmale Sidebar IM Bauplan
+                # gedacht, wo unter dem Anker wirklich nur mehr Sidebar
+                # kommt; in der Werkzeugleiste des Haupttools ist darunter
+                # Platz. Also gilt sie dort auch nur.
+                _a_links = _anker.mapToGlobal(QPoint(0, 0))
+                # EIN MODALES FENSTER LIEGT IMMER OBEN (Nutzer-Screenshot
+                # 16.09.2026: "jetzt haengt es wieder hinter dem New-build-
+                # plan-Fenster"). Bei Schritt 7/15 wandert der Anker in das
+                # kleine Such-Fenster (`dlg.exec()`), sobald es offen ist.
+                # Egal WO die Tour dann relativ zum Anker steht - steht sie
+                # im Bereich dieses Fensters, ist sie verdeckt.
+                #
+                # DESHALB NICHT AM ANKER AUSRICHTEN, SONDERN AM FENSTER:
+                # unter den ganzen Dialog. Dort ist sie frei, und der Blick
+                # geht ohnehin von der Eingabe nach unten zur Erklaerung.
+                _modal = False
+                try:
+                    _modal = bool(_win.isModal()) and _win is not self.mw
+                except (AttributeError, RuntimeError):
+                    _modal = False
+                if _modal:
+                    # ERST DARUNTER, sonst RECHTS, sonst LINKS: was auf den
+                    # Bildschirm passt. Nur "darunter" waere zu wenig - sitzt
+                    # der Dialog weit unten, schoebe die Bildschirm-Grenze die
+                    # Tour gleich wieder in ihn hinein.
+                    _sm = _win.screen()
+                    _gm = _sm.availableGeometry() if _sm else _r
+                    if _r.bottom() + 8 + _h <= _gm.bottom() - 8:
+                        x, y = _r.left(), _r.bottom() + 8
+                    elif _r.right() + 12 + _b <= _gm.right() - 8:
+                        x, y = _r.right() + 12, _r.top()
+                    else:
+                        x, y = _r.left() - _b - 12, _r.top()
+                elif (_win is not self.mw and _r.width() > 0
+                        and _a_links.x() >= _r.left() + (_r.width() * 2) // 3):
+                    x, y = _a_links.x() - _b - 12, _a_links.y()
             else:
                 _win = (getattr(self.mw, "_bd_dialog", None)
                         if self._schritt_im_bauplan() else None) or self.mw
@@ -571,6 +635,27 @@ class TutorialFenster(QFrame):
         BAUPLAN, heissen aber nicht "bd:" - nach dem Namen zu gehen war eine
         Abkuerzung, die genau hier danebenging.
         """
+        # DER SCHRITT, DER DEN BAUPLAN OEFFNET, GEHOERT DANACH DEM BAUPLAN
+        # (Nutzer-Screenshot 16.09.2026: die Tour lag hinter dem Bauplan).
+        #
+        # WARUM DIE WIDGET-SCHLEIFE HIER NICHT REICHT: Schritt 7/15 hebt
+        # "New build plan" hervor - einen Knopf im HAUPTFENSTER. Der ist
+        # sichtbar, also gewann er unten und die Tour blieb am Haupttool
+        # haengen, obwohl der Bauplan laengst davor stand. Auch der
+        # Rueckfall weiter unten griff nicht: der sieht nur die Schritte VOR
+        # dem aktuellen.
+        #
+        # SOBALD DIE BEDINGUNG ERFUELLT IST, ist die Aufgabe dieses Schritts
+        # erledigt und der Nutzer schaut auf den Bauplan - dorthin gehoert
+        # dann auch die Tour. Bewusst NUR fuer diese eine Bedingung: ein
+        # Schritt, der auf etwas anderes wartet, behaelt sein Fenster.
+        try:
+            if self.schritte[self.i][4] == "bauplan_offen":
+                _d0 = getattr(self.mw, "_bd_dialog", None)
+                if _d0 is not None and _d0.isVisible():
+                    return _d0
+        except (RuntimeError, AttributeError, IndexError):
+            pass
         for _w in (self._hervor or []):
             try:
                 if _w is not None and _w.isVisible():
@@ -604,6 +689,12 @@ class TutorialFenster(QFrame):
         hinten - "es heftet sich nicht auf die Bauplan-Ebene".
         """
         _ziel = self._zielfenster()
+        # WOHIN ZULETZT GEORDNET WURDE - Grundlage fuer `_nachfuehren`:
+        # aendert sich das Zielfenster MITTEN in einem Schritt (der Nutzer
+        # oeffnet den Bauplan), muss die Tour mit. Ohne den Merker liefe
+        # entweder gar nichts oder ein Dauer-raise_() (Sitzung 17: das zog
+        # den Bauplan bei jedem Tick nach hinten).
+        self._letztes_ziel = _ziel
         try:
             if self.parent() is not _ziel:
                 _flags = self.windowFlags()
@@ -625,6 +716,22 @@ class TutorialFenster(QFrame):
 
     def _nachfuehren(self):
         """Rahmen und Fenster den Elementen hinterherziehen (Zeitgeber)."""
+        # DAS FENSTER KANN SICH MITTEN IM SCHRITT AENDERN (Nutzer-Befund
+        # 16.09.2026): Schritt 7/15 wartet darauf, dass der Nutzer den
+        # Bauplan oeffnet. Der geht dann VOR der Tour auf, und sie
+        # verschwindet dahinter - bis zum naechsten "Weiter", denn nur der
+        # Schrittwechsel hat bisher umgehaengt.
+        #
+        # NUR BEI ECHTEM WECHSEL, nicht bei jedem Tick: ein Dauer-raise_()
+        # zieht das Besitzerfenster mit hoch und drueckte den Bauplan wieder
+        # nach hinten (Sitzung 17, derselbe Nutzer, derselbe Schritt).
+        try:
+            _jetzt = self._zielfenster()
+            if _jetzt is not getattr(self, "_letztes_ziel", None):
+                self._fenster_ordnen()
+                return
+        except Exception:
+            pass
         try:
             # SPAETER AUFTAUCHENDE ELEMENTE MITNEHMEN: der "Open"-Knopf gibt
             # es erst, wenn das Auswahlfenster offen ist. Ohne das bliebe er

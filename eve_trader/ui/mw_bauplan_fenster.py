@@ -31,8 +31,9 @@ from ..workers import Worker
 from . import icons
 from ..sprache import t
 from . import theme
-from .mw_basis import (IskGroupedSpin, IskMillionSpin, MinimizableDialog, isk,
-                       tab_icon, tab_icon_at)
+from .mw_basis import (IskGroupedSpin, IskMillionSpin, MinimizableDialog,
+                       ROLLE_KOPIERNAME, isk, kopier_text_rect, tab_icon,
+                       tab_icon_at)
 
 
 class BauplanFenster:
@@ -60,6 +61,197 @@ class BauplanFenster:
         except RuntimeError:
             self._bd_dialog = None
             return None
+
+    def _sched_name_klick(self, item, column):
+        """Linksklick auf den Item-Namen im Runplaner kopiert den Blaupausen-
+        bzw. Reaktions-Formel-Namen (Nutzer, 15.09.2026).
+
+        NUR AUF DEM TEXT, NICHT AUF DEM KAESTCHEN: `itemClicked` kommt auch,
+        wenn man den Haken setzt - ohne Positionspruefung wuerde jeder Haken
+        still die Zwischenablage ueberschreiben. Deshalb wird dieselbe
+        Rechteck-Rechnung benutzt, die auch den Rahmen malt: was ausserhalb
+        des gerahmten Textes liegt, ist kein Kopierklick.
+
+        Eine Bequemlichkeit darf den Runplaner nie kosten - alles in try.
+        """
+        try:
+            if column != 0 or item is None:
+                return
+            name = item.data(0, ROLLE_KOPIERNAME)
+            if not name:
+                return
+            tree = item.treeWidget()
+            if tree is None:
+                return
+            from PySide6.QtGui import QCursor
+            idx = tree.indexFromItem(item, 0)
+            rect = kopier_text_rect(tree, idx, tree.visualRect(idx))
+            pos = tree.viewport().mapFromGlobal(QCursor.pos())
+            if rect is not None and not rect.contains(pos):
+                return
+            self._copy_bp_name_value(name)
+        except Exception:
+            pass
+
+    def _bd_contract_knopf(self, hat_preis):
+        """Contract-Knopf zeigen und blinken lassen, solange dieser Bauplan
+        KEINEN Verkaufspreis hat.
+
+        NUTZER, 15.09.2026: der Knopf soll ersichtlich sein und "im richtigen
+        Moment" blinken wie der Markt-Scan-Knopf. Der richtige Moment ist
+        genau der, in dem das Verkaufsfeld leer bleibt - bei Capitals, die in
+        Jita keine Sell-Orders haben und deren Contract-Preise noch nicht
+        geladen sind.
+
+        DER TIMER HAENGT AM KNOPF, nicht am Hauptfenster: der Bauplan-Dialog
+        wird bei jedem Oeffnen neu gebaut, ein Timer am Fenster zeigte danach
+        auf einen geloeschten Knopf (in PySide6 ein harter Absturz, kein
+        Python-Fehler). Als Kind des Knopfes stirbt er mit ihm.
+
+        Eine Anzeige darf den Bauplan NIE kosten - deshalb steht alles in
+        try/except, wie beim Rest der Fuell-Funktion.
+        """
+        btn = getattr(self, "_bd_ct_btn", None)
+        if btn is None:
+            return
+        try:
+            from PySide6.QtCore import QTimer as _QTimer
+            btn.setVisible(not hat_preis)
+            tmr = getattr(btn, "_ct_blink_timer", None)
+            if hat_preis:
+                if tmr is not None and tmr.isActive():
+                    tmr.stop()
+                btn.setStyleSheet(getattr(btn, "_ct_css", ""))
+                btn._ct_blink_an = False
+                return
+            if tmr is None:
+                tmr = _QTimer(btn)          # Kind des Knopfes, s. oben
+                tmr.setInterval(700)        # derselbe Takt wie der Markt-Scan
+
+                def _schritt(_b=btn):
+                    try:
+                        _b._ct_blink_an = not getattr(_b, "_ct_blink_an", False)
+                        self._blink_rahmen(_b, _b._ct_blink_an,
+                                           getattr(_b, "_ct_css", ""))
+                    except Exception:
+                        pass
+                tmr.timeout.connect(_schritt)
+                btn._ct_blink_timer = tmr
+            if not tmr.isActive():
+                tmr.start()
+        except Exception:
+            pass
+
+    def _corp_bau_daten(self, client_id, chars, loc_ids):
+        """Corp-Hangar fuers Bauen (1.0.8): Bestand, Blueprints, Jobs.
+
+        Laeuft im Bestands-Worker, NICHT im Oberflaechen-Faden. Gibt ein
+        dict zurueck, das der Worker in seinen Pool mischt:
+          summe      {type_id: Menge} aus den gewaehlten Divisions
+          blueprints [wie fetch_blueprints]
+          jobs       {corporation_id: [Jobs]} - unter der CORP-Nummer, damit
+                     der virtuelle Bestand sie wie einen Charakter behandelt
+          corps      [{"name", "via", "divisions": {n: Name}, "rows": n}]
+          ohne_rolle [Corp-Namen ohne Director unter den Charakteren]
+          relink     [Charakter-Namen, deren Token den Corp-Scope nicht hat]
+          keine_division  True, wenn der Schalter an ist, aber nichts gewaehlt
+          failed     [Texte fuer die Fehlerliste]
+
+        `loc_ids`: None = ueberall, sonst nur diese Strukturen - dieselbe
+        Grenze wie beim eigenen Bestand.
+
+        DER RIEGEL GEGEN DIE VERDREIFACHUNG steckt in corp.abrufplan: je
+        Corporation genau EIN Abruf. Drei Charaktere derselben Corp liefern
+        denselben Hangar; ungeprueft zaehlte er dreifach und der Plan kaufte
+        ZU WENIG (CLAUDE.md, Abschnitt Corp-Assets).
+
+        Jeder Einzelschritt ist abgefangen: ein fehlgeschlagener Corp-Abruf
+        landet in `failed` und im fehler.log, er reisst nie den Bestand der
+        Charaktere mit.
+        """
+        from .. import corp as _corp
+        leer = {"summe": {}, "blueprints": [], "jobs": {}, "corps": [],
+                "ohne_rolle": [], "relink": [], "keine_division": False,
+                "failed": [], "aktiv": False, "bp_ok": True}
+        if not self.settings.get("use_corp"):
+            return leer
+        out = dict(leer)
+        out["aktiv"] = True
+        divisions = _corp.divisions_bereinigt(self.settings.get("corp_divisions"))
+        if not divisions:
+            out["keine_division"] = True
+            return out
+        namen = {c["character_id"]: c.get("character_name", "?") for c in chars}
+        corp_von, rollen_von = {}, {}
+        for ch in chars:
+            cid = ch["character_id"]
+            corp_von[cid] = esi.fetch_character_corporation(cid)
+            try:
+                _gs = esi.granted_scopes(client_id, cid)
+            except Exception as _ge:
+                self._log_exception(f"Corp: Scopes {namen.get(cid, cid)}", str(_ge))
+                _gs = set()
+            if config.CORP_ROLES_SCOPE not in _gs or config.CORP_ASSETS_SCOPE not in _gs:
+                # Token ohne Corp-Scope: der Charakter wurde VOR dem
+                # Einschalten verknuepft. Beim Namen nennen - "0 Bestand"
+                # waere die falsche Aussage.
+                out["relink"].append(namen.get(cid, str(cid)))
+                rollen_von[cid] = None
+                continue
+            try:
+                rollen_von[cid] = esi.fetch_character_roles(client_id, cid)
+            except Exception as _re:
+                self._log_exception(f"Corp: Rollen {namen.get(cid, cid)}", str(_re))
+                rollen_von[cid] = None
+                out["failed"].append(t("Corp roles: {name}").format(name=namen.get(cid, cid)))
+        plan, ohne = _corp.abrufplan(chars, corp_von, rollen_von, _corp.ROLLE_ASSETS)
+        plan_jobs, _ = _corp.abrufplan(chars, corp_von, rollen_von, _corp.ROLLE_JOBS)
+        for corp_id in ohne:
+            # Nur melden, wenn es nicht schon am fehlenden Scope liegt -
+            # sonst stehen zwei Hinweise fuer eine Ursache da.
+            if all(rollen_von.get(c) is None for c in ohne[corp_id]):
+                continue
+            out["ohne_rolle"].append(esi.fetch_corporation_name(corp_id))
+        _ctypes = esi.container_type_ids_safe()
+        for corp_id, cid in plan.items():
+            cname = esi.fetch_corporation_name(corp_id)
+            try:
+                assets = esi.fetch_corporation_assets(client_id, cid, corp_id)
+                summe, je_div = _corp.corp_bestand(assets, divisions, loc_ids, _ctypes)
+                for _t, _q in summe.items():
+                    out["summe"][int(_t)] = out["summe"].get(int(_t), 0) + int(_q)
+            except Exception as _ae:
+                self._log_exception(f"Corp: Assets {cname}", str(_ae))
+                out["failed"].append(t("Corp assets: {name}").format(name=cname))
+                continue
+            try:
+                div_namen = _corp.division_namen(
+                    esi.fetch_corporation_divisions(client_id, cid, corp_id),
+                    divisions)
+            except Exception as _de:
+                self._log_exception(f"Corp: Divisions {cname}", str(_de))
+                div_namen = _corp.division_namen(None, divisions)
+            try:
+                out["blueprints"].extend(
+                    esi.fetch_corporation_blueprints(client_id, cid, corp_id,
+                                                     divisions))
+            except Exception as _be:
+                self._log_exception(f"Corp: Blaupausen {cname}", str(_be))
+                out["failed"].append(t("Corp blueprints: {name}").format(name=cname))
+                out["bp_ok"] = False
+            out["corps"].append({"corp_id": int(corp_id), "name": cname,
+                                 "via": namen.get(cid, str(cid)),
+                                 "divisions": div_namen,
+                                 "rows": sum(je_div.values())})
+        for corp_id, cid in plan_jobs.items():
+            cname = esi.fetch_corporation_name(corp_id)
+            try:
+                out["jobs"][int(corp_id)] = esi.fetch_corporation_jobs(
+                    client_id, cid, corp_id, include_delivered=True)
+            except Exception as _je:
+                self._log_exception(f"Corp: Jobs {cname}", str(_je))
+                out["failed"].append(t("Corp jobs: {name}").format(name=cname))
+        return out
 
     def _show_build_detail(self, type_id, name, res):
         from ..sprache import t as _txt   # `t` ist hier lokal belegt
@@ -162,7 +354,8 @@ class BauplanFenster:
         # Zeile Hoehe, die der Materialliste zugutekommt.
 
         ctrl = QHBoxLayout()
-        ctrl.addWidget(QLabel(_txt("Quantity:")))
+        _qty_lbl = QLabel(_txt("Quantity:"))
+        ctrl.addWidget(_qty_lbl)
         # OBERGRENZE (Nutzer, Sitzung 20): 1'000'000 war bei Reaktionen nach
         # 100 Runs zu Ende - Fernite Carbide wirft 10'000 je Run ab, da ist
         # eine Million nichts. Jetzt 100 Mio; das Feld wird dafuer breiter,
@@ -196,6 +389,16 @@ class BauplanFenster:
         _runs_lbl = QLabel("")
         _runs_lbl.setObjectName("Muted")
         _runs_lbl.setProperty("bd_role", "runs_hint")
+        # RUNS DIREKT EINGEBEN (Discord, Commander Hibb, 16.09.2026: "eine
+        # Umschaltfunktion bei den Durchlaeufen zu Menge"). NUR bei Produkten,
+        # die pro Run mehr als 1 Stueck liefern (Fuel Blocks 40, Munition
+        # 5000, Reaktionen 200 - 368 von 4849 Fertigungsprodukten laut SDE);
+        # beim Einzelstueck waere der Schalter sinnlos und nur Laerm.
+        # DIE WAHRHEIT BLEIBT `qty_spin` IN STUECK - das Runs-Feld ist eine
+        # zweite Ansicht derselben Zahl, keine zweite Quelle. Gespeicherte
+        # Plaene, Reservierung, Runplaner: alles liest weiter Stueck.
+        runs_spin = None
+        _qty_mode_btn = None
         if _out_per_run > 1:
             qty_spin.setMinimum(_out_per_run)
             qty_spin.setSingleStep(_out_per_run)
@@ -203,6 +406,26 @@ class BauplanFenster:
                 "One run yields {n} units \u2013 less is not possible. Arrow up/down "
                 "= one whole run more/less; typed values in between are rounded up."
             ).format(n=_out_per_run))
+            runs_spin = QSpinBox()
+            runs_spin.setRange(1, max(1, 100000000 // _out_per_run))
+            runs_spin.setKeyboardTracking(False)
+            runs_spin.setGroupSeparatorShown(True)
+            runs_spin.setMaximumWidth(140)
+            runs_spin.setProperty("bd_role", "runs_spin")
+            runs_spin.setToolTip(_txt(
+                "Number of runs. One run yields {n} units - the plan keeps "
+                "calculating in units.").format(n=_out_per_run))
+            ctrl.addWidget(runs_spin)
+            _qty_mode_btn = QPushButton(_txt("Runs"))
+            _qty_mode_btn.setIcon(icons.icon("refresh"))
+            _qty_mode_btn.setCheckable(True)
+            _qty_mode_btn.setProperty("bd_role", "qty_mode")
+            _qty_mode_btn.setToolTip(_txt(
+                "Switch the field between units and runs. Only offered for "
+                "products that yield more than one unit per run."))
+            ctrl.addWidget(_qty_mode_btn)
+            _qty_mode = {"runs": bool(self.settings.get("bau_qty_in_runs"))}
+            _sync = {"on": False}
 
             def _snap_qty_to_runs():
                 _v = qty_spin.value()
@@ -213,13 +436,54 @@ class BauplanFenster:
 
             def _show_runs(_=0):
                 _r = -(-qty_spin.value() // _out_per_run)
-                _runs_lbl.setText(
-                    _txt("= {r} run(s) with {n} units").format(r=_r, n=_out_per_run))
+                if _qty_mode["runs"]:
+                    _runs_lbl.setText(_txt("= {q} units ({n} per run)").format(
+                        q=f"{_r * _out_per_run:,}".replace(",", "'"), n=_out_per_run))
+                else:
+                    _runs_lbl.setText(
+                        _txt("= {r} run(s) with {n} units").format(r=_r, n=_out_per_run))
+
+            def _runs_to_qty(_=0):
+                # Runs-Feld -> Stueckfeld. Der Riegel `_sync` verhindert das
+                # Ping-Pong der beiden valueChanged-Signale.
+                if _sync["on"]:
+                    return
+                _sync["on"] = True
+                try:
+                    qty_spin.setValue(runs_spin.value() * _out_per_run)
+                finally:
+                    _sync["on"] = False
+
+            def _qty_to_runs(_=0):
+                if _sync["on"]:
+                    return
+                _sync["on"] = True
+                try:
+                    runs_spin.setValue(-(-qty_spin.value() // _out_per_run))
+                finally:
+                    _sync["on"] = False
+
+            def _apply_qty_mode(runs_mode, speichern=True):
+                _qty_mode["runs"] = bool(runs_mode)
+                qty_spin.setVisible(not _qty_mode["runs"])
+                runs_spin.setVisible(_qty_mode["runs"])
+                _qty_lbl.setText(_txt("Runs:") if _qty_mode["runs"]
+                                 else _txt("Quantity:"))
+                if _qty_mode_btn.isChecked() != _qty_mode["runs"]:
+                    _qty_mode_btn.setChecked(_qty_mode["runs"])
+                _show_runs()
+                if speichern:
+                    self.settings["bau_qty_in_runs"] = _qty_mode["runs"]
+                    config.save_settings(self.settings)
 
             qty_spin.editingFinished.connect(_snap_qty_to_runs)
             qty_spin.valueChanged.connect(_show_runs)
+            qty_spin.valueChanged.connect(_qty_to_runs)
+            runs_spin.valueChanged.connect(_runs_to_qty)
+            _qty_mode_btn.toggled.connect(lambda _on: _apply_qty_mode(_on))
             _snap_qty_to_runs()
-            _show_runs()
+            _qty_to_runs()
+            _apply_qty_mode(_qty_mode["runs"], speichern=False)
             ctrl.addWidget(_runs_lbl)
         ctrl.addSpacing(14)
         # Endprodukt-ME/TE + "Eigene BPC" sitzen jetzt NICHT mehr hier oben,
@@ -767,6 +1031,40 @@ class BauplanFenster:
         _refz_sync["fn"] = _sync_tools_menu
         tools_btn.setMenu(_tools_menu)
         ctrl.addWidget(tools_btn)
+        # CONTRACT-PREISE SICHTBAR STATT IM MENUE (Nutzer, 15.09.2026: "der
+        # Load-Contract-Prices-Knopf soll ersichtlicher werden, nicht
+        # versteckt in Dropdowns"). Er erscheint GENAU DANN, wenn es keinen
+        # Verkaufspreis gibt - der Capital-Fall - und blinkt dann wie der
+        # Markt-Scan-Knopf. Sonst bleibt die Leiste ruhig; ein Knopf, der
+        # immer da ist, faellt nicht mehr auf.
+        # DER MENUEEINTRAG BLEIBT zusaetzlich bestehen: wer den Preis auch
+        # ohne Not neu laden will, findet ihn dort wie bisher.
+        ct_btn = QPushButton(_txt("Load contract prices"))
+        ct_btn.setIcon(icons.icon("satellite"))
+        ct_btn.setMinimumHeight(34)
+        # 2 PX RAHMEN SCHON IM RUHEZUSTAND - sonst waechst der Knopf beim
+        # Blinken um ein Pixel und schiebt die ganze Leiste (derselbe
+        # Nutzer-Befund wie beim Markt-Scan-Knopf, Sitzung 20).
+        _ct_btn_css = (
+            f"QPushButton{{border:2px solid {theme.BORDER}; border-radius:6px; "
+            f"padding:6px 12px; color:{theme.MUTED}; font-size:13px; "
+            f"background:transparent;}}"
+            # NUR DIE FARBE, nicht die ganze Rahmenregel: die Staerke bleibt
+            # bei 2 px (sonst springt die Breite beim Hovern), und aa78 haelt
+            # cyane Panel-Rahmen aus dem Bauplan heraus.
+            f"QPushButton:hover{{border-color:{theme.CYAN}; color:{theme.TEXT};}}")
+        ct_btn.setStyleSheet(_ct_btn_css)
+        ct_btn._ct_css = _ct_btn_css
+        ct_btn.setToolTip(_txt(
+            "There is no market price for this item \u2013 capitals are hardly "
+            "ever sold through sell orders. This takes the median of the "
+            "public New Eden contracts. The saved scan is used first; only "
+            "an item that is missing from it is fetched fresh."))
+        ct_btn.setVisible(False)
+        ct_btn.clicked.connect(
+            lambda *_a, _tid=type_id: self._bd_load_contract_prices_for(_tid))
+        self._bd_ct_btn = ct_btn
+        ctrl.addWidget(ct_btn)
         # VERKAUFSCHARAKTER: bestimmt Sales Tax + Broker Fee (Accounting /
         # Broker Relations + Standings). Vorher galt EIN globaler Wert fuer
         # alle Plaene, und man sah nicht, von welchem Charakter er stammt.
@@ -1873,6 +2171,11 @@ class BauplanFenster:
         sched_tree.header().setStretchLastSection(False)
         self._make_tree_movable(sched_tree, [430, 90, 280, 130, 210, 100])
         sched_tree.header().setStretchLastSection(True)   # Überschuss füllt Restbreite
+        # NAME ANKLICKBAR, ABER OHNE JEDE HERVORHEBUNG (Nutzer, 15.09.2026
+        # nach dem Ausprobieren: "die Items sollen wieder normal aussehen").
+        # Ein Rahmen und spaeter ein Chip waren beide zu laut - die Zeile
+        # sieht jetzt aus wie immer, nur der Klick kopiert.
+        sched_tree.itemClicked.connect(self._sched_name_klick)
         sched_tree.headerItem().setTextAlignment(1, Qt.AlignCenter)   # Runs-Header mittig
         sched_tree.headerItem().setTextAlignment(5, Qt.AlignCenter)
         sched_tree.headerItem().setToolTip(
@@ -2003,10 +2306,19 @@ class BauplanFenster:
             # feuert je Kind EIN itemChanged (Spalte 0) - das laeuft durch
             # DIESEN Handler und erledigt Formatierung, cset und (entprellt)
             # das Speichern; tiefere Ebenen ziehen dadurch rekursiv mit.
+            # NUR ZEILEN, DIE SCHON EIN KAESTCHEN HABEN (Nutzer, 15.09.2026):
+            # `checkState(0)` liefert auch fuer eine Zeile OHNE Kaestchen
+            # brav "Unchecked", und Qt.ItemIsUserCheckable steht in den
+            # Standard-Flags jedes QTreeWidgetItem. Beides zusammen hiess:
+            # die Kaskade hat den Material-Unterzeilen ein Kaestchen
+            # ANGELEGT, statt nur ein vorhandenes umzuschalten - der Haken,
+            # den er nie gesetzt hat und nicht wegbekam. CheckStateRole ist
+            # die ehrliche Frage: "gibt es hier ueberhaupt etwas zu haken?"
             _want = Qt.Checked if struck else Qt.Unchecked
             for _ci in range(item.childCount()):
                 _ch = item.child(_ci)
-                if (_ch.flags() & Qt.ItemIsUserCheckable
+                if (_ch.data(0, Qt.CheckStateRole) is not None
+                        and _ch.flags() & Qt.ItemIsUserCheckable
                         and _ch.checkState(0) != _want):
                     _ch.setCheckState(0, _want)
         sched_tree.itemChanged.connect(_on_sched_check)
@@ -2049,7 +2361,8 @@ class BauplanFenster:
                 return
             from PySide6.QtWidgets import QApplication as _QA
             _QA.clipboard().setText("\n".join(names_out))
-            self._flash_tip(f"Blueprint-Name kopiert: {names_out[0]}"
+            self._flash_tip(_txt("Blueprint name copied: {name}").format(
+                                name=names_out[0])
                             + (f" (+{len(names_out) - 1})" if len(names_out) > 1 else ""))
 
         def _sched_key(ev):
@@ -2804,7 +3117,8 @@ class BauplanFenster:
             elif self._manual_stock_is_current(
                     _ts, getattr(self, "_bd_esi_stock_ts", None),
                     bool(getattr(self, "_bd_manual_perm", False))):
-                bits.append(f"<span style='color:{theme.GREEN};'>gilt \u2713</span>")
+                bits.append(f"<span style='color:{theme.GREEN};'>"
+                            + _txt("applies \u2713") + "</span>")
             else:
                 bits.append(f"<span style='color:{theme.MUTED};'>"
                             + _txt("superseded: ESI data is fresher \u2013 ESI counts again")
@@ -3404,7 +3718,8 @@ class BauplanFenster:
                 elif _hit:
                     _hit_names = store.cached_names(list(_hit))
                     _shown = ", ".join(sorted(_hit_names.get(t, f"#{t}") for t in _hit)[:6])
-                    _more = f" (+{len(_hit) - 6} weitere)" if len(_hit) > 6 else ""
+                    _more = (_txt(" (+{n} more)").format(n=len(_hit) - 6)
+                             if len(_hit) > 6 else "")
                     self.bl_notice_lbl.setText(
                         _txt("\u26a0 {n} item(s) hidden by the blacklist: ").format(n=len(_hit))
                         + f"{_shown}{_more}")
@@ -4088,6 +4403,27 @@ class BauplanFenster:
             extra_cost = float(self.settings.get("bau_extra_cost", 0) or 0)
             marge = None
             fees = 0.0
+            # OHNE VERKAUFSPREIS GIBT ES DIESE ZAHLEN NICHT.
+            # Nutzer "buyenne", 15.09.2026 (Discord): Hel und Phoenix
+            # stuerzten beim Oeffnen ab, Stork und Avalanche nicht. Grund:
+            # Capitals haben in Jita praktisch keine Sell-Orders - sind dann
+            # auch keine Contract-Preise geladen, bleibt `_sell_eff` leer.
+            # Der ganze Gewinn-Block haengt aber an der Bedingung
+            # `_sell_eff` (Anker von aa353 - HIER NICHT WOERTLICH
+            # hinschreiben, sonst findet die Pruefung den Kommentar statt
+            # der Verzweigung und meldet falsch), und die
+            # rechte Spalte liest `gross`/`prof` danach BEDINGUNGSLOS:
+            #   UnboundLocalError: cannot access local variable 'gross'
+            # `marge` und `fees` waren vorbelegt, diese hier wurden beim
+            # Nachruesten der Spalte vergessen.
+            # KEINE 0 ALS VORGABE: eine 0 im Feld "Gewinn" liest sich wie ein
+            # gerechnetes Ergebnis - und das waere eine erfundene Zahl. None
+            # macht `_pset` zu einem Strich, so wie der Kopf es ohne Preis
+            # auch schon tut. Waechter: b7d in test_bauplan_aufbau.py.
+            gross = None
+            prof = None
+            prof_raw = None
+            total_all = None
 
             def _r(lbl, val, col=None, bold=False):
                 """Eine Tooltip-Tabellenzeile: Beschriftung links, Zahl rechts.
@@ -4386,6 +4722,11 @@ class BauplanFenster:
                 st_profit_raw.setText("\u2013")
                 st_profit.sub_lbl.setVisible(False)
                 st_profit_raw.sub_lbl.setVisible(False)
+            # DER RICHTIGE MOMENT fuer den Contract-Knopf: hier steht fest,
+            # ob dieser Plan einen Verkaufspreis hat. Gilt fuer BEIDE Zweige -
+            # mit Preis verschwindet der Knopf wieder, auch wenn der Nutzer
+            # ihn gerade selbst geladen hat.
+            self._bd_contract_knopf(bool(_sell_eff))
             if plan:
                 # DIESELBE Rechnung wie die Kopfzeile: ist die Ladder aktiv,
                 # steckt in `total` der Orderbuch-Preis, nicht der Flachpreis
@@ -4442,7 +4783,7 @@ class BauplanFenster:
                 # nebeneinander (Arbeitsregel 10). Jetzt zeigt der Tooltip
                 # exakt das, was die Karte rechnet - und weist Transport und
                 # Zusatzkosten darunter separat aus, statt sie zu verstecken.
-                _ct += [_r("<b>= Baukosten gesamt</b>",
+                _ct += [_r("<b>" + _txt("= total build cost") + "</b>",
                            "<b>" + isk(total) + "</b>", theme.CYAN, True),
                         _r(_txt("\u00f7 {n} units").format(n=_q), isk(total / _q),
                            theme.MUTED),
@@ -4642,10 +4983,12 @@ class BauplanFenster:
                 _pset("\u2212 Baukosten", total, True, theme.RED)
                 _pset("\u2212 Eigene Fahrt", _eigene_fahrt, True, theme.RED)
                 _pset("\u2212 Zusatzkosten", extra_cost, True, theme.RED)
+                # `prof` kann None sein (kein Verkaufspreis, s. oben) -
+                # dann steht ein Strich da, und die Farbe spielt keine Rolle.
                 _pset("= Gewinn", prof, False,
-                      theme.GREEN if prof >= 0 else theme.RED)
-                _pset("Gewinn / Stk", prof / _q_, False,
-                      theme.GREEN if prof >= 0 else theme.RED)
+                      theme.GREEN if (prof or 0) >= 0 else theme.RED)
+                _pset("Gewinn / Stk", (prof / _q_) if prof is not None else None,
+                      False, theme.GREEN if (prof or 0) >= 0 else theme.RED)
                 # de_scan2: an
                 # de_scan4: aus - interner SCHLUESSEL (Kategorie/Stufe/Dict), Anzeige uebersetzt woanders
                 _mg = _pf.get("Marge")
@@ -4731,8 +5074,9 @@ class BauplanFenster:
                 _lbl_tip = "\n".join(_vtip)
                 if tinfo["capacity"] > 0:
                     base += (f'  \u00b7  <span style="color:{theme.MUTED};">'
-                            f'{nfahrt} Fahrt{"en" if nfahrt != 1 else ""} \u00e0 '
-                            f'{tinfo["capacity"]:,.0f}'.replace(",", "'") + " m\u00b3</span>")
+                             + _txt("{n} trip(s) \u00e0 ").format(n=nfahrt)
+                             + f'{tinfo["capacity"]:,.0f}'.replace(",", "'")
+                             + " m\u00b3</span>")
                 if tinfo["missing_volume"]:
                     base += (f'  \u00b7  <span style="color:{theme.MUTED};">'
                             + _txt("{n} material(s) without volume data in the SDE "
@@ -4781,7 +5125,8 @@ class BauplanFenster:
                     continue
                 nm, assigned = info
                 if nm:
-                    tag = "zugewiesen" if assigned else "Auto"
+                    # "Auto" heisst in beiden Sprachen gleich und bleibt.
+                    tag = _txt("assigned") if assigned else "Auto"
                     parts.append(icons.html(icon)
                                  + f' <span style="color:{theme.MUTED};">{alabel}:</span> '
                                  f'<b>{nm}</b> <span style="color:{theme.MUTED};">({tag})</span>')
@@ -4852,7 +5197,7 @@ class BauplanFenster:
             client_id = self.settings.get("client_id")
             chars = store.list_characters()
             if not client_id or not chars:
-                self._flash_tip("Keine Charaktere / Client-ID")
+                self._flash_tip(_txt("No characters / client ID"))
                 asset_cb.setChecked(False)
                 return
 
@@ -4952,6 +5297,36 @@ class BauplanFenster:
                         # de_scan4: an
                         failed.append(f"Jobs: {ch.get('character_name', '?')}")
 
+                # CORP-HANGAR (1.0.8, nur fuers Bauen). Dieselbe Orts-Grenze
+                # wie der eigene Bestand: im Struktur-Bereich nur die
+                # verknuepften Strukturen, bei "Ueberall" alles. Ohne
+                # verknuepfte Struktur (_no_locs) zaehlt auch die Corp
+                # nichts - sonst hiesse "kein Hangarbestand" ploetzlich
+                # "kein eigener, aber der ganze Corp-Hangar".
+                _corp = self._corp_bau_daten(
+                    client_id, chars,
+                    None if _scope == "all" else list(locs.keys())
+                ) if not _no_locs else self._corp_bau_daten(client_id, [], [])
+                failed.extend(_corp.get("failed") or [])
+                # Corp-Jobs in den "laeuft schon"-Pool und (unten) in den
+                # virtuellen Bestand - unter der CORP-Nummer, mit dem
+                # Corp-Namen als "Charakter".
+                for _corp_id, _cjobs in (_corp.get("jobs") or {}).items():
+                    jobs_by_char[_corp_id] = _cjobs
+                    _cn = next((c["name"] for c in _corp.get("corps") or []
+                                if c.get("corp_id") == _corp_id), None)
+                    for j in _cjobs:
+                        pid = j.get("product_type_id")
+                        if not pid or j.get("status") == "delivered":
+                            continue
+                        _st = j.get("status")
+                        if _st == "active" and esi.job_is_finished(j):
+                            _st = "ready"
+                        active_by_product.setdefault(pid, []).append(
+                            {"char": _cn or _txt("Corp"),
+                             "runs": j.get("runs"), "end_date": j.get("end_date"),
+                             "status": _st})
+
                 # BLAUPAUSEN FRISCH MITHOLEN (Nutzer-Fund, Sitzung 8: "ich
                 # habe neue Blueprints gekauft und ESI erkennt das nicht im
                 # gespeicherten Bauplan"). Der gemeinsame Blaupausen-Cache
@@ -4982,6 +5357,13 @@ class BauplanFenster:
                         # de_scan4: an
                         failed.append(
                             _txt("Blueprints: {name}").format(name=ch.get('character_name', '?')))
+                # Corp-Blaupausen aus den gewaehlten Divisions dazu. Ein
+                # gescheiterter Corp-Abruf steht schon in `failed`; dann gilt
+                # dieselbe Regel wie bei den Charakteren: alter Vollstand
+                # statt Teilliste.
+                owned_bp_fresh.extend(_corp.get("blueprints") or [])
+                if _corp.get("bp_ok") is False:
+                    bp_fetch_ok = False
 
                 # GELIEFERTE Jobs flach einsammeln (fuer die automatische
                 # Fortschritts-Erkennung eingefrorener Plaene): nur die vier
@@ -5073,7 +5455,7 @@ class BauplanFenster:
                             "virt_map": dict(_virt), "located": False,
                             "no_locations": True, "active": active_by_product,
                             "delivered": delivered_jobs,
-                            "failed": failed, "age": None,
+                            "failed": failed, "age": None, "corp": _corp,
                             "virtual": {"ready": _nr, "fresh": _nf,
                                         "running": _nrun, "units": _units}}
                 if locs:
@@ -5109,6 +5491,9 @@ class BauplanFenster:
                                 str(_af_err))
                             # de_scan4: an
                             failed.append(f"Assets: {cmap0.get(cid, cid)}")
+                    # CORP-HANGAR an denselben Strukturen dazu (1.0.8).
+                    for t, q in (_corp.get("summe") or {}).items():
+                        agg[int(t)] = agg.get(int(t), 0) + int(q)
                     _assets_only = dict(agg)      # vor dem Aufaddieren merken
                     _virt, _nr, _nf, _nrun, _units = _virtual_stock()
                     for t, q in _virt.items():
@@ -5121,6 +5506,7 @@ class BauplanFenster:
                             "active": active_by_product,
                             "delivered": delivered_jobs,
                             "failed": failed, "age": max(ages) if ages else None,
+                            "corp": _corp,
                             "virtual": {"ready": _nr, "fresh": _nf,
                                         "running": _nrun, "units": _units}}
                 # Fallback: keine Verknüpfung -> altes Verhalten (alle Orte), aber
@@ -5148,6 +5534,9 @@ class BauplanFenster:
                             str(_af2_err))
                         # de_scan4: an
                         failed.append(f"Assets: {ch.get('character_name', '?')}")
+                # CORP-HANGAR ueberall dazu (1.0.8).
+                for t, q in (_corp.get("summe") or {}).items():
+                    agg[int(t)] = agg.get(int(t), 0) + int(q)
                 _assets_only = dict(agg)          # vor dem Aufaddieren merken
                 _virt, _nr, _nf, _nrun, _units = _virtual_stock()
                 for t, q in _virt.items():
@@ -5158,6 +5547,7 @@ class BauplanFenster:
                        "active": active_by_product,
                        "delivered": delivered_jobs,
                        "failed": failed, "age": max(ages) if ages else None,
+                       "corp": _corp,
                        "virtual": {"ready": _nr, "fresh": _nf,
                                    "running": _nrun, "units": _units}}
 
@@ -5355,6 +5745,31 @@ class BauplanFenster:
                                 for n, d in _ld.items()) + "\n")
                 _npool = len(self._runplan_pool_char_ids(self.settings))
                         # de_scan2: an
+                # CORP-HANGAR (1.0.8): sagen, WAS gezaehlt wurde und WARUM
+                # etwas nicht - "0 Bestand" allein liesse den Nutzer raten.
+                _ci = result.get("corp") or {}
+                if _ci.get("aktiv"):
+                    if _ci.get("keine_division"):
+                        parts.append(_txt(
+                            "⚠ Corp hangars are ON, but no division is "
+                            "selected – Settings → Corporation."))
+                    for _c in _ci.get("corps") or []:
+                        parts.append(_txt(
+                            "Corp stock: {corp} via {char} – {divs} "
+                            "({n} rows)").format(
+                                corp=_c.get("name"), char=_c.get("via"),
+                                divs=", ".join((_c.get("divisions") or {}).values()),
+                                n=_c.get("rows", 0)))
+                    if _ci.get("relink"):
+                        parts.append(_txt(
+                            "⚠ Re-link {names}: linked before the corp switch "
+                            "was turned on, the login has no corp permission yet."
+                        ).format(names=", ".join(_ci["relink"])))
+                    if _ci.get("ohne_rolle"):
+                        parts.append(_txt(
+                            "⚠ No linked character holds the Director role in "
+                            "{corps} – that corp hangar is NOT counted."
+                        ).format(corps=", ".join(_ci["ohne_rolle"])))
                 if _npool:
                     parts.append(_txt("Stock pool: {n} characters (all with role "
                                       "ticks)").format(n=_npool))
@@ -5504,6 +5919,9 @@ class BauplanFenster:
             else:
                 qty_spin.setEnabled(True)
                 qty_spin.setToolTip("")
+            # Das Runs-Feld ist dieselbe Zahl - gesperrt und frei im Gleichtakt.
+            if runs_spin is not None:
+                runs_spin.setEnabled(qty_spin.isEnabled())
             # ALLES SPERREN, WAS DEN PLAN AENDERN WUERDE (Sitzung 17, Nutzer:
             # "unbedingt sperren solche Sachen"). Beim eingefrorenen Plan
             # rechnet production_plan NICHT mehr - ein Klick auf einen
@@ -5753,6 +6171,10 @@ class BauplanFenster:
         _qty_timer.timeout.connect(_qty_uebernehmen)
         qty_spin.valueChanged.connect(lambda _=0: _qty_timer.start())
         qty_spin.editingFinished.connect(_qty_uebernehmen)
+        # Das Runs-Feld rechnet genauso sofort bei Enter/Verlassen - es
+        # schreibt ins Stueckfeld, und von dort geht es denselben Weg.
+        if runs_spin is not None:
+            runs_spin.editingFinished.connect(_qty_uebernehmen)
 
         def _store_cat_me_te():
             self._bd_me_component = comp_me_spin.value()
@@ -6023,7 +6445,7 @@ class BauplanFenster:
                 # festgenagelten Preisen neu rechnen, ohne Live-Orderbuch.
                 self._bd_ladder_result = None
                 rebuild()
-                self._flash_tip("Mit eingefrorenen Preisen neu gerechnet")
+                self._flash_tip(_txt("Recalculated with frozen prices"))
                 return
             # NEUE RECHNUNG = NEUE RUNS: die alten "ingame gestartet"-Haken
             # gehoeren nicht mehr dazu (Nutzer-Entscheidung, s. _hakerl_reset).

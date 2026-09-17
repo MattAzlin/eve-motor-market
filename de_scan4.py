@@ -50,6 +50,13 @@ UEBERSETZER = {"t", "_txt", "_txtf"}
 #     in der deutschen Fassung englisch);
 #  B) ein Text mit Ellipse "\u2026" ist fast immer ein Ladetext.
 STATUS_RUFE = {"status", "progress", "_set_loading", "set_status"}
+#  D) (Sitzung 22) WAS NUR INS PROTOKOLL GEHT, IST KEIN ANZEIGETEXT:
+#     `_log_exception(wo, text)` schreibt ausschliesslich in fehler.log
+#     (nachgesehen in main_window.py, nicht vermutet). Seine Beschriftungen
+#     standen bisher einzeln unter `# de_scan4: aus`-Markern - jede neue
+#     Fehlerbehandlung brauchte einen weiteren. de_scan5 und de_scan6 kennen
+#     die Regel schon; hier zieht sie nach.
+NUR_PROTOKOLL = {"_log_exception"}
 #  C) (Sitzung 17, Nutzer-Screenshots "Gewinn (netto)", "Ziel-Marge",
 #     "Lohnende Produktion") - kein Wort davon stand in WORTE, und die Texte
 #     gehen an eigene Helfer (kpi_card, _collapsible, Formularlisten). Die
@@ -115,6 +122,7 @@ def scan_datei(pfad):
             stumm.add(n.value)
     # Regel A: Konstanten, die in einen Status-Rueckruf / label= fliessen
     regel_a = set()
+    protokoll = set()          # Regel D: Argumente von _log_exception
     for n in ast.walk(tree):
         if isinstance(n, ast.Call):
             f = n.func
@@ -125,11 +133,18 @@ def scan_datei(pfad):
                 for c in ast.walk(z):
                     if isinstance(c, ast.Constant) and isinstance(c.value, str):
                         regel_a.add(c)
+            if name in NUR_PROTOKOLL:
+                for a in n.args:
+                    for c in ast.walk(a):
+                        if isinstance(c, ast.Constant) \
+                           and isinstance(c.value, str):
+                            protokoll.add(c)
     treffer = []
     for n in ast.walk(tree):
         if not (isinstance(n, ast.Constant) and isinstance(n.value, str)):
             continue
-        if n in stumm or n.lineno in aus or len(n.value.strip()) < 3:
+        if n in stumm or n in protokoll or n.lineno in aus \
+           or len(n.value.strip()) < 3:
             continue
         if not any(ch.isalpha() for ch in n.value):
             continue

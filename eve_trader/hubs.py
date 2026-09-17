@@ -7,6 +7,29 @@ from . import config, esi
 
 _UA = {"User-Agent": "MotorMarket/0.1"}
 
+# DIE 401/403-MELDUNG ALS SCHLUESSEL, NICHT ALS WORTLAUT.
+# Bis Sitzung 22 stand in main_window `if "Kein Zugriff" in str(msg)` - und
+# `msg` ist der bereits UEBERSETZTE Text. Auf der englischen Oberflaeche
+# heisst er "No access to the order book of ...", die Bedingung traf also
+# nie zu und die Neupruefung der Struktur lief dort NIE an. Wer eine
+# uebersetzte Meldung spaeter wiedererkennen will, muss ueber den Katalog
+# gehen - genau das macht `ist_zugriffsfehler`.
+KEIN_ZUGRIFF_SCHLUESSEL = (
+    "No access to the order book of „{name}“ with the linked "
+    "character (check docking/market rights or the token).")
+
+
+def ist_zugriffsfehler(text):
+    """Stammt diese Fehlermeldung aus dem 401/403-Fall? Sprachunabhaengig:
+    verglichen wird der Textanfang VOR dem Platzhalter, in beiden
+    Fassungen - englischer Schluessel und deutscher Katalogeintrag."""
+    from .sprache import KATALOG
+    _de = KATALOG.get("de", {}).get(KEIN_ZUGRIFF_SCHLUESSEL,
+                                    KEIN_ZUGRIFF_SCHLUESSEL)
+    _vorn = [s.split("{name}")[0].strip()
+             for s in (KEIN_ZUGRIFF_SCHLUESSEL, _de)]
+    return any(v and v in (text or "") for v in _vorn)
+
 # Built-in NPC trade hubs: (key, label, region_id, station_id)
 NPC_HUBS = [
     ("jita", "Jita (The Forge)", 10000002, 60003760),
@@ -128,9 +151,7 @@ def load_location_orders(loc: dict, settings, progress=None) -> dict:
         code = getattr(getattr(e, "response", None), "status_code", None)
         if code in (401, 403):
             from .sprache import t as _txt
-            raise RuntimeError(_txt(
-                "No access to the order book of \u201e{name}\u201c with the linked "
-                "character (check docking/market rights or the token).").format(
+            raise RuntimeError(_txt(KEIN_ZUGRIFF_SCHLUESSEL).format(
                     name=loc.get('name', loc['structure_id']))) from e
         raise
     return {tid: {"sell_min": b["sell_min"], "buy_max": b["buy_max"],

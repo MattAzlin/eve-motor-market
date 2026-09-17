@@ -1940,6 +1940,1125 @@ except Exception as e:                                   # pragma: no cover
     traceback.print_exc()
     _fail.append(f"b7c Markt unter Mindestpreis: {type(e).__name__}: {e}")
 
+# ---------------------------------------------------------------- (b7d)
+# KEIN VERKAUFSPREIS UEBERHAUPT - der Capital-Fall (Nutzer "buyenne",
+# 15.09.2026, Discord: Hel und Phoenix stuerzten ab, Stork und Avalanche
+# nicht). Capitals haben in Jita praktisch keine Sell-Orders; sind DANN
+# auch noch keine Contract-Preise geladen, ist `_sell_eff` leer.
+#
+# WAS DANN PASSIERTE: der ganze Gewinn-Block haengt an `if _sell_eff:` -
+# dort entstehen `gross`, `prof`, `prof_raw` und `total_all`. Die rechte
+# Spalte ("Verkaufserloes brutto", "= Gewinn", "Marge") liest sie danach
+# BEDINGUNGSLOS. Ohne Verkaufspreis gab es sie nie:
+#   UnboundLocalError: cannot access local variable 'gross'
+# `marge` und `fees` waren vorbelegt - die beiden anderen wurden vergessen,
+# als die Spalte dazukam. Genau darum steht hier ein Test und kein Kommentar.
+_res_nosell = dict(_res)
+_res_nosell["sell"] = 0.0             # kein Marktpreis (Capital in Jita)
+_res_nosell["sell_is_contract"] = True
+win._bd_hub_sell_price = None
+win._bd_contract_sell = None          # Contract-Preise NICHT geladen
+try:
+    win._show_build_detail(100, "Testcapital-ohne-Preis", _res_nosell)
+    check("b7d Bauplan oeffnet auch ganz OHNE Verkaufspreis", True)
+    _dlg_ns = getattr(win, "_bd_dialog", None)
+    check("b7d Dialog steht", _dlg_ns is not None)
+    if _dlg_ns is not None:
+        # GEGENPROBE ZUM NORMALFALL: ohne Preis darf dort KEINE Zahl
+        # stehen - weder eine 0 noch ein erfundener Gewinn. Ein Strich ist
+        # die ehrliche Antwort (Regel 3: lieber nichts behaupten).
+        _txt_ns = [x.text() for x in _dlg_ns.findChildren(QLabel)]
+        check("b7d ohne Preis steht kein erfundener Gewinn da",
+              "\u2013" in _txt_ns or "\u2014" in _txt_ns)
+except Exception as e:                                   # pragma: no cover
+    import traceback
+    traceback.print_exc()
+    _fail.append(f"b7d ohne Verkaufspreis: {type(e).__name__}: {e}")
+
+# ---------------------------------------------------------------- (b7e)
+# DER CONTRACT-KNOPF ZEIGT SICH IM RICHTIGEN MOMENT.
+# NUTZER, 15.09.2026: "der load contracts button soll ersichtlicher werden,
+# nicht versteckt in Dropdowns" - und blinken wie der Markt-Scan-Knopf.
+# Der richtige Moment ist genau der, in dem das Verkaufsfeld leer bleibt.
+#
+# NICHT AUF isVisible() PRUEFEN: in einem nie angezeigten Fenster meldet das
+# IMMER False (teuer gelernte Qt-Falle). isHidden() sagt dagegen, ob das
+# Widget AUSDRUECKLICH versteckt wurde - genau die Frage hier.
+_ctb = getattr(win, "_bd_ct_btn", None)
+check("b7e der Contract-Knopf existiert als eigener Knopf", _ctb is not None)
+if _ctb is not None:
+    check("b7e ohne Verkaufspreis ist er sichtbar", not _ctb.isHidden())
+    _tmr_ct = getattr(_ctb, "_ct_blink_timer", None)
+    check("b7e und er blinkt", _tmr_ct is not None and _tmr_ct.isActive())
+    # KEIN GROESSENSPRUNG: beide Blinkzustaende tragen einen 2-px-Rahmen
+    # (Nutzer-Befund Sitzung 20 am Markt-Scan-Knopf - dieselbe Falle).
+    check("b7e Ruhezustand traegt schon 2 px Rahmen",
+          "border:2px solid" in getattr(_ctb, "_ct_css", ""))
+    win._blink_rahmen(_ctb, True, getattr(_ctb, "_ct_css", ""))
+    _an_css = _ctb.styleSheet()
+    win._blink_rahmen(_ctb, False, getattr(_ctb, "_ct_css", ""))
+    _aus_css = _ctb.styleSheet()
+    check("b7e beide Zustaende sind gleich stark gerahmt",
+          _an_css.count("border:2px solid") == _aus_css.count("border:2px solid"))
+    check("b7e das Grund-Aussehen bleibt beim Blinken erhalten",
+          "padding:6px 12px" in _an_css and "padding:6px 12px" in _aus_css)
+# MIT Verkaufspreis muss er wieder weg sein - sonst steht ein blinkender
+# Knopf in jedem normalen Bauplan und faellt genau dann nicht mehr auf,
+# wenn er gebraucht wird.
+try:
+    win._show_build_detail(100, "Testship", _res)
+    _ctb2 = getattr(win, "_bd_ct_btn", None)
+    check("b7e mit Verkaufspreis ist der Knopf versteckt",
+          _ctb2 is not None and _ctb2.isHidden())
+    _tmr2 = getattr(_ctb2, "_ct_blink_timer", None)
+    check("b7e und das Blinken steht still",
+          _tmr2 is None or not _tmr2.isActive())
+except Exception as e:                                   # pragma: no cover
+    import traceback
+    traceback.print_exc()
+    _fail.append(f"b7e Contract-Knopf mit Preis: {type(e).__name__}: {e}")
+
+# ---------------------------------------------------------------- (b7f)
+# DER NAME IM RUNPLANER IST KOPIERBAR UND GERAHMT.
+# NUTZER, 15.09.2026: "im Runplaner steht Silicon Diborite - klickt man drauf,
+# bekommt man Silicon Diborite Reaction Formula ins Clipboard", dazu ein
+# kleiner Rahmen wie um die Run-Zahlen, fette Run-Zahlen, und die FARBE des
+# Namens soll bleiben (gebaute Zeilen blau, nicht amber).
+from PySide6.QtWidgets import QTreeWidgetItem as _TWI7f
+from eve_trader.ui.mw_basis import (ROLLE_KOPIERNAME as _RKN7f,
+                                    kopier_text_rect as _ktr7f)
+_dlg7f = getattr(win, "_bd_dialog", None)
+_sched7f = next((x for x in (_dlg7f.findChildren(QTreeWidget) if _dlg7f else [])
+                 if x.columnCount() == 6), None)
+check("b7f der Runplaner-Baum ist da", _sched7f is not None)
+if _sched7f is not None:
+    # KEINE HERVORHEBUNG MEHR (Nutzer, 15.09.2026: "die Items sollen wieder
+    # normal aussehen"). Erst war es ein Rahmen, dann ein Chip - beides zu
+    # laut. Die Zeile sieht aus wie jede andere; nur der Klick kopiert.
+    check("b7f Spalte 0 malt NICHTS Eigenes mehr",
+          _sched7f.itemDelegateForColumn(0) is None)
+    # DAS KAESTCHEN BLEIBT FREI: der Rahmen (und damit die Trefferflaeche)
+    # faengt rechts vom Haken an - sonst kopierte jeder Haken still mit.
+    _ti7f = _TWI7f(["Silicon Diborite", "130", "", "", "", ""])
+    _sched7f.addTopLevelItem(_ti7f)
+    _ti7f.setData(0, _RKN7f, "Silicon Diborite Reaction Formula")
+    _idx7f = _sched7f.indexFromItem(_ti7f, 0)
+    _r7f = _ktr7f(_sched7f, _idx7f, _sched7f.visualRect(_idx7f))
+    check("b7f die Trefferflaeche laesst das Kaestchen aus",
+          _r7f is not None and _r7f.left() > _sched7f.visualRect(_idx7f).left())
+    # KEIN KOPIEREN OHNE NAMEN und nicht in anderen Spalten - sonst
+    # ueberschreibt jeder Klick im Baum die Zwischenablage.
+    _ti_ohne7f = _TWI7f(["Leziris Lezflow", "", "", "", "", ""])
+    _sched7f.addTopLevelItem(_ti_ohne7f)
+    QApplication.clipboard().setText("UNBERUEHRT")
+    win._sched_name_klick(_ti_ohne7f, 0)
+    win._sched_name_klick(_ti7f, 3)
+    check("b7f ein Klick ohne Namen kopiert nichts",
+          QApplication.clipboard().text() == "UNBERUEHRT")
+    _sched7f.takeTopLevelItem(_sched7f.indexOfTopLevelItem(_ti7f))
+    _sched7f.takeTopLevelItem(_sched7f.indexOfTopLevelItem(_ti_ohne7f))
+# DIE VERDRAHTUNG IM RUNPLANER SELBST - am Quelltext, weil der Baum ohne
+# getickte Bau-Charaktere leer bleibt und die Pruefung sonst blind waere.
+_src7f = open("eve_trader/ui/mw_bauplan_tabs.py", encoding="utf-8").read()
+check("b7f der Formel-Name wird an der Zeile hinterlegt",
+      "iit.setData(0, ROLLE_KOPIERNAME," in _src7f)
+check("b7f und er kommt aus _bp_name_fuer (EINE Regel)",
+      "self._bp_name_fuer(a.get(\"name\")," in _src7f)
+check("b7f die Run-Zahl steht fett", "_fr.setBold(True)" in _src7f
+      and "iit.setFont(1, _fr)" in _src7f)
+# GAR KEIN ZEICHNEN MEHR IN mw_basis: weder Rahmen noch Chip. Waere eines
+# davon zurueck, saehe die Zeile wieder anders aus als der Rest des Baums.
+_src7f_b = open("eve_trader/ui/mw_basis.py", encoding="utf-8").read()
+check("b7f in mw_basis wird nichts mehr in die Spalte gemalt",
+      "QStyledItemDelegate" not in _src7f_b
+      and "drawRoundedRect" not in _src7f_b)
+
+# ---------------------------------------------------------------- (b7g)
+# BAUPLAENE SELBER ANORDNEN (Nutzer, 15.09.2026).
+# Ein Umschalter haelt die automatische Sortierung nach Fortschritt heraus,
+# die Karten lassen sich mit gehaltener linker Maustaste ziehen, und die
+# eigene Folge ueberlebt Schliessen UND Update (settings.json liegt im
+# Nutzerordner, die .exe wird beim Update nur ersetzt).
+from PySide6.QtCore import QEvent as _QEv7g, QPoint as _QP7g
+from PySide6.QtGui import QWheelEvent as _QWh7g
+from PySide6.QtWidgets import (QVBoxLayout as _QVB7g, QWidget as _QW7g,
+                               QScrollArea as _QSA7g)
+from eve_trader.ui.mw_basis import KartenSortierer as _KS7g
+
+_halter7g = _QW7g()
+_lay7g = _QVB7g(_halter7g)
+_karten7g = []
+for _i7g in range(3):
+    _k7g = _QW7g()
+    _lay7g.addWidget(_k7g)
+    _karten7g.append(_k7g)
+_scr7g = _QSA7g()
+_pids7g = {id(_w): f"p{_n}" for _n, _w in enumerate(_karten7g)}
+_gemerkt7g = []
+_srt7g = _KS7g(_lay7g, _scr7g, lambda _w: _pids7g.get(id(_w)),
+               lambda _o: _gemerkt7g.append(list(_o)), parent=_halter7g)
+for _k7g in _karten7g:
+    _srt7g.ueberwache(_k7g)       # setzt u.a. den Objektnamen fuer den Selektor
+eq("b7g die Folge kommt aus dem Layout", _srt7g.reihenfolge(),
+   ["p0", "p1", "p2"])
+# IM RUHEZUSTAND AENDERT DER SORTIERER NICHTS. Das ist der wichtigste Test:
+# die Karten tragen Knoepfe (oeffnen, loeschen), und ein dauerhaft lauernder
+# Filter waere ein Risiko fuer jeden Klick darauf.
+_ev7g = _QEv7g(_QEv7g.MouseButtonPress)
+check("b7g ausgeschaltet schluckt er nichts",
+      _srt7g.aktiv is False and _srt7g.eventFilter(_karten7g[0], _ev7g) is False)
+# MAUSRAD BLEIBT MAUSRAD - ausdrueckliche Bedingung des Nutzers
+# ("scrollen muss auch gehen"), auch waehrend des Anordnens.
+_srt7g.aktiv = True
+_wh7g = _QWh7g(_QP7g(5, 5), _QP7g(5, 5), _QP7g(0, -120), _QP7g(0, -120),
+               Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
+check("b7g das Mausrad wird NICHT gefiltert",
+      _srt7g.eventFilter(_karten7g[0], _wh7g) is False)
+# DIE KNOEPFE AUF DEN KARTEN BLEIBEN BEDIENBAR (Nutzer, 15.09.2026: "was
+# bringt der Arrange-Modus, wenn er aktiviert ist und ich nichts druecken
+# kann?"). Frueher schluckte der Sortierer JEDEN Druck - der Modus war damit
+# nicht dauerhaft nutzbar, obwohl er genau dafuer gedacht ist.
+from PySide6.QtWidgets import QPushButton as _QPB7g, QLabel as _QL7g
+from PySide6.QtGui import QMouseEvent as _QME7g
+from PySide6.QtCore import QPointF as _QPF7g
+_knopf7g = _QPB7g("Open", _karten7g[0])
+_label7g = _QL7g("Profit", _karten7g[0])
+
+
+def _druck7g(ziel):
+    """Ein echter Linksklick-Druck auf dieses Widget."""
+    return _QME7g(_QEv7g.MouseButtonPress, _QPF7g(3, 3), _QPF7g(3, 3),
+                  Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+
+
+_srt7g._widget = None
+check("b7g ein Druck auf 'Open' geht an den Knopf",
+      _srt7g.eventFilter(_knopf7g, _druck7g(_knopf7g)) is False)
+check("b7g und der Sortierer merkt sich dabei KEINE Karte",
+      _srt7g._widget is None)
+check("b7g ein Druck auf die Karte selbst greift weiterhin",
+      _srt7g.eventFilter(_karten7g[0], _druck7g(_karten7g[0])) is True
+      and _srt7g._widget is _karten7g[0])
+_srt7g._widget = None
+_srt7g._start = None
+check("b7g ein Druck auf ein Label greift ebenfalls (dort wird gezogen)",
+      _srt7g.eventFilter(_label7g, _druck7g(_label7g)) is True)
+_srt7g._widget = None
+_srt7g._start = None
+_knopf7g.setParent(None)
+_label7g.setParent(None)
+# Umsortieren im Layout und merken - ohne echte Maus, die Bewegung selbst
+# prueft b7g nicht (dafuer braeuchte es einen sichtbaren Bildschirm).
+_lay7g.removeWidget(_karten7g[0])
+_lay7g.insertWidget(2, _karten7g[0])
+# DIE DREI ZUSTAENDE DER KARTE (Nutzer, 15.09.2026: "wenn ich mit der Maus
+# ueber einen Bauplan fahre, moechte ich dass er leicht hervorgehoben wird,
+# und wenn ich ihn dann drag and droppe"). Alle drei tragen 1 px Rahmen -
+# sonst springt die Karte beim Wechsel, dieselbe Falle wie beim Blinken.
+for _z7g, _name7g in (("ruhe", "ruhig"), ("hover", "unter der Maus"),
+                      ("zieht", "in der Hand")):
+    _srt7g._zeige(_karten7g[0], _z7g)
+    check(f"b7g Zustand '{_name7g}' traegt 1 px Rahmen",
+          "border:1px solid" in _karten7g[0].styleSheet())
+    # NUR DIE KARTE, NICHT IHRE KINDER (Nutzer: "wirklich nur den
+    # Gesamtrahmen vom Bauplan, nicht 'Profit' und so auch nochmal
+    # umrahmt"). Ohne Selektor vererbt Qt die Regel an jedes Label darin.
+    check(f"b7g Zustand '{_name7g}' trifft nur die Karte selbst",
+          bool(_KS7g.OBJEKTNAME)
+          and _karten7g[0].objectName() == _KS7g.OBJEKTNAME
+          and _karten7g[0].styleSheet().startswith(
+              "#" + _KS7g.OBJEKTNAME + "{"))
+_srt7g._zeige(_karten7g[0], "hover")
+_hover7g = _karten7g[0].styleSheet()
+_srt7g._zeige(_karten7g[0], "zieht")
+_zieht7g = _karten7g[0].styleSheet()
+check("b7g nur beim Ziehen kommt eine Flaeche dazu",
+      "background:" in _zieht7g and "background:" not in _hover7g)
+_srt7g.alles_zuruecksetzen()
+check("b7g Ausschalten raeumt die Hervorhebung weg",
+      _karten7g[0].styleSheet() == "")
+eq("b7g nach dem Verschieben stimmt die Folge", _srt7g.reihenfolge(),
+   ["p1", "p2", "p0"])
+
+# --- der Umschalter am Hauptfenster ---------------------------------------
+check("b7g der Knopf ist da und rastet ein",
+      hasattr(win, "bp_order_btn") and win.bp_order_btn.isCheckable())
+_vorher7g = win.settings.get("bau_plan_manuell")
+win._plan_handsortierung_umschalten(True)
+check("b7g einschalten merkt sich das",
+      win.settings.get("bau_plan_manuell") is True)
+win._plan_reihenfolge_merken(["7", "3", "9"])
+eq("b7g die Folge landet in den Einstellungen",
+   win.settings.get("bau_plan_reihenfolge"), ["7", "3", "9"])
+# UND DIE AUTOMATIK BLEIBT DRAUSSEN: sonst wirft der naechste ESI-Lauf die
+# Handarbeit um - genau das, was der Umschalter verhindern soll.
+_lay_alt7g = getattr(win, "_plan_sortier_layout", None)
+_wrap_alt7g = getattr(win, "_plan_karte_wrap", None)
+win._plan_sortier_layout = _lay7g
+win._plan_karte_wrap = {"p0": _karten7g[0]}
+win._sortiere_plan_karten({"p0": {"qty": 10, "built": 10, "pct": 100.0}})
+eq("b7g die Automatik ruehrt die Handfolge nicht an",
+   _srt7g.reihenfolge(), ["p1", "p2", "p0"])
+_src_ord7g = open("eve_trader/ui/main_window.py", encoding="utf-8").read()
+_i_ord7g = _src_ord7g.find("def _plan_handsortierung_umschalten")
+_ab_ord7g = _src_ord7g[_i_ord7g:_i_ord7g + 1800] if _i_ord7g >= 0 else ""
+check("b7g der Umschalter ist auffindbar", _i_ord7g >= 0)
+# EINSCHALTEN HEISST "MEINE FOLGE GILT" (Nutzer, 15.09.2026).
+check("b7g einschalten setzt die eigene Folge in Kraft",
+      win.settings.get("bau_plan_eigene_folge") is True
+      and win._plan_eigene_folge_gilt() is True)
+# AUSSCHALTEN BEENDET NUR DAS ZIEHEN (Nutzer, 15.09.2026: "die Reihenfolge
+# bleibt, aber dann fuehren wir einen Knopf ein 'Nach Fortschritt
+# sortieren'"). Vorher warf das Ausschalten die Handarbeit sofort um - sein
+# Einwand: "da liegt kein Sinn dahinter". Auch die Warnung davor ist raus:
+# sie kuendigte etwas an, das nicht mehr passiert.
+win.bp_order_btn.setChecked(True)
+win._plan_handsortierung_umschalten(False)
+check("b7g ausschalten merkt sich das ebenfalls",
+      win.settings.get("bau_plan_manuell") is False)
+check("b7g aber die eigene Folge gilt weiter",
+      win._plan_eigene_folge_gilt() is True)
+win._sortiere_plan_karten({"p0": {"qty": 10, "built": 10, "pct": 100.0}})
+eq("b7g und die Automatik ruehrt sie auch AUSGESCHALTET nicht an",
+   _srt7g.reihenfolge(), ["p1", "p2", "p0"])
+check("b7g es wird nicht mehr gefragt beim Ausschalten",
+      "_QMB.question(" not in _ab_ord7g)
+# ZURUECK ZUR AUTOMATIK NUR AUF KLICK.
+check("b7g der Knopf „Nach Fortschritt sortieren“ ist da",
+      hasattr(win, "bp_progress_btn"))
+win._plan_nach_fortschritt_sortieren()
+check("b7g er beendet die eigene Folge",
+      win.settings.get("bau_plan_eigene_folge") is False
+      and win._plan_eigene_folge_gilt() is False)
+eq("b7g und sortiert sofort nach Fortschritt", _srt7g.reihenfolge(),
+   ["p0", "p1", "p2"])
+check("b7g dafuer wird der letzte Fortschritt gemerkt",
+      "self._plan_letzter_fortschritt = res" in _src_ord7g)
+# WER DANACH WIEDER SCHIEBT, IST WIEDER IN SEINER FOLGE - sonst muesste er
+# den Anordnen-Modus aus- und wieder einschalten, nur damit sein Zug gilt.
+win._plan_reihenfolge_merken(["7", "3", "9"])
+check("b7g ein neuer Zug setzt die eigene Folge wieder in Kraft",
+      win._plan_eigene_folge_gilt() is True)
+# OHNE FORTSCHRITT NICHT STILL (Regel 6): ohne ESI-Lauf gibt es nichts zu
+# sortieren - das muss der Knopf sagen, sonst sieht er kaputt aus.
+_i_prog7g = _src_ord7g.find("def _plan_nach_fortschritt_sortieren")
+_ab_prog7g = _src_ord7g[_i_prog7g:_i_prog7g + 1800]
+check("b7g ohne Fortschritt sagt der Knopf Bescheid",
+      _i_prog7g >= 0 and "self._flash_tip(" in _ab_prog7g)
+# DER KNOPF ZEIGT DEN ZUSTAND (Nutzer: "blaues transparent, wie der
+# Refresh-all-Button") - derselbe Objektname, also dieselbe Regel aus dem
+# Stylesheet statt eines zweiten handgemalten Knopfes.
+check("b7g ausgeschaltet ist der Knopf normal",
+      win.bp_order_btn.objectName() != "Primary")
+win._plan_order_btn_stil(True)
+check("b7g eingeschaltet leuchtet er wie \u201eRefresh all\u201c",
+      win.bp_order_btn.objectName() == "Primary"
+      and win.global_refresh_btn.objectName() == "Primary")
+win._plan_order_btn_stil(False)
+eq("b7g die Handfolge bleibt trotzdem gespeichert",
+   win.settings.get("bau_plan_reihenfolge"), ["7", "3", "9"])
+win._plan_sortier_layout = _lay_alt7g
+win._plan_karte_wrap = _wrap_alt7g
+win.settings["bau_plan_manuell"] = _vorher7g
+# DIE EINSTELLUNG MUSS ES GEBEN, sonst faellt sie beim ersten Speichern
+# heraus und die Reihenfolge ist nach dem naechsten Start weg.
+from eve_trader import config as _cfg7g
+check("b7g beide Schluessel stehen in den Standardwerten",
+      "bau_plan_manuell" in _cfg7g.DEFAULT_SETTINGS
+      and "bau_plan_reihenfolge" in _cfg7g.DEFAULT_SETTINGS)
+
+# ---------------------------------------------------------------- (b7h)
+# CONTRACT-STAND: ALT -> DER KNOPF BLINKT. Und vor dem Scan wird gefragt.
+# NUTZER, 15.09.2026: "ich moechte, dass Load contract prices wenn nicht
+# aktuell ist der Button auch blinkt, sonst vergleicht man hier alte Preise
+# von gestern" - dazu "ist das normal dass das fast 5 Minuten dauert? wenn
+# das normal ist, sollte ein Popup kommen mit einer Warnung".
+check("b7h der Capital-Contract-Knopf ist da",
+      hasattr(win, "b_cap_contract_btn"))
+if hasattr(win, "b_cap_contract_btn"):
+    import eve_trader.store as _st7h
+    _echt7h = _st7h.contract_prices_age_seconds
+
+    def _blinkt7h():
+        """Blinkt der Knopf gerade? NONE-FEST: faellt die Alterspruefung aus,
+        gibt es gar keinen Timer - ein `.isActive()` darauf wuerde die ganze
+        Suite mit einem AttributeError abreissen, statt EINE Pruefung rot zu
+        machen (genau die Falle, die `_pos_von` in der aa-Suite abfaengt).
+        Bei der Rotprobe ist das der Unterschied zwischen ROT und BLIND."""
+        _t = getattr(win.b_cap_contract_btn, "_ct_blink_timer", None)
+        return _t is not None and _t.isActive()
+    try:
+        # NIE GELADEN -> blinken. Das ist der haeufigste Fall beim ersten
+        # Start, und genau dort ist der Hinweis am noetigsten.
+        _st7h.contract_prices_age_seconds = lambda _r: None
+        win._capital_contract_alter_pruefen()
+        check("b7h ohne Stand blinkt er", _blinkt7h())
+        # FRISCH -> still.
+        _st7h.contract_prices_age_seconds = lambda _r: 60.0
+        win._capital_contract_alter_pruefen()
+        check("b7h mit frischem Stand blinkt er nicht", not _blinkt7h())
+        # AELTER ALS EINEN TAG -> wieder blinken (die Grenze selbst).
+        _st7h.contract_prices_age_seconds = \
+            lambda _r: win._CONTRACT_ALT_SEKUNDEN + 1
+        win._capital_contract_alter_pruefen()
+        check("b7h ein Stand von gestern blinkt", _blinkt7h())
+        # GENAU AUF DER GRENZE ist er noch gut - sonst blinkt er bei jedem,
+        # der taeglich einmal scannt, staendig kurz vor dem naechsten Lauf.
+        _st7h.contract_prices_age_seconds = \
+            lambda _r: float(win._CONTRACT_ALT_SEKUNDEN)
+        win._capital_contract_alter_pruefen()
+        check("b7h auf der Grenze noch nicht", not _blinkt7h())
+    finally:
+        _st7h.contract_prices_age_seconds = _echt7h
+    check("b7h die Grenze ist ein Tag, nicht 15 Minuten",
+          win._CONTRACT_ALT_SEKUNDEN == 24 * 3600)
+    # KEIN GROESSENSPRUNG beim Blinken - 2 px in BEIDEN Zustaenden.
+    check("b7h der Ruhezustand traegt schon 2 px Rahmen",
+          "border:2px solid" in getattr(win.b_cap_contract_btn, "_ct_css", ""))
+# DIE WARNUNG STEHT VOR DEM SCAN, nicht danach - und sie nennt die Dauer.
+_src7h = open("eve_trader/ui/main_window.py", encoding="utf-8").read()
+_i7h = _src7h.find("def _load_capital_contract_prices")
+# GROSSZUEGIGES FENSTER: die ganze Funktion samt done()/fail() - der
+# Wiederaufruf des Alters-Checks steht erst dort unten.
+_ab7h = _src7h[_i7h:_i7h + 6000]
+check("b7h vor dem Scan wird gefragt", "_QMB.question(" in _ab7h)
+check("b7h die Frage nennt die Dauer", "SEVERAL " in _ab7h and "MINUTES" in _ab7h)
+check("b7h Abbrechen bricht wirklich ab",
+      "!= _QMB.Ok:\n            return" in _ab7h)
+check("b7h gefragt wird VOR dem Start des Laufs",
+      _ab7h.find("_QMB.question(") < _ab7h.find("self._run("))
+# UND DAS BLINKEN GEHT NACH EINEM ERFOLGREICHEN SCAN AUS.
+check("b7h nach dem Scan wird der Stand neu bewertet",
+      "self._capital_contract_alter_pruefen()" in _ab7h)
+
+# ---------------------------------------------------------------- (b7i)
+# CAPITAL-MODUS IST BEIM START IMMER AUS.
+# NUTZER, 15.09.2026: "die Gefahr ist gross, dass man vergisst da
+# herauszugehen, bevor man das Tool schliesst, und dann ist man verwirrt,
+# warum man keine normalen Blueprints suchen kann." Der Modus ist etwas fuer
+# Fortgeschrittene und darf nie der Zustand sein, in dem man das Programm
+# unbemerkt vorfindet.
+check("b7i der Capital-Modus-Knopf ist da", hasattr(win, "b_cap_mode"))
+if hasattr(win, "b_cap_mode"):
+    check("b7i beim Start ist er AUS", not win.b_cap_mode.isChecked())
+    check("b7i und die normale Trefferliste ist sichtbar",
+          not win.b_table.isHidden())
+# DER ZUSTAND DARF AUCH NICHT GESPEICHERT WERDEN - sonst ist er beim
+# naechsten Start wieder da, ohne dass jemand ihn eingeschaltet hat.
+from eve_trader import config as _cfg7i
+check("b7i der Modus steht in keiner Einstellung",
+      not any("cap_mode" in _k for _k in _cfg7i.DEFAULT_SETTINGS))
+_src7i = open("eve_trader/ui/mw_bauplan_tabs.py", encoding="utf-8").read()
+check("b7i und er wird beim Aufbau ausdruecklich ausgeschaltet",
+      "self.b_cap_mode.setChecked(False)" in _src7i)
+
+# ---------------------------------------------------------------- (b7j)
+# DER HAKEN, DEN NIEMAND GESETZT HAT.
+# NUTZER, 15.09.2026, mit zwei Zoom-Bildern: "Titanium Chromide Reaction
+# Formula - dieser gruene Haken ist nicht von mir, den kann ich nicht
+# setzen ... ich kann ihn auch nicht wegmachen."
+#
+# URSACHE, nachgemessen (nicht geraten): QTreeWidgetItem traegt
+# Qt.ItemIsUserCheckable BEREITS in seinen Standard-Flags, und
+# checkState(0) antwortet auch ohne Kaestchen brav "Unchecked". Die
+# Kinder-Kaskade in _on_sched_check ("hake ich den Charakter ab, sollen
+# seine Positionen mit") fragte genau diese beiden Dinge ab - und legte
+# den Material-Unterzeilen damit ein Kaestchen NEU AN, statt ein
+# vorhandenes umzuschalten. Beim Loesen blieb es als LEERES Kaestchen
+# stehen, weil CheckStateRole dann 0 ist und nicht mehr None.
+from PySide6.QtWidgets import QTreeWidget as _TW7j, QTreeWidgetItem as _TWI7j
+_t7j = _TW7j(); _t7j.setColumnCount(5)
+_eltern7j = _TWI7j(["Peanut Motor", "", "", "", ""])
+_t7j.addTopLevelItem(_eltern7j)
+_mat7j = _TWI7j(["Vanadium", "1'000", "", "", ""])
+_eltern7j.addChild(_mat7j)
+check("b7j eine frische Baumzeile ist von Haus aus abhakbar (deshalb "
+      "reichen die Flags als Frage nicht)",
+      bool(_mat7j.flags() & Qt.ItemIsUserCheckable))
+check("b7j und sie meldet Unchecked, obwohl sie gar kein Kaestchen hat",
+      _mat7j.checkState(0) == Qt.Unchecked
+      and _mat7j.data(0, Qt.CheckStateRole) is None)
+# DIE ALTE BEDINGUNG haette hier zugeschlagen, die neue nicht.
+check("b7j die alte Kaskaden-Bedingung haette ein Kaestchen erfunden",
+      bool(_mat7j.flags() & Qt.ItemIsUserCheckable)
+      and _mat7j.checkState(0) != Qt.Checked)
+check("b7j die neue Bedingung laesst die Stuecklisten-Zeile in Ruhe",
+      not (_mat7j.data(0, Qt.CheckStateRole) is not None
+           and _mat7j.flags() & Qt.ItemIsUserCheckable
+           and _mat7j.checkState(0) != Qt.Checked))
+# BEIDE RIEGEL MUESSEN IM CODE STEHEN - einer allein waere wieder eine
+# einzige Stelle, an der es kippen kann.
+_src7j = open("eve_trader/ui/mw_bauplan_fenster.py", encoding="utf-8").read()
+check("b7j die Kaskade fragt nach dem vorhandenen Kaestchen",
+      "_ch.data(0, Qt.CheckStateRole) is not None" in _src7j)
+check("b7j und zwar VOR dem Umschalten",
+      # BEIDE ANKER AUSDRUECKLICH PRUEFEN: find() liefert -1, wenn ein Anker
+      # fehlt, und -1 < irgendwas waere still gruen (die Blindstelle aus
+      # aa353). Ein fehlender Anker muss ROT werden, nicht unsichtbar.
+      _src7j.find("_ch.data(0, Qt.CheckStateRole) is not None") >= 0
+      and _src7j.find("_ch.setCheckState(0, _want)") >= 0
+      and (_src7j.find("_ch.data(0, Qt.CheckStateRole) is not None")
+           < _src7j.find("_ch.setCheckState(0, _want)")))
+check("b7j die Material-Unterzeile ist gar nicht erst abhakbar",
+      "mit.setFlags(mit.flags() & ~Qt.ItemIsUserCheckable)" in _src7i)
+check("b7j und das steht vor dem Einhaengen",
+      _src7i.find("mit.setFlags(mit.flags() & ~Qt.ItemIsUserCheckable)") >= 0
+      and _src7i.find("iit.addChild(mit)") >= 0
+      and (_src7i.find("mit.setFlags(mit.flags() & ~Qt.ItemIsUserCheckable)")
+           < _src7i.find("iit.addChild(mit)")))
+# DIE ECHTEN ZEILEN BEHALTEN IHR KAESTCHEN: der Riegel darf den Runplaner
+# nicht stumm schalten. Beides steht unveraendert im Aufbau.
+check("b7j die Positionszeile bleibt abhakbar",
+      "iit.setFlags(iit.flags() | Qt.ItemIsUserCheckable)" in _src7i)
+check("b7j die Charakterzeile bleibt abhakbar",
+      "citem.setFlags(citem.flags() | Qt.ItemIsUserCheckable)" in _src7i)
+
+# ---------------------------------------------------------------- (b7k)
+# UNGESPEICHERTE EINSTELLUNGEN (Nutzer, 15.09.2026): "wenn man in
+# Einstellungen etwas einstellt und nicht speichert, bekommt man keine
+# Meldung, wenn man irgendwo anders im Tool klickt ... diese Warnung muss
+# kommen, sobald wir versuchen ungespeichert den Einstellungs-Tab zu
+# verlassen, EGAL WOHIN."
+#
+# GEFAHREN, NICHT NUR GELESEN: alle drei Wege werden hier wirklich
+# durchlaufen. Die modale Rueckfrage steckt in `_einstellungen_frage` und
+# wird dafuer stillgelegt - ein echtes Fenster wuerde die Suite haengen
+# lassen (b59 bewacht dieselbe Falle).
+check("b7k die Einstellungsseite ist hinterlegt",
+      getattr(win, "_settings_w", None) is not None)
+check("b7k und der Riegel haengt an der Navigation",
+      win.tabs.vor_wechsel is not None)
+_si7k = win.tabs.indexOf(win._settings_w)
+check("b7k die Seite steckt wirklich im Stapel", _si7k >= 0)
+# EIN ANDERES ZIEL SUCHEN - egal welches, es geht um "egal wohin".
+_ziel7k = None
+for _i7k in range(win.tabs.count()):
+    if _i7k != _si7k:
+        _ziel7k = win.tabs.widget(_i7k)
+        break
+check("b7k es gibt ein anderes Ziel", _ziel7k is not None)
+_gefragt7k = []
+_alt_frage7k = type(win)._einstellungen_frage
+_antwort7k = {"wert": "zurueck"}
+
+
+def _frage7k(_self):
+    _gefragt7k.append(1)
+    return _antwort7k["wert"]
+
+
+_merk_margin7k = win.settings.get("target_margin")
+_merk_stand7k = getattr(win, "_einst_stand", None)
+try:
+    type(win)._einstellungen_frage = _frage7k
+    # --- 1. NICHTS GEAENDERT: keine Rueckfrage, Wechsel geht durch.
+    win.tabs.setCurrentWidget(win._settings_w)
+    win._einstellungen_stand_merken()
+    check("b7k ohne Aenderung ist nichts offen",
+          win._einstellungen_offen() is False)
+    win.tabs.setCurrentWidget(_ziel7k)
+    check("b7k und der Wechsel geht ohne Rueckfrage durch",
+          win.tabs.currentWidget() is _ziel7k and not _gefragt7k)
+    # --- 2. GEAENDERT + "Zurueck": der Wechsel wird verhindert.
+    win.tabs.setCurrentWidget(win._settings_w)
+    win.s_margin.setValue(float(win.s_margin.value()) + 3.0)
+    check("b7k eine Aenderung wird erkannt",
+          win._einstellungen_offen() is True)
+    _antwort7k["wert"] = "zurueck"
+    win.tabs.setCurrentWidget(_ziel7k)
+    check("b7k dann wird gefragt", len(_gefragt7k) == 1)
+    check("b7k und „Zurueck“ laesst einen auf der Seite",
+          win.tabs.currentWidget() is win._settings_w)
+    check("b7k die Aenderung steht noch im Feld",
+          win._einstellungen_offen() is True)
+    # DERSELBE RIEGEL AUCH UEBER DEN INDEX-WEG (Seitenleiste, Code-Spruenge).
+    win.tabs.setCurrentIndex(win.tabs.indexOf(_ziel7k))
+    check("b7k auch der Wechsel ueber den Index wird abgefangen",
+          win.tabs.currentWidget() is win._settings_w)
+    # --- 3. GEAENDERT + "Verwerfen": Felder zurueck, Wechsel geht durch.
+    _antwort7k["wert"] = "verwerfen"
+    win.tabs.setCurrentWidget(_ziel7k)
+    check("b7k „Verwerfen“ laesst den Wechsel zu",
+          win.tabs.currentWidget() is _ziel7k)
+    check("b7k und raeumt die Felder auf",
+          win._einstellungen_offen() is False)
+    eq("b7k die Einstellung selbst blieb unangetastet",
+       win.settings.get("target_margin"), _merk_margin7k)
+    # --- 4. GEAENDERT + "Speichern": der Wert landet in den Einstellungen.
+    win.tabs.setCurrentWidget(win._settings_w)
+    _neu7k = float(win.s_margin.value()) + 4.0
+    win.s_margin.setValue(_neu7k)
+    _antwort7k["wert"] = "speichern"
+    win.tabs.setCurrentWidget(_ziel7k)
+    check("b7k „Speichern“ laesst den Wechsel zu",
+          win.tabs.currentWidget() is _ziel7k)
+    eq("b7k und schreibt den neuen Wert",
+       float(win.settings.get("target_margin")), _neu7k)
+    check("b7k danach ist nichts mehr offen",
+          win._einstellungen_offen() is False)
+    # --- 5. VON EINER ANDEREN SEITE AUS wird NIE gefragt.
+    _vorher7k = len(_gefragt7k)
+    win.tabs.setCurrentIndex(_si7k)
+    check("b7k der Weg IN die Einstellungen fragt nicht",
+          len(_gefragt7k) == _vorher7k
+          and win.tabs.currentWidget() is win._settings_w)
+finally:
+    type(win)._einstellungen_frage = _alt_frage7k
+    win.settings["target_margin"] = _merk_margin7k
+    win._einstellungen_felder_zuruecksetzen()
+    win._einst_stand = _merk_stand7k
+    win.tabs.vor_wechsel = None
+    win.tabs.setCurrentIndex(0)
+    win.tabs.vor_wechsel = win._einstellungen_wechsel_pruefen
+# EIN AUSFALL DARF NIE SPERREN: sitzt der Nutzer wegen eines Anzeigefehlers
+# fest, ist das schlimmer als eine verlorene Einstellung.
+_altv7k = win.tabs.vor_wechsel
+try:
+    def _kaputt7k(_a, _b):
+        raise RuntimeError("Absicht")
+    win.tabs.vor_wechsel = _kaputt7k
+    win.tabs.setCurrentIndex(win.tabs.indexOf(_ziel7k))
+    check("b7k ein Fehler im Riegel erlaubt den Wechsel",
+          win.tabs.currentWidget() is _ziel7k)
+finally:
+    win.tabs.vor_wechsel = _altv7k
+    win.tabs.setCurrentIndex(0)
+
+# ---------------------------------------------------------------- (b7l)
+# RECHTSKLICK AUF DIE OBERE LEISTE BLENDET SIE NICHT MEHR AUS.
+# NUTZER, 15.09.2026, fuenf Screenshots: "wenn ich Rechtsklick auf einen
+# dieser oberen Leisten-Knoepfe mache und dann da drauf klicke, schliesst
+# sich diese obere Leiste - diese Rechtsklick-Option muss weg."
+# Das Kaestchen im Bild ist Qts eingebautes Fenster-Menue (QMainWindow
+# bietet jede Werkzeugleiste zum Ausblenden an), kein eigener Code.
+check("b7l die obere Leiste ist hinterlegt",
+      getattr(win, "_toolbar", None) is not None)
+if getattr(win, "_toolbar", None) is not None:
+    check("b7l sie reicht den Rechtsklick nicht mehr weiter",
+          win._toolbar.contextMenuPolicy() == Qt.PreventContextMenu)
+    check("b7l und sie ist sichtbar", not win._toolbar.isHidden())
+    # DER ZWEITE WEG: Qt baut das Menue in createPopupMenu - auch beim
+    # Rechtsklick NEBEN die Leiste. Ohne diesen Riegel waere der erste nur
+    # die halbe Miete.
+    check("b7l das Fenster bietet gar kein solches Menue mehr an",
+          win.createPopupMenu() is None)
+    # EIN ECHTER RECHTSKLICK DARF NICHTS OEFFNEN. Gemessen an den offenen
+    # Fenstern: waere das Menue noch da, stuende danach eins mehr offen.
+    from PySide6.QtGui import QContextMenuEvent as _QCME7l
+    from PySide6.QtCore import QPoint as _QP7l
+    from PySide6.QtWidgets import QMenu as _QMenu7l
+    _vorher7l = len([_w for _w in _app.topLevelWidgets()
+                     if isinstance(_w, _QMenu7l) and _w.isVisible()])
+    _ev7l = _QCME7l(_QCME7l.Mouse, _QP7l(5, 5),
+                    win._toolbar.mapToGlobal(_QP7l(5, 5)))
+    _app.sendEvent(win._toolbar, _ev7l)
+    _app.processEvents()
+    _nachher7l = len([_w for _w in _app.topLevelWidgets()
+                      if isinstance(_w, _QMenu7l) and _w.isVisible()])
+    check("b7l ein Rechtsklick auf die Leiste oeffnet nichts",
+          _nachher7l == _vorher7l)
+    # DAS EIGENE KONTEXTMENUE EINES KNOPFES DARIN BLEIBT (Sitzung 21):
+    # der Riegel gilt der Leiste, nicht ihren Kindern.
+    check("b7l das eigene Menue des EVE-Daten-Knopfes bleibt",
+          win.g_sde_btn.contextMenuPolicy() == Qt.CustomContextMenu)
+
+# ---------------------------------------------------------------- (b7o)
+# DIE BEHAELTER-LISTE FOLGT DER CHARAKTER-WAHL.
+# NUTZER, 15.09.2026: "jetzt habe ich da ploetzlich Container von allen
+# Charakteren anstatt nur dem gewaehlten."
+# EHRLICH ZUR URSACHE: die Liste hat den Wahlschalter NIE beachtet. Nur
+# fiel es nicht auf, solange kaum Behaelter erkannt wurden (aa358). Mehr
+# Treffer haben einen alten Fehler sichtbar gemacht.
+_alt7o = getattr(win, "_assets_struct", {})
+_alt_idx7o = win.pf_char.currentIndex()
+try:
+    win._assets_struct = {
+        111: {"hangar": {}, "containers": [{"item_id": 1, "type_id": 9,
+                                            "name": "A", "contents": {34: 5}}]},
+        222: {"hangar": {}, "containers": [{"item_id": 2, "type_id": 9,
+                                            "name": "B", "contents": {35: 7}}]},
+    }
+    win.pf_char.blockSignals(True)
+    win.pf_char.clear()
+    win.pf_char.addItem(_t4("All"), "all")
+    win.pf_char.addItem("Eins", 111)
+    win.pf_char.addItem("Zwei", 222)
+    win.pf_char.blockSignals(False)
+
+    def _namen7o():
+        return sorted(c["name"] for c in win._sichtbare_container())
+
+    win.pf_char.setCurrentIndex(0)          # "Alle"
+    eq("b7o bei 'Alle' stehen die Behaelter aller Charaktere da",
+       _namen7o(), ["A", "B"])
+    win.pf_char.setCurrentIndex(1)          # Charakter 111
+    eq("b7o bei einem Charakter nur SEINE Behaelter", _namen7o(), ["A"])
+    win.pf_char.setCurrentIndex(2)          # Charakter 222
+    eq("b7o und beim naechsten dessen Behaelter", _namen7o(), ["B"])
+    # DIESELBE REGEL WIE DIE ITEM-LISTE - sonst behauptet eine Seite zweierlei.
+    _src7o = open("eve_trader/ui/main_window.py", encoding="utf-8").read()
+    check("b7o die Anzeige nimmt die gefilterte Liste",
+          "containers = self._sichtbare_container()" in _src7o)
+    check("b7o und 'alle ausblenden' dieselbe Quelle",
+          "all_ids = [c[\"item_id\"] for c in self._sichtbare_container()]"
+          in _src7o)
+    # UND SIE GEHT BEIM UMSCHALTEN MIT, nicht erst beim naechsten Abruf.
+    check("b7o der Wahlschalter zeichnet die Liste neu",
+          "self.pf_char.currentIndexChanged.connect("
+          "self._container_neu_zeichnen)" in _src7o)
+finally:
+    win._assets_struct = _alt7o
+    win.pf_char.blockSignals(True)
+    win.pf_char.clear()
+    win.pf_char.blockSignals(False)
+    try:
+        win._reload_character_combos()
+    except Exception:
+        pass
+
+# ---------------------------------------------------------------- (b7n)
+# WO BIN ICH? DIE RECHTE LEISTE ZEIGT ES JETZT AUCH.
+# NUTZER, 15.09.2026: "im Trading-Bereich sieht man in der linken Sidebar,
+# wo man sich befindet. Im Industrie-Bereich sieht man in der rechten
+# Sidebar noch nicht, wo man sich befindet - kannst du das mit derselben
+# Optik machen?"
+from eve_trader.ui import theme as _th7
+check("b7n die vier Seiten-Knoepfe der Bau-Leiste sind da",
+      len(getattr(win, "_bau_page_btns", [])) == 4)
+if len(getattr(win, "_bau_page_btns", [])) == 4:
+    _akt7n = win._bau_rail_active_css
+    _idl7n = win._bau_rail_idle_css
+    # DIESELBE HANDSCHRIFT WIE LINKS: Cyan-Schrift, Cyan-Flaeche und der
+    # 3 px breite Balken an der linken Kante. Der Balken ist das
+    # Erkennungszeichen der linken Leiste (theme: NavItem:checked).
+    check("b7n der aktive Knopf traegt den Cyan-Balken links",
+          f"border-left:3px solid {_th7.CYAN}" in _akt7n)
+    check("b7n und Cyan-Schrift auf ruhiger Cyan-Flaeche",
+          f"color:{_th7.CYAN}" in _akt7n
+          and f"background:{_th7.CYAN_FILL}" in _akt7n)
+    # BEIDE ZUSTAENDE GLEICH BREIT - sonst springt der Text beim Wechseln
+    # (dieselbe Falle wie beim blinkenden Rahmen).
+    check("b7n der ruhige Knopf traegt denselben Balken, nur in Rahmenfarbe",
+          f"border-left:3px solid {_th7.BORDER}" in _idl7n)
+    # JETZT WIRKLICH DURCHKLICKEN: jede Seite genau einmal hervorgehoben.
+    for _i7n in range(4):
+        win._bau_nav(_i7n)
+        _app.processEvents()
+        _hell = [_j for _j, _b in enumerate(win._bau_page_btns)
+                 if _b.styleSheet() == _akt7n]
+        eq(f"b7n Seite {_i7n}: genau dieser eine Knopf leuchtet",
+           _hell, [_i7n])
+        eq(f"b7n Seite {_i7n}: der Stapel steht auch dort",
+           win.b_stack.currentIndex(), _i7n)
+    # UND BEIM AUFBAU SCHON, nicht erst nach dem ersten Klick.
+    _src7n = open("eve_trader/ui/main_window.py", encoding="utf-8").read()
+    check("b7n die Hervorhebung steht schon beim Aufbau",
+          "self._bau_page_btns[self.b_stack.currentIndex()].setStyleSheet("
+          in _src7n)
+    win._bau_nav(0)
+    _app.processEvents()
+
+# ---------------------------------------------------------------- (b7p)
+# DIE TOUR GEHT MIT, WENN WAEHREND EINES SCHRITTS EIN FENSTER AUFGEHT.
+# NUTZER, 16.09.2026: "wenn der Bauplan geoeffnet ist, ist das Tutorial-
+# Fenster hinter dem Bauplan, weil man zuerst auf Next druecken muss."
+# Schritt 7/15 wartet genau darauf, dass der Nutzer den Bauplan oeffnet -
+# der geht dann VOR der Tour auf, und bis zum naechsten "Weiter" blieb sie
+# dahinter. Umgehaengt wurde bisher nur beim Schrittwechsel.
+from eve_trader.ui.tutorial import TutorialFenster as _TF7p
+_tp7p = _TF7p(win, "trading")
+try:
+    # 1. ZIEL UNVERAENDERT -> NICHTS TUN. Ein Dauer-raise_() zoege das
+    # Besitzerfenster mit hoch und drueckte den Bauplan nach hinten
+    # (Sitzung 17, derselbe Schritt, derselbe Nutzer).
+    #
+    # DER MERKER MUSS AUS DEM ECHTEN WEG KOMMEN, nicht von Hand gesetzt
+    # werden: im ersten Anlauf stand hier `_letztes_ziel = _zielfenster()`,
+    # und die Mutation, die das Merken im Programm abklemmt, blieb
+    # deshalb BLIND - der Test hatte sich seine Voraussetzung selbst
+    # gebaut. Also erst einmal richtig ordnen lassen.
+    _tp7p._fenster_ordnen()
+    _app.processEvents()
+    _gerufen7p = []
+    _tp7p._fenster_ordnen = lambda: _gerufen7p.append(1)
+    _tp7p._nachfuehren()
+    eq("b7p ohne Fensterwechsel wird NICHT umgehaengt", _gerufen7p, [])
+    # 2. ZIEL HAT GEWECHSELT -> die Tour ordnet sich neu.
+    _tp7p._letztes_ziel = None
+    _tp7p._nachfuehren()
+    eq("b7p bei einem Fensterwechsel ordnet sie sich neu", _gerufen7p, [1])
+    # 3. DER SCHRITT, DER DEN BAUPLAN OEFFNET, ZIELT DANACH AUF DEN BAUPLAN.
+    # NUTZER-SCREENSHOT 16.09.2026: die Tour lag hinter dem Bauplan. Grund:
+    # der Schritt hebt "New build plan" hervor - einen Knopf im
+    # HAUPTFENSTER. Der ist sichtbar, also gewann er, und die Tour blieb am
+    # Haupttool. Erst wenn die Bedingung erfuellt ist, gehoert sie nach
+    # vorn auf den Bauplan.
+    from PySide6.QtWidgets import (QDialog as _QD7p, QPushButton as _QPB7p)
+    _i_open7p = [_i for _i, _st in enumerate(_tp7p.schritte)
+                 if _st[4] == "bauplan_offen"]
+    check("b7p es gibt einen Schritt, der auf den offenen Bauplan wartet",
+          bool(_i_open7p) or _tp7p.zweig != "industry")
+    _tp7i = _TF7p(win, "industry")
+    _dlg7p = _QD7p(win)
+    _dlg7p.resize(900, 700)
+    _alt_bd7p = getattr(win, "_bd_dialog", None)
+    try:
+        _j7p = [_i for _i, _st in enumerate(_tp7i.schritte)
+                if _st[4] == "bauplan_offen"]
+        if _j7p:
+            _tp7i.i = _j7p[0]
+            # Ein sichtbarer Knopf im HAUPTFENSTER als Hervorhebung - genau
+            # die Lage aus dem Screenshot.
+            _btn7p = _QPB7p("x", win)
+            _btn7p.show()
+            _tp7i._hervor = [_btn7p]
+            _app.processEvents()
+            win._bd_dialog = None
+            check("b7p solange kein Bauplan offen ist, zielt der Schritt "
+                  "aufs Hauptfenster", _tp7i._zielfenster() is win)
+            win._bd_dialog = _dlg7p
+            _dlg7p.show()
+            _app.processEvents()
+            check("b7p ist der Bauplan offen, zielt er auf den Bauplan",
+                  _tp7i._zielfenster() is _dlg7p)
+            _btn7p.setParent(None)
+    finally:
+        win._bd_dialog = _alt_bd7p
+        _dlg7p.close()
+        _dlg7p.setParent(None)
+        _tp7i.abbrechen()
+        _app.processEvents()
+    # 4. UND DER MERKER WIRD BEIM ORDNEN GESETZT - ohne ihn liefe Punkt 1
+    # nie zu, und es waere doch wieder ein Dauer-raise_().
+    _src7p = open("eve_trader/ui/tutorial.py", encoding="utf-8").read()
+    check("b7p das Ordnen merkt sich sein Ziel",
+          "self._letztes_ziel = _ziel" in _src7p)
+finally:
+    _tp7p.abbrechen()
+    # WIRKLICH WEG, nicht nur versteckt: `abbrechen` ruft deleteLater(), und
+    # das passiert erst, wenn Qt die aufgeschobenen Loeschungen abarbeitet.
+    # Ohne das blieb ein zweites Tour-Fenster im Programm stehen - b55 zaehlt
+    # Bedienelemente OHNE Symbol und meldete prompt zweimal "Back". Ein
+    # Testaufbau, der Spuren hinterlaesst, macht die naechste Pruefung kaputt.
+    from PySide6.QtCore import QEvent as _QEv7p
+    _app.processEvents()
+    _app.sendPostedEvents(None, _QEv7p.DeferredDelete)
+    _app.processEvents()
+
+# ---------------------------------------------------------------- (b7m)
+# DIE TOUR VERDECKT DIE RECHTE LEISTE NICHT MEHR.
+# NUTZER, 15.09.2026, mit Screenshot: "Tutorial verdeckt Production Steps,
+# das Tutorialfenster muesste weiter links sein, damit man die rechte
+# Sidebar komplett sehen kann." Unter den Anker zu ruecken ist richtig,
+# solange er in der breiten Mitte sitzt; in der schmalen Leiste rechts
+# liegt darunter genau das, worueber der Schritt gerade spricht.
+# NACHGEZOGEN 16.09.2026: die Links-Regel gilt NUR im Bauplan-Fenster.
+# Im Hauptfenster schob sie die Tour unter das modale "New build
+# plan"-Fenster (Schritt 7/15) - dort ist unter dem Anker Platz, in der
+# schmalen Bauplan-Sidebar nicht.
+from eve_trader.ui.tutorial import TutorialFenster as _TF7m
+from PySide6.QtWidgets import (QWidget as _QW7m, QDialog as _QD7m)
+from PySide6.QtCore import QPoint as _QP7m
+_tp7m = _TF7m(win, "trading")
+# EIN EIGENES FENSTER als Stellvertreter fuer den Bauplan-Dialog: die Regel
+# fragt ausdruecklich "ist das Fenster des Ankers NICHT das Haupttool?".
+_dlg7m = _QD7m(win)
+_dlg7m.resize(1200, 800)
+_dlg7m.show()
+try:
+    _tp7m.show()
+    _app.processEvents()
+
+    def _lauf7m(anteil, wo=None):
+        """Anker an dieser waagrechten Stelle des Fensters -> wohin rueckt
+        die Tour? Gibt (Fensterrechteck der Tour, Anker-Ecke) zurueck."""
+        _wo = wo if wo is not None else win
+        _rw = _wo.frameGeometry()
+        _a = _QW7m(_wo)
+        _a.resize(120, 40)
+        _a.move(_wo.mapFromGlobal(
+            _QP7m(_rw.left() + int(_rw.width() * anteil),
+                  _rw.top() + 200)))
+        _a.show()
+        _app.processEvents()
+        _tp7m._hervor = [_a]
+        _tp7m._platzieren()
+        _app.processEvents()
+        return _tp7m.geometry(), _a.mapToGlobal(_QP7m(0, 0)), _a
+
+    # 1. ANKER IN DER RECHTEN LEISTE -> die Tour steht LINKS daneben.
+    # BEIDE BEDINGUNGEN IN EINER PRUEFUNG, und das ist kein Schoenheitsfehler:
+    # "steht links vom Anker" allein war BLIND. Ohne den Sonderfall rutscht
+    # die Tour naemlich schon durch die Bildschirm-Begrenzung nach links
+    # (sie passt rechts nicht mehr hin) und stuende trotzdem UNTER der
+    # Leiste - also genau der gemeldete Fehler, aber mit gruener Pruefung.
+    # Aufgefallen ist das in der Rotprobe: die Mutation blieb hier gruen.
+    # Entscheidend ist die HOEHE.
+    _g7m, _ae7m, _a7m = _lauf7m(0.90, _dlg7m)
+    check("b7m bei einem Anker in der rechten Leiste steht die Tour links "
+          "DANEBEN, nicht darunter",
+          _g7m.right() < _ae7m.x() and _g7m.top() <= _ae7m.y() + 4)
+    _a7m.setParent(None)
+    # 1b. DIESELBE STELLE IM HAUPTFENSTER -> DARUNTER (Nutzer, 16.09.2026).
+    # Dort geht mittig das modale "New build plan"-Fenster auf; die Tour
+    # nach links zu schieben hiesse, sie genau dorthin zu setzen.
+    _g7mh, _ae7mh, _a7mh = _lauf7m(0.90, win)
+    check("b7m im HAUPTFENSTER bleibt es an derselben Stelle beim Platz "
+          "DARUNTER", _g7mh.top() >= _ae7mh.y() + 40)
+    _a7mh.setParent(None)
+    # 1c. ANKER IN EINEM MODALEN FENSTER -> die Tour darf es NICHT beruehren.
+    # NUTZER-SCREENSHOT 16.09.2026: "jetzt haengt es wieder hinter dem New
+    # build plan Fenster". Bei Schritt 7/15 wandert der Anker in das kleine
+    # modale Such-Fenster. Ein modales Fenster liegt IMMER oben - also ist
+    # jede Stelle innerhalb seiner Flaeche verdeckt, egal ob links vom Anker
+    # oder darunter. Deshalb wird hier am FENSTER ausgerichtet, nicht am
+    # Anker, und geprueft wird das, worauf es ankommt: KEINE UEBERDECKUNG.
+    _dlgmod7m = _QD7m(win)
+    _dlgmod7m.setModal(True)
+    _dlgmod7m.resize(400, 300)
+    _dlgmod7m.move(60, 60)
+    _dlgmod7m.show()
+    _app.processEvents()
+    try:
+        _g7mm, _ae7mm, _a7mm = _lauf7m(0.90, _dlgmod7m)
+        _rm7m = _dlgmod7m.frameGeometry()
+        check("b7m die Tour verdeckt ein MODALES Fenster nicht",
+              not _g7mm.intersects(_rm7m))
+        # ... und hier ist unter dem Dialog Platz, also steht sie auch dort.
+        check("b7m und steht dann unter dem modalen Fenster",
+              _g7mm.top() >= _rm7m.bottom())
+        _a7mm.setParent(None)
+    finally:
+        _dlgmod7m.close()
+        _dlgmod7m.setParent(None)
+        _app.processEvents()
+    # 2. GEGENPROBE, ANKER IN DER MITTE -> alles bleibt wie bisher: DARUNTER.
+    # Ohne sie koennte die Regel auch immer nach links rutschen und der Test
+    # waere trotzdem gruen.
+    _g7m2, _ae7m2, _a7m2 = _lauf7m(0.25)
+    check("b7m bei einem Anker in der Mitte bleibt es beim Platz DARUNTER",
+          _g7m2.top() >= _ae7m2.y() + 40)
+    check("b7m und dann NICHT links daneben", _g7m2.right() > _ae7m2.x())
+    _a7m2.setParent(None)
+finally:
+    _tp7m.abbrechen()
+    _dlg7m.close()
+    _dlg7m.setParent(None)
+    _app.processEvents()
+    _app.sendPostedEvents(None, _QEv7p.DeferredDelete)
+    _app.processEvents()
+
+# ---------------------------------------------------------------- (b7s)
+# DER KNOPF IM LEEREN FENSTER TUT, WAS FEHLT. Nutzer-Befund 17.09.2026:
+# "klickt man in der Mitte auf Market scan unter 'No market data', kommt
+# zwar ein Ladebildschirm, aber keine Auflistung" und "bei Blueprint genauso,
+# keine Wirkung". Zwei Ursachen: (1) nach dem Scan fehlte "Load deals", der
+# Hinweis bot aber weiter "Market scan" an; (2) der Blaupausen-Hinweis zeigte
+# auf den SDE-Download statt auf "Meine Blaupausen laden".
+import eve_trader.store as _st7s
+_app.processEvents()
+_alt_age7s = _st7s.snapshot_age_seconds
+
+
+def _box7s(tbl):
+    for _w in tbl.viewport().children():
+        if getattr(_w, "_knopf", None) is not None:
+            return _w
+    return None
+
+
+try:
+    _bx = _box7s(win.deals_table)
+    check("b7s die Daytrade-Tabelle hat einen Leer-Hinweis mit Knopf", _bx is not None)
+    if _bx is not None:
+        # 1. KEIN SCAN -> "Market scan".
+        _st7s.snapshot_age_seconds = lambda source=None: None
+        win.deals_table._leerhinweis_stellen()
+        check("b7s ohne Scan bietet der Knopf den Markt-Scan an",
+              _bx._knopf.text() in ("Market scan", "Markt-Scan", "Marktscan"))
+        # 2. SCAN DA -> "Load deals", und der Klick laedt die Deals.
+        _st7s.snapshot_age_seconds = lambda source=None: 120.0
+        win.deals_table._leerhinweis_stellen()
+        check("b7s nach dem Scan bietet der Knopf 'Load deals' an",
+              _bx._knopf.text() in ("Load deals", "Deals laden"))
+        _gerufen7s = []
+        _alt_click7s = win.deals_btn.click
+        win.deals_btn.click = lambda: _gerufen7s.append("deals")
+        try:
+            _bx._aktion()
+        finally:
+            win.deals_btn.click = _alt_click7s
+        eq("b7s ... und sein Klick drueckt wirklich 'Load deals'", _gerufen7s, ["deals"])
+    # 3. BLAUPAUSEN: der Knopf laedt die Blaupausen der Charaktere.
+    _bxb = _box7s(win.bp_table)
+    check("b7s die Blaupausen-Tabelle hat einen Leer-Hinweis", _bxb is not None)
+    if _bxb is not None:
+        _gerufen7sb = []
+        _alt_bp7s = win.bp_refresh_btn.click
+        _alt_sde7s = win.g_sde_btn.click
+        win.bp_refresh_btn.click = lambda: _gerufen7sb.append("bp")
+        win.g_sde_btn.click = lambda: _gerufen7sb.append("sde")
+        try:
+            _bxb._aktion()
+        finally:
+            win.bp_refresh_btn.click = _alt_bp7s
+            win.g_sde_btn.click = _alt_sde7s
+        eq("b7s der Blaupausen-Knopf laedt MEINE Blaupausen, nicht die SDE",
+           _gerufen7sb, ["bp"])
+    # 4. NACH DEM SCAN werden die Hinweise neu gestellt - die Tabelle
+    # aendert sich beim Scan nicht, ihre Signale feuern also nicht.
+    check("b7s nach dem Scan stellt das Programm die Hinweise neu",
+          "self._leerhinweise_aktualisieren()   # \"Market scan\" -> \"Load deals\""
+          in _src_mw)
+finally:
+    _st7s.snapshot_age_seconds = _alt_age7s
+    try:
+        win.deals_table._leerhinweis_stellen()
+    except Exception:
+        pass
+
+# ---------------------------------------------------------------- (b7q)
+# CORP-HANGAR (1.0.8): Einstellungen und der Abruf im Bauplan - am ECHTEN
+# Fenster, mit vorgetaeuschtem ESI. Das Netz wird komplett ersetzt; gezaehlt
+# wird, wie oft der Corp-Hangar abgerufen wird. DREI Charaktere, EINE Corp:
+# es muss GENAU EIN Abruf sein (CLAUDE.md: "Ungeprueft verdreifacht sich
+# der Bestand, und der Plan kauft ZU WENIG").
+import eve_trader.esi as _esi7q
+import eve_trader.config as _cfg7q
+_alt7q = {k: getattr(_esi7q, k) for k in (
+    "fetch_character_corporation", "granted_scopes", "fetch_character_roles",
+    "fetch_corporation_assets", "fetch_corporation_divisions",
+    "fetch_corporation_blueprints", "fetch_corporation_jobs",
+    "fetch_corporation_name", "container_type_ids_safe")}
+_alt_save7q = _cfg7q.save_settings
+_alt_set7q = {k: win.settings.get(k) for k in ("use_corp", "corp_divisions")}
+_zaehler7q = {"assets": 0, "jobs": 0, "bp": 0}
+_STRUCT7q = 1035466617946
+try:
+    _cfg7q.save_settings = lambda s: None      # Platte nicht anfassen
+    # 1. STANDARD AUS - und die Oberflaeche zeigt es.
+    check("b7q der Corp-Schalter steht in den Einstellungen",
+          hasattr(win, "s_corp") and isinstance(win.s_corp, QComboBox))
+    eq("b7q sieben Division-Kaestchen", sorted(win.s_corp_divs), [1, 2, 3, 4, 5, 6, 7])
+    # 2. AUS -> der Bauplan fragt ESI GAR NICHT nach der Corp.
+    win.settings["use_corp"] = False
+    _r7q = win._corp_bau_daten("cid", [{"character_id": 1, "character_name": "A"}], None)
+    eq("b7q Schalter aus -> kein Corp-Bestand, kein Abruf",
+       (_r7q.get("aktiv"), _r7q.get("summe")), (False, {}))
+    # 3. AN, aber keine Division -> nichts zaehlen, aber SAGEN warum.
+    win.settings["use_corp"] = True
+    win.settings["corp_divisions"] = []
+    _r7q = win._corp_bau_daten("cid", [{"character_id": 1, "character_name": "A"}], None)
+    eq("b7q keine Division gewaehlt -> nichts, mit Hinweis",
+       (_r7q.get("keine_division"), _r7q.get("summe")), (True, {}))
+    # 4. DREI CHARAKTERE, EINE CORP, alle Director: EIN Abruf, EINMAL gezaehlt.
+    _chars7q = [{"character_id": 11, "character_name": "Alpha"},
+                {"character_id": 12, "character_name": "Beta"},
+                {"character_id": 13, "character_name": "Gamma"}]
+    _corp_assets7q = [
+        {"item_id": 100, "type_id": 27, "location_id": _STRUCT7q,
+         "location_flag": "OfficeFolder", "quantity": 1},
+        {"item_id": 1, "type_id": 34, "location_id": 100,
+         "location_flag": "CorpSAG1", "quantity": 1000},
+        {"item_id": 2, "type_id": 35, "location_id": 100,
+         "location_flag": "CorpSAG3", "quantity": 500},
+    ]
+
+    def _f_assets7q(client_id, cid, corp_id):
+        _zaehler7q["assets"] += 1
+        return list(_corp_assets7q)
+
+    def _f_jobs7q(client_id, cid, corp_id, include_delivered=False):
+        _zaehler7q["jobs"] += 1
+        return [{"job_id": 1, "activity_id": 1, "product_type_id": 587,
+                 "runs": 2, "status": "active", "end_date": "2099-01-01T00:00:00Z"}]
+
+    def _f_bp7q(client_id, cid, corp_id, divisions=None):
+        _zaehler7q["bp"] += 1
+        return [{"type_id": 999, "quantity": 1, "material_efficiency": 10,
+                 "time_efficiency": 20, "runs": -1, "is_bpo": True,
+                 "location_id": 100, "location_flag": "CorpSAG1",
+                 "division": 1, "corporation_id": corp_id}]
+
+    _esi7q.fetch_character_corporation = lambda cid: 900
+    _esi7q.granted_scopes = lambda client_id, cid: set(_cfg7q.CORP_SCOPES)
+    _esi7q.fetch_character_roles = lambda client_id, cid: {"Director", "Factory_Manager"}
+    _esi7q.fetch_corporation_assets = _f_assets7q
+    _esi7q.fetch_corporation_divisions = lambda c, cid, corp: {"hangar": [{"division": 1, "name": "Minerals"}]}
+    _esi7q.fetch_corporation_blueprints = _f_bp7q
+    _esi7q.fetch_corporation_jobs = _f_jobs7q
+    _esi7q.fetch_corporation_name = lambda corp: "Test Corp"
+    _esi7q.container_type_ids_safe = lambda: set()
+    win.settings["corp_divisions"] = [1]
+    _r7q = win._corp_bau_daten("cid", _chars7q, None)
+    eq("b7q EIN Corp-Abruf fuer drei Charaktere derselben Corp",
+       _zaehler7q["assets"], 1)
+    eq("b7q der Bestand ist EINMAL gezaehlt, nicht dreifach",
+       _r7q.get("summe"), {34: 1000})
+    check("b7q Division 3 (nicht gewaehlt) bleibt draussen",
+          35 not in (_r7q.get("summe") or {}))
+    eq("b7q Corp-Jobs kommen unter der Corp-Nummer",
+       sorted(_r7q.get("jobs") or {}), [900])
+    eq("b7q EIN Job-Abruf, EIN Blaupausen-Abruf",
+       (_zaehler7q["jobs"], _zaehler7q["bp"]), (1, 1))
+    eq("b7q Corp-Blaupausen kommen mit", len(_r7q.get("blueprints") or []), 1)
+    eq("b7q die Anzeige nennt Corp, Charakter und Division-Namen",
+       [(c["name"], c["via"], c["divisions"]) for c in _r7q.get("corps")],
+       [("Test Corp", "Alpha", {1: "Minerals"})])
+    # 5. ORTSGRENZE wird durchgereicht: an einer fremden Struktur nichts.
+    _r7q = win._corp_bau_daten("cid", _chars7q, [123])
+    eq("b7q an einer anderen Struktur zaehlt die Corp nichts",
+       _r7q.get("summe"), {})
+    # 6. KEIN CORP-SCOPE IM TOKEN -> "neu verknuepfen" mit Namen, kein Abruf.
+    _zaehler7q["assets"] = 0
+    _esi7q.granted_scopes = lambda client_id, cid: set()
+    _r7q = win._corp_bau_daten("cid", _chars7q, None)
+    eq("b7q ohne Corp-Scope: alle drei muessen neu verknuepfen",
+       _r7q.get("relink"), ["Alpha", "Beta", "Gamma"])
+    eq("b7q ohne Corp-Scope: kein Abruf", _zaehler7q["assets"], 0)
+    # 7. SCOPE DA, ABER KEINE DIRECTOR-ROLLE -> Corp beim Namen nennen.
+    _esi7q.granted_scopes = lambda client_id, cid: set(_cfg7q.CORP_SCOPES)
+    _esi7q.fetch_character_roles = lambda client_id, cid: set()
+    _r7q = win._corp_bau_daten("cid", _chars7q, None)
+    eq("b7q ohne Director-Rolle wird die Corp genannt, nichts gezaehlt",
+       (_r7q.get("ohne_rolle"), _r7q.get("summe")), (["Test Corp"], {}))
+    # 8. EIN GESCHEITERTER CORP-ABRUF reisst nichts mit: failed-Eintrag.
+    _esi7q.fetch_character_roles = lambda client_id, cid: {"Director"}
+
+    def _kaputt7q(*a, **k):
+        raise RuntimeError("403")
+    _esi7q.fetch_corporation_assets = _kaputt7q
+    _r7q = win._corp_bau_daten("cid", _chars7q, None)
+    check("b7q ein gescheiterter Abruf landet in failed, kein Absturz",
+          len(_r7q.get("failed") or []) == 1 and _r7q.get("summe") == {})
+    # 9. DIVISION-KAESTCHEN SPEICHERN SOFORT (wie die Berechtigungs-Schalter).
+    for _n, _c in win.s_corp_divs.items():
+        _c.setChecked(False)
+    win.s_corp_divs[2].setChecked(True)
+    eq("b7q ein Kaestchen speichert die Division sofort",
+       win.settings.get("corp_divisions"), [2])
+    win.s_corp_divs[5].setChecked(True)
+    eq("b7q ... und ein zweites dazu", win.settings.get("corp_divisions"), [2, 5])
+    check("b7q die Divisions stehen im Feldstand (Ungespeichert-Pruefung)",
+          win._einstellungen_feldstand().get("corp_divs") == (2, 5))
+finally:
+    for k, v in _alt7q.items():
+        setattr(_esi7q, k, v)
+    _cfg7q.save_settings = _alt_save7q
+    for k, v in _alt_set7q.items():
+        if v is None:
+            win.settings.pop(k, None)
+        else:
+            win.settings[k] = v
+    for _c in win.s_corp_divs.values():
+        _c.blockSignals(True)
+        _c.setChecked(False)
+        _c.blockSignals(False)
+    # Der gespeicherte Stand muss zu den Feldern passen - sonst haelt die
+    # Ungespeichert-Pruefung jeden folgenden Reiterwechsel an (b59/b78).
+    win._einstellungen_stand_merken()
+    _app.processEvents()
+
 # ---------------------------------------------------------------- (b9)
 # REAKTION ALS ENDPRODUKT. Der Dialog zeigte bisher auch dann ME/TE-Eingabe,
 # Invention-Tab, Invention-Seitenpanel und eine Kostenzeile "Invention" - alle
@@ -2220,6 +3339,45 @@ try:
               if x.property("bd_role") == "runs_hint"]
     check(f"b10 Runs stehen daneben  ({_hints})",
           any(("Run" in t or "run" in t) and "200" in t for t in _hints))
+    # RUNS DIREKT EINGEBEN (Discord, Commander Hibb, 16.09.2026). Das
+    # Runs-Feld ist eine zweite ANSICHT derselben Zahl: was man dort
+    # eintippt, landet als Stueck im Mengenfeld - und umgekehrt. Die
+    # Wahrheit bleibt Stueck (gespeicherte Plaene, Reservierung, Runplaner).
+    _rs = [x for x in (_dlg_b.findChildren(QSpinBox) if _dlg_b else [])
+           if x.property("bd_role") == "runs_spin"]
+    _mb = [x for x in (_dlg_b.findChildren(QPushButton) if _dlg_b else [])
+           if x.property("bd_role") == "qty_mode"]
+    check("b10 beim Batch-Rezept gibt es ein Runs-Feld und den Umschalter",
+          bool(_rs) and bool(_mb))
+    if _rs and _mb and _spins:
+        _qs, _r, _m = _spins[0], _rs[0], _mb[0]
+        _alt_mode10 = win.settings.get("bau_qty_in_runs")
+        _alt_save10 = _cfg7q.save_settings
+        _cfg7q.save_settings = lambda s: None
+        try:
+            eq("b10 Runs-Feld zeigt die Runs des Stueckfelds (400 -> 2)",
+               _r.value(), 2)
+            _r.setValue(7)
+            eq("b10 7 Runs -> 1'400 Stueck im Mengenfeld", _qs.value(), 1400)
+            # UND DIE RECHNUNG FOLGT: Enter im Runs-Feld uebernimmt die
+            # Menge in den Plan (`_bd_qty` ist das, womit rebuild rechnet).
+            _r.editingFinished.emit()
+            _app.processEvents()
+            eq("b10 Enter im Runs-Feld -> der Plan rechnet mit 1'400",
+               int(getattr(win, "_bd_qty", 0) or 0), 1400)
+            _qs.setValue(1000)
+            eq("b10 1'000 Stueck -> 5 Runs", _r.value(), 5)
+            # Umschalten zeigt nur das eine Feld und merkt sich die Wahl.
+            _m.setChecked(True)
+            check("b10 im Runs-Modus ist das Stueckfeld weg, das Runs-Feld da",
+                  _qs.isHidden() and not _r.isHidden())
+            eq("b10 die Wahl wird gespeichert", win.settings.get("bau_qty_in_runs"), True)
+            _m.setChecked(False)
+            check("b10 zurueck: Stueckfeld da, Runs-Feld weg",
+                  not _qs.isHidden() and _r.isHidden())
+        finally:
+            _cfg7q.save_settings = _alt_save10
+            win.settings["bau_qty_in_runs"] = bool(_alt_mode10)
 except Exception as e:                                   # pragma: no cover
     import traceback
     traceback.print_exc()
@@ -2238,6 +3396,9 @@ try:
     _hints_s = [x for x in (_dlg_s.findChildren(QLabel) if _dlg_s else [])
                 if x.property("bd_role") == "runs_hint" and not x.isHidden()]
     check("b10 und keinen Runs-Hinweis", not _hints_s)
+    check("b10 und keinen Runs-Umschalter (waere nur Laerm)",
+          not [x for x in _dlg_s.findChildren(QPushButton)
+               if x.property("bd_role") == "qty_mode"])
 except Exception as e:                                   # pragma: no cover
     _fail.append(f"b10 Gegenprobe Einzelstueck: {type(e).__name__}: {e}")
 
@@ -3247,22 +4408,18 @@ from PySide6.QtWidgets import QPushButton as _QPB22
 _knoepfe22 = [b.text() for b in win.findChildren(_QPB22)]
 eq("b22 kein Einrichtungs-Knopf mehr neben 'Charakter verknuepfen'",
    [t for t in _knoepfe22 if "Einrichtung" in t], [])
-# ER IST NICHT VERSCHWUNDEN - sonst kaeme niemand mehr an die Anleitung,
-# der eine eigene ESI-Anwendung eintragen will.
-_anl22 = getattr(win, "s_setup_btn", None)
-check("b22 die Anleitung ist weiterhin erreichbar",
-      _anl22 is not None and _anl22.text().strip() != "")
-check("b22 sie sitzt bei der Client-ID, nicht irgendwo",
-      _anl22 is not None
-      and _anl22.parentWidget() is win.s_client.parentWidget())
-check("b22 sie fuehrt wirklich zum Einrichtungs-Dialog",
-      "self.s_setup_btn.clicked.connect(self.open_setup)" in _src_mw)
-# Und der Tooltip sagt, dass man sie normalerweise NICHT braucht.
-# Sitzung 13: der Tooltip laeuft ueber das Sprachsystem, das Fenster im
-# Test ist ENGLISCH - geprueft wird also der englische Wortlaut.
-check("b22 der Tooltip nimmt den falschen Alarm heraus",
-      "do NOT want to use the built-in application"
-      in (_anl22.toolTip() if _anl22 else ""))
+# DER ANLEITUNGS-KNOPF IST WEG (Nutzer-Entscheid 17.09.2026: "raus"). Er
+# fuehrte zur Anleitung fuer eine EIGENE ESI-Anwendung - seit der
+# eingebauten Client-ID braucht das niemand. Der Einrichtungs-Dialog
+# bleibt als Notausgang fuer "Client-ID leer" (open_setup), nur der Weg
+# aus den Einstellungen ist zu.
+check("b22 kein Anleitungs-Knopf mehr in den Einstellungen",
+      getattr(win, "s_setup_btn", None) is None
+      and "s_setup_btn" not in _src_mw)
+check("b22 das Client-ID-Feld bleibt (die Login-Logik liest es)",
+      getattr(win, "s_client", None) is not None)
+check("b22 der Notausgang bei leerer Client-ID bleibt",
+      "QTimer.singleShot(250, self.open_setup)" in _src_mw)
 
 
 # ---------------------------------------------------------------- (b23)
@@ -3521,9 +4678,9 @@ try:
     # Gewinne. Auf BEIDEN Seiten geprueft - ein fest eingetippter deutscher
     # Text faellt nur auf Englisch auf, ein vergessenes t() nur auf Deutsch.
     eq("b23 die Einstellungen sind uebersetzt (deutsch)",
-       [_w_de.s_setup_btn.text(),
-        _w_de.findChild(type(_w_de.s_setup_btn), "") is not None],
-       ["Anleitung", True])
+       [_w_de.s_corp_names_btn.text(),
+        _w_de.findChild(type(_w_de.s_corp_names_btn), "") is not None],
+       ["Namen laden", True])
     eq("b23 die Unterreiter sind uebersetzt (deutsch)",
        [_w_de._sh_step_toggle.text(), _w_de._sh_copy_btn.text()],
        ["\u25b6 Abarbeiten-Modus", "Multibuy kopieren"])
@@ -5919,16 +7076,20 @@ try:
     # KLICK LOEST DIE RICHTIGE AKTION AUS
     # AM VORBILD-KNOPF LAUSCHEN statt seine Methode zu ersetzen: das ist die
     # Wirkung, die zaehlt - und es loest den echten Ladevorgang nicht aus.
+    # SEIT 17.09.2026: das Vorbild ist "Meine Blaupausen laden"
+    # (bp_refresh_btn), NICHT der SDE-Download (g_sde_btn) - der fragte bei
+    # geladener SDE nur zurueck und tat sonst nichts (Nutzer: "bei Blueprint
+    # genauso, keine Wirkung").
     _geklickt77 = []
-    _c77 = win.g_sde_btn.clicked.connect(lambda *_a: _geklickt77.append(1))
-    _lade77 = win.load_sde
-    win.load_sde = lambda *_a, **_k: None
+    _c77 = win.bp_refresh_btn.clicked.connect(lambda *_a: _geklickt77.append(1))
+    _lade77 = win._reload_my_blueprints
+    win._reload_my_blueprints = lambda *_a, **_k: None
     try:
         _btn77[0].click()
         _app.processEvents()
     finally:
-        win.g_sde_btn.clicked.disconnect(_c77)
-        win.load_sde = _lade77
+        win.bp_refresh_btn.clicked.disconnect(_c77)
+        win._reload_my_blueprints = _lade77
     eq("b77 ein Klick loest denselben Vorgang aus wie der Knopf oben",
        _geklickt77, [1])
     # SICHTBAR NUR SOLANGE LEER
@@ -6315,8 +7476,15 @@ try:
     check("b78 platziert wird unter dem UNTERSTEN Element",
           "max(_sicht, key=lambda w: w.mapToGlobal(" in
           open("eve_trader/ui/tutorial.py", encoding="utf-8").read())
+    # NACHGEZOGEN 16.09.2026: der Schritt traegt jetzt REITER + Karte, damit
+    # "Back" aus dem Invention-Schritt wieder in der Rezeptstruktur landet.
     check("b78 'Build or buy' zeigt auf seine Karte",
-          "_bd_karte_bauenkaufen" in _names78)
+          any(isinstance(n, tuple) and "_bd_karte_bauenkaufen" in n
+              for n in _names78))
+    check("b78 und stellt dabei den Rezeptstruktur-Reiter selbst her",
+          any(isinstance(n, tuple) and "_bd_karte_bauenkaufen" in n
+              and any(str(x).startswith("bd:tab:") for x in n)
+              for n in _names78))
     check("b78 'Speichern und einfrieren' zeigt auf BEIDE Knoepfe",
           any({"_bd_save_btn", "_bd_frozen_btn"} <= set(n)
               for n in _names78 if isinstance(n, tuple)))

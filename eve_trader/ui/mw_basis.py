@@ -10,11 +10,32 @@ geaendert. ACHTUNG beim Aufraeumen: `__lt__`, `textFromValue`,
 `valueFromText` und `validate` sehen "nie aufgerufen" aus - sie sind
 Qt-Overrides und werden vom Framework gerufen. Nicht loeschen.
 """
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QDialog, QDoubleSpinBox, QSpinBox,
-                               QTableWidgetItem)
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PySide6.QtGui import QFontMetrics
+from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox,
+                               QApplication, QComboBox, QDialog,
+                               QDoubleSpinBox, QLineEdit, QSpinBox, QStyle,
+                               QStyleOptionViewItem, QTableWidgetItem,
+                               QWidget)
 
-from . import icons
+from ..config import KEIN_DECRYPTOR
+from ..sprache import t
+from . import icons, theme
+
+# KEIN_DECRYPTOR steht in config.py, wo die uebrigen gespeicherten Werte
+# liegen - EINE Wahrheit. Hier nur weitergereicht, damit die UI-Module ihn
+# zusammen mit `dec_anzeige` aus derselben Datei holen.
+__all__ = ["KEIN_DECRYPTOR", "dec_anzeige", "isk", "tab_icon", "tab_icon_at",
+           "NumericItem", "IskMillionSpin", "IskGroupedSpin",
+           "MinimizableDialog"]
+
+
+def dec_anzeige(nm):
+    """Decryptor-Name fuer die ANZEIGE. Der gespeicherte Schluessel bleibt
+    deutsch (s. KEIN_DECRYPTOR), die Beschriftung nicht - sonst stand
+    "Kein Decryptor" mitten in der englischen Oberflaeche. Echte
+    Decryptor-Namen sind EVE-Eigennamen und bleiben, wie sie sind."""
+    return t("No decryptor") if nm == KEIN_DECRYPTOR else nm
 
 
 def tab_icon(tabs, widget, text, name):
@@ -57,6 +78,343 @@ def tab_icon_at(tabs, pos, widget, text, name):
     except Exception:
         pass
     return pos
+
+
+# ---- KOPIERBARE NAMEN IN EINER BAUM-SPALTE --------------------------------
+# NUTZER, 15.09.2026 (Runplaner): "im Runplaner steht Silicon Diborite - klickt
+# man drauf, bekommt man Silicon Diborite Reaction Formula ins Clipboard", und
+# der Name soll einen kleinen Rahmen tragen wie die Run-Zahlen daneben.
+#
+# OHNE JEDE HERVORHEBUNG (Nutzer, 15.09.2026, nach dem Ausprobieren: "ich
+# moechte, dass die Items also Tungsten Carbide wieder normal aussehen, also
+# ohne Amber-Rahmen und einfach wieder weiss - oder blau, wenn in Bau").
+# Ein Rahmen und ein Chip waren beide zu laut. Die Zeile sieht jetzt wieder
+# genau so aus wie vorher; klickbar ist sie trotzdem.
+#
+# WAS BLEIBT, ist die Trefferflaeche: `kopier_text_rect` sagt, wo der TEXT
+# steht. Nur dort kopiert ein Klick - das Kaestchen daneben bleibt frei,
+# sonst ueberschriebe jeder Haken still die Zwischenablage.
+ROLLE_KOPIERNAME = Qt.UserRole + 8
+
+
+def kopier_text_rect(option_oder_view, index, item_rect=None):
+    """Das Rechteck, in dem der TEXT dieser Zelle steht.
+
+    Dieselbe Rechnung fuer das Zeichnen und fuer den Klick - sonst sitzt der
+    Rahmen woanders als die Trefferflaeche, und der Nutzer klickt ins Leere.
+    Faellt die Style-Rechnung aus, bleibt ein ehrlicher Rueckfall: alles
+    rechts vom Kaestchen.
+    """
+    try:
+        if isinstance(option_oder_view, QStyleOptionViewItem):
+            opt, widget = option_oder_view, option_oder_view.widget
+        else:
+            widget = option_oder_view
+            opt = QStyleOptionViewItem()
+            opt.initFrom(widget)
+            opt.rect = item_rect
+            opt.features |= QStyleOptionViewItem.HasCheckIndicator
+            opt.text = str(index.data(Qt.DisplayRole) or "")
+        style = widget.style() if widget is not None else QApplication.style()
+        r = style.subElementRect(QStyle.SE_ItemViewItemText, opt, widget)
+        # DER TEXT KOMMT AUS DEM MODELL, nicht aus opt.text: der Delegate
+        # leert opt.text, weil er die Beschriftung selbst auf den Chip malt.
+        # Wuerde die Breite aus opt.text kommen, waere der Chip 0 px breit.
+        _txt = str(index.data(Qt.DisplayRole) or "") if index is not None else ""
+        # AM TEXT KLEBEN, NICHT AN DER SPALTE: ein Chip ueber die ganze
+        # Spaltenbreite saehe aus wie ein Eingabefeld.
+        breite = QFontMetrics(opt.font).horizontalAdvance(_txt) + 8
+        if breite > 0:
+            r.setWidth(min(r.width(), breite))
+        return r
+    except Exception:
+        _r = (option_oder_view.rect
+              if isinstance(option_oder_view, QStyleOptionViewItem)
+              else item_rect)
+        return _r.adjusted(24, 0, 0, 0) if _r is not None else None
+
+
+# ---- KARTEN VON HAND ANORDNEN ---------------------------------------------
+# NUTZER, 15.09.2026: "koennen wir einen Button einfuehren 'Baupläne selber
+# anordnen' und dann kann man die per Drag and Drop so ziehen wie man will.
+# Linksklick halten und ziehen, aber scrollen muss auch gehen." Die eigene
+# Reihenfolge soll das Schliessen UND ein Update ueberleben.
+#
+# WARUM KEIN Qt-DRAG-AND-DROP: die Karten haengen in einem QVBoxLayout, nicht
+# in einer Liste. Echtes QDrag braeuchte ein Modell, eine MIME-Kodierung und
+# eine Drop-Zone - fuer "Widget im Layout verschieben" ist das Verschieben im
+# Layout selbst der kuerzere und ruhigere Weg: die Karte folgt der Maus in
+# Sprüngen von Platz zu Platz, es gibt kein zweites schwebendes Bild.
+#
+# MAUSRAD BLEIBT MAUSRAD: gefiltert werden nur Druecken/Bewegen/Loslassen der
+# LINKEN Taste. Wheel-Ereignisse laufen unangetastet an die Bildlaufleiste -
+# ausdrueckliche Nutzer-Bedingung ("scrollen muss auch gehen").
+class KartenSortierer(QObject):
+    """Macht Widgets in einem QVBoxLayout mit der Maus verschiebbar.
+
+    Nur aktiv, solange `aktiv` True ist - im Ruhezustand sieht und aendert
+    diese Klasse nichts. Das ist Absicht: die Karten tragen Knoepfe, und ein
+    dauerhaft lauernder Filter waere ein Risiko fuer jeden Klick darauf.
+
+    `beim_ablegen` wird nach dem Loslassen mit der neuen Reihenfolge der
+    Nutzdaten (was `schluessel_von` je Widget liefert) aufgerufen.
+    """
+    # DIE DREI ZUSTAENDE EINER KARTE IM ANORDNEN-MODUS (Nutzer, 15.09.2026:
+    # "wenn ich mit der Maus ueber einen Bauplan fahre, moechte ich dass er
+    # leicht hervorgehoben wird, und wenn ich ihn dann drag and droppe, damit
+    # man erkennt: ja okay, ich bewege etwas").
+    # Ruhig -> nichts. Darunter -> zarter Rahmen. In der Hand -> kraeftiger
+    # Rahmen und Flaeche. Alle drei tragen 1 px Rahmen, damit die Karte beim
+    # Wechsel nicht springt.
+    # NUR DIE KARTE SELBST, NICHT IHRE KINDER (Nutzer, 15.09.2026: "wirklich
+    # nur den Gesamtrahmen vom Bauplan, nicht 'Profit' und so auch nochmal
+    # umrahmt"). Ein Stylesheet OHNE Selektor vererbt sich an jedes Label und
+    # jeden Knopf darin - genau das sah man. Mit `#Name` gilt es fuer das eine
+    # Widget, das diesen Objektnamen traegt.
+    OBJEKTNAME = "SortierKarte"
+    _CSS_RUHE = "#" + OBJEKTNAME + "{border:1px solid transparent; border-radius:8px;}"
+    _CSS_HOVER = "#" + OBJEKTNAME + "{{border:1px solid {a}; border-radius:8px;}}"
+    _CSS_ZIEHT = ("#" + OBJEKTNAME + "{{border:1px solid {a}; "
+                  "border-radius:8px; background:{f};}}")
+
+    def __init__(self, layout, scrollbereich, schluessel_von, beim_ablegen,
+                 akzent=None, flaeche=None, parent=None):
+        super().__init__(parent)
+        self._lay = layout
+        self._scroll = scrollbereich
+        self._key = schluessel_von
+        self._fertig = beim_ablegen
+        # ALLE FARBEN AUS theme.py (aa170: keine Hex-Werte am Theme vorbei).
+        self._akzent = akzent or theme.CYAN
+        self._flaeche = flaeche or theme.CYAN_FILL
+        self.aktiv = False
+        self._widget = None
+        self._start = None
+        self._zieht = False
+        self._unter_maus = None
+        self._roll = QTimer(self)
+        self._roll.setInterval(40)
+        self._roll.timeout.connect(self._rollen)
+        self._roll_richtung = 0
+
+    # -- an- und abmelden ---------------------------------------------------
+    def ueberwache(self, widget):
+        """Dieses Widget und ALLE seine Kinder beobachten.
+
+        Auch die Kinder: sonst liesse sich die Karte nur an ihrem schmalen
+        Rand greifen - ueberall sonst faengt ein Label den Klick ab, bevor
+        der Rahmen ihn sieht.
+
+        DIE KNOEPFE BLEIBEN TROTZDEM BEDIENBAR (Nutzer, 15.09.2026):
+        *"was bringt der Arrange-Modus, wenn er aktiviert ist und ich nichts
+        druecken kann?"* - der Modus ist zum Anlassen gedacht. Frueher stand
+        hier "Nutzer-Bedingung": das war ein LESEFEHLER meinerseits, seine
+        Zeile *"Open, Done, Delete geht nicht"* war eine Meldung, keine
+        Anforderung. `_ist_bedienelement` laesst diese Klicks jetzt durch.
+        """
+        widget.installEventFilter(self)
+        widget.setAttribute(Qt.WA_Hover, True)
+        # Der Objektname ist der Selektor, mit dem die Hervorhebung NUR
+        # dieses Widget trifft (s. OBJEKTNAME oben).
+        widget.setObjectName(self.OBJEKTNAME)
+        for kind in widget.findChildren(QWidget):
+            kind.installEventFilter(self)
+
+    def _zeige(self, widget, zustand):
+        """Karte in einen der drei Zustaende versetzen."""
+        if widget is None:
+            return
+        try:
+            if zustand == "zieht":
+                widget.setStyleSheet(self._CSS_ZIEHT.format(
+                    a=self._akzent, f=self._flaeche))
+            elif zustand == "hover":
+                widget.setStyleSheet(self._CSS_HOVER.format(a=self._akzent))
+            else:
+                widget.setStyleSheet(self._CSS_RUHE)
+        except Exception:
+            pass
+
+    def alles_zuruecksetzen(self):
+        """Jede Karte in den Ruhezustand - beim Ausschalten des Modus."""
+        for i in range(self._lay.count()):
+            _it = self._lay.itemAt(i)
+            _w = _it.widget() if _it is not None else None
+            if _w is not None:
+                try:
+                    _w.setStyleSheet("")
+                except Exception:
+                    pass
+        self._unter_maus = None
+
+    def _ist_bedienelement(self, obj):
+        """Sitzt dieser Klick auf einem Knopf (oder einem anderen
+        Bedienelement) INNERHALB der Karte?
+
+        Dann gehoert er dem Knopf, nicht dem Sortierer: gezogen wird an
+        Name, Zahlen und freier Flaeche, gedrueckt wird auf "Open", "Done",
+        "Delete" und das Schloss. Ohne diese Unterscheidung war der
+        Anordnen-Modus ein Modus, in dem man nichts mehr tun kann - und
+        genau deshalb nicht dauerhaft nutzbar.
+
+        Gesucht wird nach OBEN bis zur Karte: der Klick kommt oft auf einem
+        Kind des Knopfes an (Beschriftung, Symbol), nicht auf dem Knopf
+        selbst. Ueber die Karte hinaus wird nicht gesucht - sonst zaehlte
+        irgendein Knopf weiter oben im Fenster mit.
+        """
+        w = obj if isinstance(obj, QWidget) else None
+        while w is not None:
+            if isinstance(w, (QAbstractButton, QAbstractSpinBox, QComboBox,
+                              QLineEdit)):
+                return True
+            if self._lay.indexOf(w) >= 0:
+                return False        # bei der Karte angekommen: kein Knopf
+            w = w.parentWidget()
+        return False
+
+    def _karte_zu(self, obj):
+        """Zu welchem der verwalteten Widgets gehoert dieses Objekt?"""
+        w = obj if isinstance(obj, QWidget) else None
+        while w is not None:
+            if self._lay.indexOf(w) >= 0:
+                return w
+            w = w.parentWidget()
+        return None
+
+    # -- der eigentliche Griff ---------------------------------------------
+    def eventFilter(self, obj, ev):
+        if not self.aktiv:
+            return False
+        try:
+            typ = ev.type()
+            if typ in (QEvent.Enter, QEvent.HoverEnter, QEvent.HoverMove):
+                _k = self._karte_zu(obj)
+                if _k is not None and _k is not self._unter_maus \
+                        and not self._zieht:
+                    self._zeige(self._unter_maus, "ruhe")
+                    self._unter_maus = _k
+                    self._zeige(_k, "hover")
+                return False        # Hover NUR anzeigen, nie schlucken
+            if typ in (QEvent.Leave, QEvent.HoverLeave):
+                if not self._zieht and self._unter_maus is not None \
+                        and self._karte_zu(obj) is self._unter_maus:
+                    self._zeige(self._unter_maus, "ruhe")
+                    self._unter_maus = None
+                return False
+            if typ == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
+                # KNOEPFE GEHOEREN DEM KNOPF (Nutzer, 15.09.2026). Nichts
+                # merken und nichts schlucken - sonst haengt der Sortierer
+                # an einem Klick, den er gar nicht bekommen hat, und die
+                # naechste Mausbewegung zoege die Karte hinter dem
+                # geoeffneten Plan her.
+                if self._ist_bedienelement(obj):
+                    self._widget = None
+                    self._start = None
+                    self._zieht = False
+                    return False
+                self._widget = self._karte_zu(obj)
+                self._start = ev.globalPosition().toPoint()
+                self._zieht = False
+                # SCHLUCKEN, damit der Klick auf der freien Kartenflaeche
+                # nicht zusaetzlich als Auswahl o.ae. durchgeht.
+                return self._widget is not None
+            if typ == QEvent.MouseMove and self._widget is not None:
+                pos = ev.globalPosition().toPoint()
+                if not self._zieht:
+                    if (pos - self._start).manhattanLength() < \
+                            QApplication.startDragDistance():
+                        return True
+                    self._zieht = True
+                    # JETZT SIEHT MAN, DASS ETWAS IN DER HAND IST.
+                    self._zeige(self._widget, "zieht")
+                self._einsortieren(pos)
+                self._rollen_pruefen(pos)
+                return True
+            if typ == QEvent.MouseButtonRelease and self._widget is not None:
+                self._roll.stop()
+                self._roll_richtung = 0
+                _hat_gezogen = self._zieht
+                # Zurueck in den Hover-Zustand: die Maus steht ja noch darauf.
+                self._zeige(self._widget, "hover")
+                self._unter_maus = self._widget
+                self._widget = None
+                self._start = None
+                self._zieht = False
+                if _hat_gezogen and self._fertig is not None:
+                    self._fertig(self.reihenfolge())
+                return True
+        except Exception:
+            # Eine Bequemlichkeit darf die Seite nie kosten. Beim kleinsten
+            # Zweifel: Griff loslassen und Qt weitermachen lassen.
+            self._widget = None
+            self._zieht = False
+            self._roll.stop()
+        return False
+
+    def _einsortieren(self, global_pos):
+        """Die gegriffene Karte an die Stelle setzen, ueber der die Maus steht."""
+        eltern = self._widget.parentWidget()
+        if eltern is None:
+            return
+        y = eltern.mapFromGlobal(global_pos).y()
+        alt = self._lay.indexOf(self._widget)
+        neu = alt
+        for i in range(self._lay.count()):
+            _it = self._lay.itemAt(i)
+            _w = _it.widget() if _it is not None else None
+            if _w is None or _w is self._widget:
+                continue
+            _m = _w.y() + _w.height() // 2
+            if y < _m:
+                neu = min(neu, i)
+                break
+            neu = max(neu, i)
+        if neu != alt:
+            self._lay.removeWidget(self._widget)
+            self._lay.insertWidget(neu, self._widget)
+
+    def _rollen_pruefen(self, global_pos):
+        """Am oberen/unteren Rand mitscrollen, solange gezogen wird.
+
+        Ohne das laesst sich eine Karte nicht ueber den sichtbaren Bereich
+        hinaus verschieben - bei zehn Plaenen waere Ziehen nutzlos.
+        """
+        if self._scroll is None:
+            self._roll.stop()
+            return
+        vp = self._scroll.viewport()
+        y = vp.mapFromGlobal(global_pos).y()
+        rand = 28
+        if y < rand:
+            self._roll_richtung = -1
+        elif y > vp.height() - rand:
+            self._roll_richtung = 1
+        else:
+            self._roll_richtung = 0
+        if self._roll_richtung and not self._roll.isActive():
+            self._roll.start()
+        elif not self._roll_richtung:
+            self._roll.stop()
+
+    def _rollen(self):
+        try:
+            bar = self._scroll.verticalScrollBar()
+            bar.setValue(bar.value() + self._roll_richtung * 14)
+        except Exception:
+            self._roll.stop()
+
+    def reihenfolge(self):
+        """Die Nutzdaten der Karten in der jetzigen Layout-Reihenfolge."""
+        raus = []
+        for i in range(self._lay.count()):
+            _it = self._lay.itemAt(i)
+            _w = _it.widget() if _it is not None else None
+            if _w is None:
+                continue
+            _k = self._key(_w)
+            if _k is not None:
+                raus.append(_k)
+        return raus
 
 
 def isk(n, suffix=True):

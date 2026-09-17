@@ -67,6 +67,20 @@ SKILL_SCOPES = ["esi-skills.read_skills.v1", "esi-characters.read_standings.v1",
 # Optional, only added when the user enables implant-based time-bonus detection
 # (Zainou 'Beancounter' Industry BX-80X etc.).
 IMPLANT_SCOPE = "esi-clones.read_implants.v1"
+# Optional, only added when the user enables corporation hangars (build only).
+# JEDER EINZELNE MIT NAMEN, nicht als Positionsindex (dieselbe Lehre wie bei
+# STRUCTURE_READ_SCOPE): der Bauplan muss je Charakter pruefen koennen, ob
+# GENAU dieser Scope erteilt ist - sonst ist ein 403 nicht von "keine
+# Director-Rolle" zu unterscheiden. Rollen laut ESI-Doku (16.09.2026):
+# Assets/Blueprints/Divisions = Director, Jobs = Factory_Manager, Rollen-
+# Abfrage = keine.
+CORP_ASSETS_SCOPE = "esi-assets.read_corporation_assets.v1"
+CORP_BLUEPRINTS_SCOPE = "esi-corporations.read_blueprints.v1"
+CORP_DIVISIONS_SCOPE = "esi-corporations.read_divisions.v1"
+CORP_JOBS_SCOPE = "esi-industry.read_corporation_jobs.v1"
+CORP_ROLES_SCOPE = "esi-characters.read_corporation_roles.v1"
+CORP_SCOPES = [CORP_ASSETS_SCOPE, CORP_BLUEPRINTS_SCOPE, CORP_DIVISIONS_SCOPE,
+               CORP_JOBS_SCOPE, CORP_ROLES_SCOPE]
 
 # ============================================================================
 # HARTCODIERTE CCP-SPIELWERTE: GEBÜHREN (bewusste Ausnahme von der Grundregel
@@ -137,10 +151,29 @@ def effective_broker_fee(broker_level: int, faction_standing: float = 0.0,
 # besser herausstellt, ist verzeihlich - andersherum nicht.
 _NEUTRALE_STANDINGS = {"corp": 0.0, "faction": 0.0}
 
+# "KEIN DECRYPTOR" IST EIN GESPEICHERTER WERT, KEINE BESCHRIFTUNG.
+# Er steht so in settings["bau_decryptor"], in den Bauplan-Zuordnungen und
+# in gespeicherten Bau-Profilen. Er wird deshalb NICHT umbenannt - dieselbe
+# Ueberlegung wie bei SERVICE in tokens.py: unter dem alten Namen liegt die
+# Wahl aller bestehenden Nutzer. Angezeigt wird er uebersetzt, ueber
+# ui.mw_basis.dec_anzeige.
+# de_scan4: aus  (gespeicherter Wert, Anzeige laeuft ueber dec_anzeige)
+# de_scan5: aus
+KEIN_DECRYPTOR = "Kein Decryptor"
+# de_scan5: an
+# de_scan4: an
+
 DEFAULT_SETTINGS = {
     "client_id": EMBEDDED_CLIENT_ID,   # baked-in id for distribution (optional)
     "callback_port": 8635,    # must match the callback URL you register
-    "target_margin": 20.0,    # flag a position once net margin >= this
+    # ZIEL-MARGE: ab dieser NETTO-Marge meldet das Portfolio "verkaufen".
+    # 12 statt 20 (Nutzer, 15.09.2026): "das gibt den Nutzern eher das
+    # Gefuehl, dass sie etwas verkaufen koennen". Bei 20 % blieb die Liste
+    # der Verkaufs-Empfehlungen oft leer - wer nichts empfohlen bekommt,
+    # haelt das Werkzeug fuer nutzlos, obwohl 12 % netto ein guter Handel
+    # sind. GILT NUR FUER NEUE NUTZER: wer schon eine settings.json hat,
+    # behaelt seinen eingestellten Wert (Standardwerte fuellen nur Luecken).
+    "target_margin": 12.0,    # flag a position once net margin >= this
     # Effektive Arbeitswerte - werden bei fees_from_skills=True laufend aus den
     # Formeln oben überschrieben, sobald ein Charakter verlinkt und seine
     # Skills geladen sind. Defaults = Formel mit den Werten unten (KEINE
@@ -165,6 +198,16 @@ DEFAULT_SETTINGS = {
     # Schalter schon gespeichert hat, behaelt seinen Wert.
     "use_structures": True,   # player-structure markets (needs structure scopes)
     "use_ui": True,           # opening items in the game client on by default (needs ui scope)
+    # CORP-HANGAR ALS BAU-BESTAND (1.0.8). STANDARD AUS (Entscheid 14.09.2026,
+    # Regel 3): ein Plan, der ploetzlich weniger einkauft, faellt erst im
+    # Spiel vor dem leeren Job auf. Nur fuers Bauen (Bauplan, Runplaner,
+    # Blueprints) - nicht Portfolio, nicht Profits (Nutzer, 16.09.2026).
+    "use_corp": False,
+    # Welche der sieben Hangar-Divisions zaehlen (1..7). LEER = keine: der
+    # Nutzer waehlt sie an, nicht pauschal alle sieben (Entscheid 14.09.2026:
+    # Material einer Division, die der Corp-Verkauf nutzt, darf nicht
+    # ungefragt in die Bauplanung wandern).
+    "corp_divisions": [],
     "bau_me": 10,             # assumed blueprint material efficiency % (BPO research)
     "bau_te": 0,              # assumed blueprint time efficiency % (0..20)
     # ---- ME/TE je Item-Kategorie (Punkt: "wir kaufen sonst zu viel Material") ----
@@ -215,7 +258,7 @@ DEFAULT_SETTINGS = {
     "bau_reaction_index": 0.0,  # reaction system cost index (live from ESI)
     "bau_role_bonus": 0.0,    # structure manufacturing job-cost role bonus % (e.g. 3)
     "bau_facility_tax": 0.25,  # facility tax % set by the structure owner
-    "bau_decryptor": "Kein Decryptor",  # invention decryptor choice
+    "bau_decryptor": KEIN_DECRYPTOR,  # invention decryptor choice
     "bau_parallel_chars": 1,   # build characters working in parallel (time estimate)
     "bau_buy_surplus": 0,      # extra % of materials to buy (safety, rounded up)
     "bau_blacklist_names": [],  # exact item names to never build (paste list)
@@ -226,6 +269,28 @@ DEFAULT_SETTINGS = {
     # Damit stehen die Karten beim Oeffnen gleich richtig, statt sichtbar
     # umzuspringen, sobald der ESI-Fortschritt eintrifft.
     "bau_plan_sortierung": [],
+    # EIGENE REIHENFOLGE DER BAUPLAN-KARTEN (Nutzer, 15.09.2026: "Bauplaene
+    # selber anordnen ... die eigene Anordnung bleibt gespeichert beim
+    # Schliessen und wieder Oeffnen, auch bei einem Update").
+    # Zwei getrennte Schluessel mit Absicht: `bau_plan_sortierung` merkt sich
+    # die zuletzt AUTOMATISCH sortierte Folge, damit beim Oeffnen nichts
+    # sichtbar umspringt. Wuerde die Handsortierung dort hineinschreiben,
+    # ueberschriebe der naechste ESI-Lauf sie wieder.
+    # Beides liegt in settings.json im Nutzerordner, nicht im Programm - ein
+    # Update ersetzt nur die .exe und laesst die Datei stehen.
+    "bau_plan_manuell": False,      # Handsortierung an/aus
+    "bau_plan_reihenfolge": [],     # Plan-IDs in der Reihenfolge des Nutzers
+    # GILT SEINE REIHENFOLGE? (Nutzer, 15.09.2026: "die Reihenfolge bleibt,
+    # aber dann fuehren wir einen Knopf ein 'Nach Fortschritt sortieren'").
+    # BEWUSST GETRENNT von `bau_plan_manuell`: der sagt nur, ob man gerade
+    # ZIEHEN kann. Vorher haben beide dasselbe bedeutet - das Ausschalten
+    # des Anordnen-Modus warf die Handarbeit sofort wieder um, und genau das
+    # nannte er sinnlos. Jetzt endet die eigene Folge nur auf ausdruecklichen
+    # Klick.
+    "bau_plan_eigene_folge": False,
+    # Mengenfeld im Bauplan in RUNS statt Stueck zeigen (Discord-Wunsch,
+    # 16.09.2026). Wirkt nur bei Produkten mit mehr als 1 Stueck je Run.
+    "bau_qty_in_runs": False,
     # Verdeckte Kennzahlen (Portfolio/Gewinne) - fuer Streams und
     # Screenshots. Nur die ANZEIGE, gerechnet wird unveraendert.
     "kpi_zensiert": [],
@@ -276,7 +341,9 @@ CREDIT_NAME = "Order Marks"        # bilingual DE/EN; rename here only
 CREDIT_ABBR = "OM"
 ISK_PER_CREDIT = 1_000_000         # 1 OM = 1,000,000 ISK  → 1000 OM = 1B ISK
 SUB_DAYS = 30                      # a tab subscription lasts this many days
+# de_scan5: aus  (Eigenname einer Corporation im Spiel, wird nicht uebersetzt)
 CORP_NAME = "Der Handelsorden"     # ISK transfers go to this in-game corp
+# de_scan5: an
 
 # unlockable (paid) tabs → cost in Order Marks per SUB_DAYS
 
@@ -566,4 +633,6 @@ def callback_url(port: int) -> str:
 # Spenden-Ziel: NAME der Corporation ingame. Die ID wird zur Laufzeit ueber
 # ESI aufgeloest (esi.resolve_corp_id) - so bleibt der Eintrag lesbar und
 # ueberpruefbar, statt einer stillen Zahl.
+# de_scan5: aus  (Eigenname einer Corporation im Spiel, wird nicht uebersetzt)
 DONATION_CORP = "Der Handelsorden"
+# de_scan5: an

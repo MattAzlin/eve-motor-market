@@ -407,6 +407,112 @@ def booster_group_ids() -> set:
         return set()
 
 
+def _container_gids_from(names_by_gid) -> set:
+    """Gruppen ECHTER Behaelter - PURE Funktion, ohne DB testbar.
+
+    NUTZER-BEFUND 15.09.2026: "das Portfolio trackt nur Items in Station
+    Containern und in keinen anderen Containern". Der Grund lag darin, dass
+    ein Behaelter bisher NICHT an seinem Typ erkannt wurde, sondern daran,
+    dass sein Inhalt die ESI-Markierung `Unlocked`/`Locked` trug - und die
+    tragen nur die abschliessbaren Station-Container. Was ein Freight
+    Container meldet, weiss von aussen niemand sicher; deshalb wird der
+    BEHAELTER erkannt, nicht sein Inhalt.
+
+    Kriterium ist der Gruppenname ("... Container"), wie bei den
+    Schwesterregeln - keine gepflegte Item-Liste, die bei jedem EVE-Update
+    veraltet. Blaupausen fliegen raus ("Container Blueprints").
+
+    "FREIGHT" DARF NICHT DAS KRITERIUM SEIN: die Gruppen "Freighter",
+    "Jump Freighter" und "Irregular Freighter" sind SCHIFFE. Nur "container"
+    im Namen trifft sie nicht - "Freight Container" dagegen schon.
+
+    Gemessen an der mitgelieferten SDE: Cargo Container, Secure Cargo
+    Container, Audit Log Secure Container, Freight Container, Spawn/Mission/
+    Scatter/Irregular/Salvage Container.
+    """
+    out = set()
+    for gid, name in (names_by_gid or {}).items():
+        low = (name or "").lower()
+        if "container" in low and "blueprint" not in low:
+            out.add(gid)
+    return out
+
+
+def container_group_ids() -> set:
+    """group_ids der Behaelter-Gruppen aus der lokalen SDE (Schutzgitter wie
+    bei den Schwesterfunktionen: keine Datenbank -> leeres Set. Dann gilt
+    wieder allein die alte Inhalts-Regel, statt gar nichts zu finden)."""
+    if not os.path.exists(_db_path()):
+        return set()
+    try:
+        with _conn() as c:
+            rows = {r["group_id"]: r["name"]
+                    for r in c.execute("SELECT group_id, name FROM group_name")}
+        return _container_gids_from(rows)
+    except Exception:
+        return set()
+
+
+def container_type_ids() -> set:
+    """type_ids ALLER Behaelter-Typen - das, was der Assets-Abruf braucht.
+
+    Leeres Set, wenn die SDE fehlt: der Aufrufer faellt dann auf die alte
+    Inhalts-Regel zurueck (Station-Container werden also weiter erkannt).
+    """
+    gids = container_group_ids()
+    if not gids:
+        return set()
+    try:
+        return {t for t, v in item_category_map().items() if v[1] in gids}
+    except Exception:
+        return set()
+
+
+def _rig_gids_from(names_by_gid) -> set:
+    """Die Rig-Gruppen ("Rig Armor", "Rig Shield", ...) - PURE Funktion,
+    ohne DB testbar.
+
+    NUTZER-WUNSCH 15.09.2026: "ich moechte auch Rigs finden koennen fuers
+    Bauen". Rigs sind im Scanner nie ausgeschlossen gewesen (Kategorie 7 =
+    Modul, Meta 1/2 - beides erlaubt), gehen aber zwischen allen anderen
+    Modulen unter. Diese Gruppenliste ist die Grundlage fuers Preset.
+
+    ANFANG DES NAMENS, NICHT IRGENDWO DARIN - und das ist kein Geschmack:
+    der gemeinsame Helfer `_gids_matching_from` sucht Teilworte, und "rig"
+    steckt auch in "F-r-i-g-ate". Mit der Teilwortsuche waeren alle
+    Fregatten-Gruppen Rigs geworden. "rig " mit Leerzeichen trifft
+    umgekehrt "Rigging" (Gruppe 269, ein Skill) nicht.
+
+    BLAUPAUSEN RAUS: "Rig Blueprint" ist eine eigene Gruppe. Im Scanner
+    kaeme sie nie vor (dort stehen Produkte), aber eine Regel, die nur
+    zufaellig richtig liegt, ist keine Regel.
+
+    Gemessen an der mitgelieferten SDE: 16 Gruppen, 632 Rigs - 316 T1 und
+    316 T2.
+    """
+    out = set()
+    for gid, name in (names_by_gid or {}).items():
+        low = (name or "").lower()
+        if low.startswith("rig ") and "blueprint" not in low:
+            out.add(gid)
+    return out
+
+
+def rig_group_ids() -> set:
+    """group_ids der Rig-Gruppen aus der lokalen SDE (Schutzgitter wie bei
+    den Schwester-Funktionen: keine Datenbank -> leeres Set, also nichts
+    filtern statt alles wegfiltern)."""
+    if not os.path.exists(_db_path()):
+        return set()
+    try:
+        with _conn() as c:
+            rows = {r["group_id"]: r["name"]
+                    for r in c.execute("SELECT group_id, name FROM group_name")}
+        return _rig_gids_from(rows)
+    except Exception:
+        return set()
+
+
 def _lp_locked_gids_from(names_by_gid) -> set:
     """Namensregel fuer LP-gesperrte EDENCOM-Gruppen - PURE Funktion, damit
     sie ohne Datenbank testbar ist. Kriterium ist der GRUPPENNAME, keine
@@ -521,6 +627,8 @@ def reaction_stage_map(recipes):
 # lassen den Rig nur greifen, wenn sich die Domänen überschneiden.
 
 # Effekt-Namens-Fragment → Domänen-Tag. Reihenfolge: spezifisch vor allgemein.
+# de_scan5: aus  (SDE-Effektnamen von CCP, englisch; "Charge" ist der
+# EVE-Begriff fuer Munition, kein deutsches Wort - und kein Anzeigetext)
 _RIG_EFFECT_DOMAINS = [
     ("AdvCapComponent", "advanced_capital_component"),
     ("AdvComponent", "advanced_component"),
@@ -550,6 +658,7 @@ _RIG_EFFECT_DOMAINS = [
     ("Reaction", "reaction"),
     ("Reactor", "reaction"),
 ]
+# de_scan5: an
 
 
 def rig_domains(effect_names) -> set:

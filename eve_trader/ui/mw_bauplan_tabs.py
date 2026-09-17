@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (
 from .. import esi, hubs, industry, store
 from . import icons, theme
 from ..sprache import t
-from .mw_basis import NumericItem, isk
+from .mw_basis import (KEIN_DECRYPTOR, ROLLE_KOPIERNAME, NumericItem,
+                       dec_anzeige, isk)
 
 
 class BauplanTabs:
@@ -143,7 +144,7 @@ class BauplanTabs:
             # Klassen-Konstante - hier uebersetzen, nicht dort.
             self.b_preset.addItem(t(label) if p is None else label, p)
         self.b_preset.currentIndexChanged.connect(self._apply_build_preset)
-        self.b_load_btn = QPushButton(t("Load blueprints"))   # kept for load_sde refs
+        self.b_load_btn = QPushButton(t("Load recipes"))   # kept for load_sde refs
         self.b_load_btn.setIcon(icons.icon("blueprint"))
         self.b_load_btn.clicked.connect(self.load_sde)
         # GEZEICHNETES SYMBOL STATT EMOJI (Nutzer-Fund Sitzung 16, "wir machen
@@ -190,6 +191,15 @@ class BauplanTabs:
             f"QPushButton:checked{{background:{theme.CYAN_FILL}; "
             f"color:{theme.CYAN}; "
             f"border-color:{theme.CYAN};}}")
+        # BEIM START IMMER AUS (Nutzer, 15.09.2026: "die Gefahr ist gross,
+        # dass man vergisst da herauszugehen, bevor man das Tool schliesst,
+        # und dann ist man verwirrt, warum man keine normalen Blueprints
+        # suchen kann"). Der Zustand wird deshalb BEWUSST NICHT gespeichert -
+        # der Capital-Modus ist etwas fuer Fortgeschrittene und soll nie der
+        # Zustand sein, in dem man das Programm unbemerkt vorfindet.
+        # Ausdruecklich gesetzt statt sich auf den Qt-Standard zu verlassen:
+        # so steht die Zusage im Code und kann geprueft werden (b7i).
+        self.b_cap_mode.setChecked(False)
         self.b_cap_mode.toggled.connect(self._toggle_capital_mode)
         # SCHMALE SPALTE: Titel allein oben, die beiden Knoepfe als eigene
         # Zeile in voller Breite darunter (Titel + zwei Knoepfe nebeneinander
@@ -284,8 +294,10 @@ class BauplanTabs:
         self.bs_inv.setCurrentIndex(0 if self.settings.get("bau_invention", False) else 1)
         self.bs_decry = QComboBox()
         for nm, _v in self._decryptor_list():
-            self.bs_decry.addItem(nm, nm)
-        self._combo_select(self.bs_decry, self.settings.get("bau_decryptor", "Kein Decryptor"))
+            # ANZEIGE uebersetzt, DATEN nicht: `_combo_select` waehlt ueber
+            # itemData, und genau dieser Wert wandert in die Einstellungen.
+            self.bs_decry.addItem(dec_anzeige(nm), nm)
+        self._combo_select(self.bs_decry, self.settings.get("bau_decryptor", KEIN_DECRYPTOR))
         self.bs_decry.setToolTip(t(
             "Decryptor for invention (changes success chance and "
               "runs → invention cost per unit)."))
@@ -794,7 +806,8 @@ class BauplanTabs:
                                  "invention-capable structure in the Structures tab."))
             struct_lbl.setStyleSheet(f"color:{theme.AMBER}; font-weight:700;")
         elif inv_struct:
-            tag = "zugewiesen" if assigned_map.get("invention") else "Auto"
+            # "Auto" heisst in beiden Sprachen gleich und bleibt.
+            tag = t("assigned") if assigned_map.get("invention") else "Auto"
             struct_lbl.setText(t("Structure: ") + f"<b>{inv_struct.get('name','?')}</b> "
                                f"({tag})")
             struct_lbl.setStyleSheet(f"color:{theme.MUTED};")
@@ -907,15 +920,21 @@ class BauplanTabs:
         self._bd_invention_targets = set()
 
         def _dv_label(nm, v):
-            """Decryptor-Name + Boni fürs Dropdown, z.B. 'Parity (+50% Erfolg,
+            """Decryptor-Name + Boni fürs Dropdown, z.B. 'Parity (+50% success,
             +3 Runs, ME+1%, TE-2%)' - damit man die Wahl sieht, ohne extra
-            nachzuschlagen."""
+            nachzuschlagen. Die Boni laufen durch t(), der Name ist ein
+            EVE-Eigenname und bleibt."""
             pm, rm, me, te, tid = v
             if tid is None:
-                return nm
+                return dec_anzeige(nm)
             bits = []
             if abs(pm - 1.0) > 1e-9:
-                bits.append(f"{'+' if pm >= 1 else ''}{(pm - 1) * 100:.0f}% Erfolg")
+                # "% Erfolg" stand hier bis Sitzung 22 als nackter f-String und
+                # KEIN Scanner sah es: de_scan folgt `addItem(_dv_label(...))`
+                # nicht in den Helfer hinein, und "Erfolg" stand in keiner
+                # Wortliste. Dafuer gibt es jetzt de_scan5.
+                bits.append(t("{v}% success").format(
+                    v=f"{'+' if pm >= 1 else ''}{(pm - 1) * 100:.0f}"))
             if rm:
                 bits.append(f"{'+' if rm >= 0 else ''}{rm} Runs")
             if me:
@@ -1060,7 +1079,7 @@ class BauplanTabs:
             combo = QComboBox()
             for nm, v in decryptor_list:
                 combo.addItem(_dv_label(nm, v), nm)
-            self._combo_select(combo, self._bd_decryptor_map.get(bp_id, "Kein Decryptor"))
+            self._combo_select(combo, self._bd_decryptor_map.get(bp_id, KEIN_DECRYPTOR))
             dec_row.addWidget(combo, 1)
             left.addLayout(dec_row)
             dc_sum_lbl = QLabel("")
@@ -1491,7 +1510,12 @@ class BauplanTabs:
                         kopien=self._inv_kopien.value(),
                         prob=_oc.get("prob"))
                     if _auf["kopien"]:
-                        _rest = (f' \u00b7 {_auf["rest_reserve"]} Runs Reserve'
+                        # Bis Sitzung 22 ohne t(): kein deutscher Text, aber
+                        # in der deutschen Fassung waere er englisch geblieben.
+                        # de_scan3 sah ihn nicht - er laeuft ueber `_rest` in
+                        # setText, und dorthin folgt der Scanner nicht.
+                        _rest = (" \u00b7 " + t("{n} runs in reserve").format(
+                                     n=_auf["rest_reserve"])
                                  if _auf["rest_reserve"] else "")
                         # Wandzeit = Wellen x Zeit je Versuch. Bei 1 Kopie
                         # ist das die volle Kette, bei N Kopien entsprechend
@@ -1500,8 +1524,12 @@ class BauplanTabs:
                         _dauer = ""
                         if _ipa:
                             _secs = _ipa * _auf["wellen"]
+                            # "bei N parallel" lief bis Sitzung 22 ohne t():
+                            # der Text wandert ueber die Variable `_dauer` in
+                            # setText, de_scan sieht dort nur einen Namen.
                             _dauer = (f' \u00b7 <b>{self._fmt_dur(_secs)}</b> '
-                                      f'bei {_auf["parallel"]} parallel')
+                                      + t("at {n} in parallel").format(
+                                          n=_auf["parallel"]))
                         self._inv_split_lbl.setText(
                             f'<span style="color:{theme.CYAN};">'
                             + t("{n}\u00d7 T1 copy with ").format(n=_auf["kopien"])
@@ -1557,12 +1585,13 @@ class BauplanTabs:
                         ).format(pct=f"{inv_struct_pct:.0f}")
                 # Auch hier zeilenweise; die Klammer-Erklaerungen wandern in
                 # den Tooltip, statt die Zeile zu verdoppeln.
-                _sc_rows = [(f'Materialkosten ({outcome["me_pct"]}% ME)',
+                _sc_rows = [(t("Material cost ({me}% ME)").format(
+                                 me=outcome["me_pct"]),
                              f"\u2248{isk(material_cost)}", None)]
                 if time_txt:
-                    _sc_rows.append(("Bauzeit", _bz_txt, None))
+                    _sc_rows.append((t("Build time"), _bz_txt, None))
                 if inv_time_txt:
-                    _sc_rows.append(("Invention-Zeit", _iz_txt, None))
+                    _sc_rows.append((t("Invention time"), _iz_txt, None))
                 score_lbl.setText(_kv_rows(_sc_rows))
                 # Unsichtbar, aber die Zahlen bleiben abrufbar: derselbe Text
                 # haengt am Ergebnis-Block, wo man den Decryptor waehlt.
@@ -1773,7 +1802,7 @@ class BauplanTabs:
             # Direkt beim Aufbau auch in opts eintragen (falls schon ein
             # Decryptor gewählt war, z.B. nach einer Mengenänderung).
             _dv0 = next((v for n, v in decryptor_list
-                        if n == self._bd_decryptor_map.get(bp_id, "Kein Decryptor")),
+                        if n == self._bd_decryptor_map.get(bp_id, KEIN_DECRYPTOR)),
                        None)
             if _dv0 and _dv0[4] is not None:
                 self._bd_opts.setdefault("inv_decryptor_map", {})[bp_id] = _dv0
@@ -3849,6 +3878,23 @@ class BauplanTabs:
                     # Aktivität merken (für "Blueprint-Name kopieren": Reaktion vs
                     # Fertigung -> "Reaction Formula" bzw. "Blueprint").
                     iit.setData(0, Qt.UserRole + 7, a.get("activity"))
+                    # DER NAME IST ANKLICKBAR (Nutzer, 15.09.2026): "im
+                    # Runplaner steht Silicon Diborite - klickt man drauf,
+                    # bekommt man Silicon Diborite Reaction Formula ins
+                    # Clipboard". Hier steht die Zeile schon fest, also wird
+                    # der Blaupausen-Name hier abgelegt; Rahmen malt
+                    # KopierRahmenDelegate, den Klick nimmt _sched_name_klick.
+                    # EINE Quelle fuer den Namen: _bp_name_fuer, dieselbe
+                    # Regel wie im Rechtsklick-Menue und in der BP-Spalte.
+                    iit.setData(0, ROLLE_KOPIERNAME,
+                                self._bp_name_fuer(a.get("name"),
+                                                   a.get("activity")))
+                    # RUNS FETT (Nutzer, 15.09.2026): das ist die Zahl, nach
+                    # der man ingame den Job einstellt - sie soll sich vom
+                    # Rest der Zeile abheben.
+                    _fr = iit.font(1)
+                    _fr.setBold(True)
+                    iit.setFont(1, _fr)
                     # BP-Spalte hervorheben, wenn mehr als 1 BP nötig (das ist die
                     # Info, wie viele Blueprints du aufteilen musst).
                     fb = iit.font(2)
@@ -3894,6 +3940,26 @@ class BauplanTabs:
                         mit.setTextAlignment(1, Qt.AlignCenter)
                         mit.setForeground(0, QColor(theme.MUTED))
                         mit.setForeground(1, QColor(theme.MUTED))
+                        # NIE ABHAKBAR (Nutzer, 15.09.2026, mit Zoom-Bild:
+                        # "dieser gruene Haken ist nicht von mir, den kann
+                        # ich nicht setzen ... ich kann ihn auch nicht
+                        # wegmachen"). Eine Material-Unterzeile ist eine
+                        # Stueckliste, keine Entscheidung - sie hatte nie ein
+                        # Kaestchen und soll auch keins bekommen.
+                        #
+                        # WARUM SIE TROTZDEM EINS BEKAM: QTreeWidgetItem
+                        # traegt Qt.ItemIsUserCheckable BEREITS in seinen
+                        # Standard-Flags (nachgemessen). Sichtbar wird ein
+                        # Kaestchen zwar erst mit CheckStateRole - aber die
+                        # Kinder-Kaskade in _on_sched_check ("hake ich den
+                        # Charakter ab, sollen seine Positionen mit") fragte
+                        # nur die Flags ab und setzte dann setCheckState.
+                        # Damit malte sie den Stuecklisten-Zeilen ein
+                        # Kaestchen samt Haken hin, und ein Loesen liess das
+                        # LEERE Kaestchen stehen (CheckStateRole ist dann 0,
+                        # nicht mehr None) - genau der Haken, der "von
+                        # niemandem" kam und nicht wegging.
+                        mit.setFlags(mit.flags() & ~Qt.ItemIsUserCheckable)
                         iit.addChild(mit)
                     # ---- ZUSTAND ANWENDEN: PUNKT STATT KAESTCHEN, GEDIMMT ---
                     # GANZ ZUM SCHLUSS, damit es die Faerbungen davor
@@ -4010,12 +4076,19 @@ class BauplanTabs:
                             _kopf.setToolTip(
                                 _txt("Click copies the blueprint name:")
                                 + f"\n{_bp_nm}")
+                            # GERAHMT WIE DIE RUN-ZAHLEN (Nutzer,
+                            # 15.09.2026: "alle anderen blueprints die da
+                            # vorkommen" sollen denselben kleinen Rahmen
+                            # tragen). Vorher war der Rahmen erst beim
+                            # Darueberfahren da - man sah dem Knopf nicht an,
+                            # dass er ueberhaupt einer ist.
                             _kopf.setStyleSheet(
-                                f"QPushButton{{background:transparent; "
-                                f"border:1px solid transparent; "
-                                f"color:{theme.AMBER}; padding:0px 6px;}}"
+                                f"QPushButton{{background:{theme.PANEL2}; "
+                                f"border:1px solid {theme.AMBER_DIM}; "
+                                f"color:{theme.AMBER}; border-radius:5px; "
+                                f"padding:0px 8px;}}"
                                 f"QPushButton:hover{{border-color:"
-                                f"{theme.AMBER_DIM}; border-radius:5px;}}")
+                                f"{theme.AMBER}; background:{theme.PANEL};}}")
                             _kopf.clicked.connect(
                                 lambda _c=False, _nm=_bp_nm:
                                 self._copy_bp_name_value(_nm))
@@ -4058,8 +4131,15 @@ class BauplanTabs:
                             # wenn sich Schriftgroesse oder Knopf-Rahmen
                             # spaeter aendern.
                             _cw.adjustSize()
-                            _hoehe = max(30, _cw.sizeHint().height() + 6)
+                            # DRITTER ANLAUF (Nutzer, 15.09.2026: "der Rahmen
+                            # ist an der Unterkante etwas abgeschnitten").
+                            # Mehr Luft UND dieselbe Hoehe fuer Spalte 0 -
+                            # dort sitzt seit heute der Rahmen um den
+                            # Formel-Namen, und die Zeilenhoehe richtet sich
+                            # nach der GROESSTEN Wunschhoehe der Zeile.
+                            _hoehe = max(34, _cw.sizeHint().height() + 10)
                             iit.setSizeHint(2, QSize(0, _hoehe))
+                            iit.setSizeHint(0, QSize(0, _hoehe))
                             tbl.setItemWidget(iit, 2, _cw)
                     except Exception:
                         pass       # Knoepfe sind Komfort, nie kritisch

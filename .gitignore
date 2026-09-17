@@ -40,3 +40,6 @@ README_*.txt
 .idea/
 Thumbs.db
 desktop.ini
+_sicherung_1.0.8/
+backup_*.bat
+backup_*_bericht.txt

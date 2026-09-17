@@ -12,6 +12,53 @@ sie ohne Qt-Fenster pruefbar ist.
 import os
 import sys
 
+# ---- PARSE-ZWISCHENSPEICHER (15.09.2026, Nutzer: "was frisst viel Zeit?")
+# GEMESSEN, nicht vermutet: die Suite ruft `ast.parse` 120-mal auf und
+# zerlegt dabei `main_window.py` (1,4 MB) NEUNMAL, `mw_bauplan_fenster.py`
+# achtmal, `mw_bauplan_tabs.py` achtmal. Jedes Mal dasselbe Ergebnis.
+# Mit Zwischenspeicher: 33,2 s -> 29,1 s (~12 %). Das wirkt doppelt, weil
+# die Rotprobe diese Suite je Mutation einmal komplett faehrt.
+#
+# AN EINER STELLE, NICHT AN 120: hier wird `ast.parse` selbst umgehaengt.
+# Die Suite benutzt ein Dutzend verschiedener Import-Aliase (`_ast355`,
+# `_ast122`, ...) - die zeigen aber alle auf DASSELBE Modulobjekt, also
+# greift der Speicher ueberall, ohne eine einzige Fundstelle anzufassen.
+#
+# WAS GEPRUEFT WIRD, AENDERT SICH NICHT: derselbe Quelltext ergibt denselben
+# Baum. Belegt wurde das NICHT mit der Anzahl gruener Pruefungen - die waere
+# auch bei einem stillen Ausfall gleich. Stattdessen lief die Suite zweimal,
+# mit und ohne Speicher, und protokollierte dabei JEDEN check()-Aufruf mit
+# Namen und Ergebnis: 3255 benannte Pruefungen, Zeile fuer Zeile identisch
+# (bytegleiche Dateien, PYTHONHASHSEED=0 gegen die zufaellige Reihenfolge in
+# Mengen-Ausgaben). Die restlichen 400 Zaehler der Gesamtzahl kommen aus der
+# Zufallsschleife aa3, die gar keinen Quelltext zerlegt.
+#
+# NUR DER EINFACHE FALL wird gespeichert (ein String, keine weiteren
+# Argumente). Alles andere geht unveraendert durch - ein Zwischenspeicher
+# darf nie raten.
+#
+# ACHTUNG FUER SPAETER: mehrere Pruefungen bekommen jetzt DENSELBEN Baum,
+# nicht je einen eigenen. Solange nur gelesen wird (und das tut die Suite
+# ueberall), ist das gleichwertig. Wer je einen Baum VERAENDERT - Knoten
+# umhaengen, Felder setzen -, muss vorher `copy.deepcopy` nehmen, sonst
+# sieht die naechste Pruefung die Aenderung der vorigen.
+import ast as _ast_speicher
+_PARSE_SPEICHER = {}
+_parse_echt = _ast_speicher.parse
+
+
+def _parse_gespeichert(quelle, *a, **k):
+    if isinstance(quelle, str) and not a and not k:
+        _baum = _PARSE_SPEICHER.get(quelle)
+        if _baum is None:
+            _baum = _parse_echt(quelle)
+            _PARSE_SPEICHER[quelle] = _baum
+        return _baum
+    return _parse_echt(quelle, *a, **k)
+
+
+_ast_speicher.parse = _parse_gespeichert
+
 # EIGENES ARBEITSVERZEICHNIS (Sitzung 10, nachgezogen von der b-Suite, die
 # das seit Sitzung 7 macht). Ohne diese Zeilen benutzt die Suite unter
 # Windows die ECHTEN Programmdaten des Nutzers - also seine richtige
@@ -930,7 +977,7 @@ MW._autolink_bau_structures(_b2, _known)
 eq("aa23 bestehende Verknuepfung wird nicht ueberschrieben",
    _b2[0]["link_structure_id"], 99)
 check("aa23 Liste kennzeichnet automatische Verknuepfungen",
-      '(automatisch)' in _src_txt)
+      '" (automatic)"' in _src_txt)
 
 # ---------------------------------------------------------------- (aa24)
 # NUTZER-MISSVERSTAENDNIS mit echtem Ausloeser: "Gewinn gesamt 4'664'785"
@@ -2908,7 +2955,7 @@ check("aa71 Randfall wird als Rand benannt",
 check("aa71 'Profitabel bis' nur bei echtem Kipppunkt",
       "not beyond" in _op71)
 check("aa71 sonst als durchgehend profitabel benannt",
-      "durchgehend profitabel" in _op71)
+      "Profitable throughout the calculated range" in _op71)
 
 
 # Die Fallunterscheidung selbst - beide Zweige, nicht nur einer:
@@ -3968,7 +4015,8 @@ check("aa97 gleiche Mechanik wie die Zusatzkosten",
 # er faellt einmal fuer den ganzen Plan an.
 _rb99 = _fn_src("rebuild")
 check("aa99 Tooltip-Summe ohne Transport",
-      '_r("<b>= Baukosten gesamt</b>",\n                           "<b>" + isk(total)' in _rb99)
+      '_r("<b>" + t("= total build cost") + "</b>",'
+      '\n                           "<b>" + isk(total)' in _rb99)
 check("aa99 Stueckzeile rechnet dasselbe wie die Karte",
       "isk(total / _q),\n                           theme.MUTED)" in _rb99)
 check("aa99 Transport verschwindet nicht, er steht separat",
@@ -4005,8 +4053,12 @@ check("aa100 eigene Zeile im Detail-Panel",
 # KEIN DOPPELABZUG: die Gewinnformel darf den Frachtanteil NICHT kennen -
 # er steckt schon in `total` (ueber die Materialkosten). Geprueft an der
 # Formel selbst, nicht an ihrer Umgebung.
+# NUR DIE FORMELN, nicht die Vorbelegung: seit Sitzung 22 stehen oben
+# `prof = None` und `prof_raw = None` (der Absturz ohne Verkaufspreis,
+# s. aa355). Ohne diesen Filter zaehlte die Pruefung vier "Formeln".
 _gf100 = [l.strip() for l in _rb100.split("\n")
-          if l.strip().startswith("prof = ") or l.strip().startswith("prof_raw = ")]
+          if (l.strip().startswith("prof = ") or l.strip().startswith("prof_raw = "))
+          and not l.strip().endswith("= None")]
 eq("aa100 beide Gewinnformeln gefunden", len(_gf100), 2)
 check("aa100 kein zweiter Abzug vom Gewinn",
       all("_fr_in_mat" not in _l for _l in _gf100))
@@ -4981,7 +5033,7 @@ check("aa127 Blaupausen-Tippfeld ist aus der Strategie-Karte raus",
 #    denn dann IST der Grund die Antwort (Arbeitsregel 6).
 _rb127 = _fn_src("_render_build")
 check("aa127 kurze Zeile bei Treffern",
-      'f"{len(deals)} Treffer"' in _rb127)
+      't("{n} hits").format(n=len(deals))' in _rb127)
 check("aa127 ohne Treffer bleibt der Grund sichtbar",
       "else:\n            self.build_status.setText(_full_status)" in _rb127)
 check("aa127 volle Diagnose geht nicht verloren",
@@ -5134,10 +5186,14 @@ check("aa133 'Liquide Massenware' ist gestrichen",
 # geprueft wird weiterhin, dass der NEUTRALE Eintrag existiert.
 # Sitzung 17: englische Schluessel (angezeigt wird die Uebersetzung).
 for _muss in ("Custom", "Profitable production (T1)",
-              "Profitable production (T2)", "Reactions only"):
+              "Profitable production (T2)", "Reactions only",
+              # NEU 15.09.2026 (Nutzer: "ich moechte auch Rigs finden
+              # koennen fuers Bauen"). Rigs waren nie ausgeschlossen, gehen
+              # aber zwischen den uebrigen Modulen unter - s. aa357.
+              "Rigs (T1 + T2)"):
     check(f"aa133 '{_muss}' bleibt",
           any(_muss in x for x in _pl133))
-eq("aa133 genau vier Eintraege", len(_pl133), 4)
+eq("aa133 genau fuenf Eintraege", len(_pl133), 5)
 
 # ---------------------------------------------------------------- (aa138)
 # DROGEN/BOOSTER RAUS AUS DEM REAKTIONEN-PRESET (Nutzer): die "Pure ..."-
@@ -5493,7 +5549,7 @@ check("aa144 kein Knopf kopiert mehr den Vollkauf",
       '_copy_rows("vollkauf"' not in _ccf144)
 check("aa144 die Fehlmengen-Liste bleibt (Nutzer: 'genau so ist es "
       "richtig')",
-      '_copy_rows("missing", "fehlende Position(en)")' in _ccf144)
+      '_copy_rows("missing", t("missing item(s)"))' in _ccf144)
 # Rechen-Beispiel als Kommentar-Beleg: gebautes Zwischenprodukt
 # (total 2705, built 2665, Bestand 40) -> vollkauf 40 (nur der aus
 # Bestand gedeckte Rest wird beschafft, die 2665 baust du); gekauftes
@@ -5735,7 +5791,7 @@ check("aa146 Ja loest den 🔒-Knopf (EIN Auftau-Pfad, keine Kopie)",
       and "QMessageBox.question" in _rufe146(_rc146_fn))
 check("aa146 Alt-Payload (nur Preise fest) rechnet weiter wie bisher",
       "plan_snapshot" in _rc146
-      and "Mit eingefrorenen Preisen neu gerechnet" in _rc146)
+      and "Recalculated with frozen prices" in _rc146)
 
 # Einfrieren legt den Schnappschuss ins Payload.
 check("aa146 _on_freeze_toggle packt den Plan ein",
@@ -7562,13 +7618,17 @@ check("aa177 die Anzahl steht als eigenes Label VOR dem Knopf",
       and _rp177.find('QLabel(f"{_anz}') < _rp177.find("QPushButton(str(_r))"))
 check("aa177 der Knopf traegt NUR die Zahl, die kopiert wird",
       "QPushButton(str(_r))" in _rp177)
-# NUTZER meldete das ZWEIMAL: eine geratene Festhoehe (30 px) war exakt
-# auf Kante - das Widget will selbst 30 px, der Rahmen wurde beschnitten.
-# Jetzt wird die Wunschhoehe GEMESSEN und Luft draufgegeben.
+# NUTZER meldete das DREIMAL: eine geratene Festhoehe (30 px) war exakt auf
+# Kante, dann reichte "gemessen + 6" immer noch nicht. Seit Sitzung 22 sind
+# es +10 und mindestens 34 - UND dieselbe Hoehe fuer Spalte 0, wo seither
+# der Rahmen um den Formel-Namen sitzt. Die Zeilenhoehe richtet sich nach
+# der GROESSTEN Wunschhoehe der Zeile; fehlte Spalte 0, schnitt sie ab.
 check("aa177 und die Zeile ist hoch genug fuer den Knopf (nicht beschnitten)",
       "_cw.adjustSize()" in _rp177
-      and "_cw.sizeHint().height() + 6" in _rp177
-      and "iit.setSizeHint(2, QSize(0, _hoehe))" in _rp177)
+      and "_cw.sizeHint().height() + 10" in _rp177
+      and "max(34," in _rp177
+      and "iit.setSizeHint(2, QSize(0, _hoehe))" in _rp177
+      and "iit.setSizeHint(0, QSize(0, _hoehe))" in _rp177)
 check("aa177 die Hoehe ist gemessen, nicht geraten",
       "QSize(0, 30))" not in _rp177)
 check("aa177 der Text wandert ins Widget, damit er nicht doppelt steht",
@@ -8071,7 +8131,7 @@ check("aa187 und erst NACH der Aufzeichnung zurueckgegeben",
 eq("aa187 es gibt GENAU EINE Rueckgabe der festen Zuweisung",
    _bs187.count("return _fest"), 1)
 check("aa187 die Rangliste benennt die feste Zuweisung ehrlich",
-      "(fest zugewiesen)" in _bs187)
+      "{name} (fixed assignment)" in _bs187)
 check("aa187 der Filter-Fruehausstieg verschluckt die Zuweisung nicht",
       "if not structs and _fest is None:" in _bs187)
 _mm187 = _fn_src("_bau_me_maps")
@@ -10428,7 +10488,7 @@ try:
        _sp234.t("Load blueprints"), "Load blueprints")
     _sp234.sprache_setzen("de")
     eq("aa234 auf Deutsch kommt die Uebersetzung",
-       _sp234.t("Load blueprints"), "Baurezepte laden")
+       _sp234.t("Load blueprints"), "Blaupausen laden")
     eq("aa234 ein fehlender Eintrag bleibt englisch",
        _sp234.t("Totally unknown text"), "Totally unknown text")
     # Unbekannte Sprache -> Englisch. Lieber die Standardsprache als eine
@@ -12575,6 +12635,124 @@ check(f"aa271 de_scan4.py steigt nicht ueber die Ratsche "
       f"({_de4_271} <= {_RATSCHE4_271})",
       _de4_271 is not None and _de4_271 <= _RATSCHE4_271)
 
+# FUENFTER SCANNER (Sitzung 22). AUSLOESER: der Nutzer meldete zwei deutsche
+# Texte im Invention-Tab ("% Erfolg", "bei N parallel") - und ALLE VIER
+# Scanner oben standen dabei auf 0. Die Nachschau fand nicht zwei Stellen,
+# sondern rund fuenfzig: jedes "kopiert ✓", "Bester Gewinn:",
+# "Baukosten gesamt", "Materialkosten (…% ME)", "Bauzeit", "Silber".
+#
+# WARUM KEINER ANSCHLUG - beide Gruende gehoeren zusammen:
+#  1. de_scan/de_scan3 folgen einem Text bis zu einem ANZEIGE-Aufruf. Was
+#     ueber einen eigenen Helfer laeuft (`_flash_tip`, `parts.append`,
+#     `addItem(_dv_label(...))`), erreichen sie nie.
+#  2. de_scan4 fragt gegen eine HANDGEPFLEGTE Wortliste. "Erfolg",
+#     "kopiert", "Baukosten", "bei" standen nicht drin. Eine Liste, die
+#     jemand pflegen muss, ist so vollstaendig wie die letzte Sitzung, in
+#     der jemand daran gedacht hat.
+#
+# de_scan5 zieht sein Vokabular aus dem KATALOG (deutsche Uebersetzungen
+# minus englische Schluessel) und pflegt sich damit selbst: wer einen
+# deutschen Text eintraegt, erweitert die Suche mit.
+_RATSCHE5_271 = 0     # Sitzung 22: 55 -> 0
+_de5_271 = _scan271("de_scan5.py")
+check(f"aa271 de_scan5.py steigt nicht ueber die Ratsche "
+      f"({_de5_271} <= {_RATSCHE5_271})",
+      _de5_271 is not None and _de5_271 <= _RATSCHE5_271)
+# DEN SCANNER SELBST PRUEFEN. Eine Zaehlung von 0 beweist nichts, wenn der
+# Scanner nichts mehr findet - genau die Falle, in der de_scan3 und
+# de_scan4 gemeinsam auf 0 standen. Deshalb: das Vokabular muss die
+# Woerter kennen, die 1.0.7 durchgerutscht sind, UND an einer gebauten
+# Probe muss er anschlagen.
+_d5_271 = _il271.import_module("de_scan5")
+for _w271 in ("erfolg", "kopiert", "baukosten", "materialkosten", "bei"):
+    check(f"aa271 de_scan5 kennt das Wort '{_w271}' aus dem Katalog",
+          _w271 in getattr(_d5_271, "_NUR_DEUTSCH", set()))
+check("aa271 de_scan5 laesst englische Woerter in Ruhe",
+      not ({"portfolio", "total", "parallel", "standard"}
+           & getattr(_d5_271, "_NUR_DEUTSCH", set())))
+_probe271 = os.path.join(_tmp223.mkdtemp(prefix="de5-"), "probe.py")
+with open(_probe271, "w", encoding="utf-8") as _fh271:
+    # GENAU DIE ZWEI GEMELDETEN BAUFORMEN: ein f-String, dessen deutsches
+    # Stueck neben einem Platzhalter steht, und einer, der ueber eine
+    # Variable in setText wandert. Beide standen 1.0.7 im Code.
+    _fh271.write('def f(pm, n):\n'
+                 '    bits.append(f"{pm}% Erfolg")\n'
+                 '    _dauer = f"bei {n} parallel"\n'
+                 '    return bits, _dauer\n')
+_treffer271 = _d5_271.scan_datei(_probe271)
+_zeilen271 = {_z for _z, _w, _s in _treffer271}
+check("aa271 de_scan5 findet '% Erfolg' (Helfer-Fall, de_scan blind)",
+      2 in _zeilen271)
+check("aa271 de_scan5 findet 'bei N parallel' (Variablen-Fall)",
+      3 in _zeilen271)
+# UND ER SCHWEIGT, WO t() STEHT - sonst waere er nur ein Zaehler, der
+# immer rot ist, und niemand schaut mehr hin.
+_probe271b = os.path.join(_tmp223.mkdtemp(prefix="de5b-"), "probe.py")
+with open(_probe271b, "w", encoding="utf-8") as _fh271b:
+    _fh271b.write('def f(pm, n):\n'
+                  '    bits.append(t("{v}% success").format(v=pm))\n'
+                  '    return bits\n')
+eq("aa271 de_scan5 meldet uebersetzten Text NICHT",
+   _d5_271.scan_datei(_probe271b), [])
+
+# SECHSTER SCANNER (Sitzung 22, zweite Runde). de_scan5 sucht nach SPRACHE,
+# de_scan6 nach dem WEG: eine Textkonstante, die erst einer lokalen Variable
+# zugewiesen wird und ueber die in einem Anzeige-Aufruf landet. Genau so lagen
+# BEIDE vom Nutzer gemeldeten Texte im Code ("_dauer", "_rest") - de_scan3
+# endet an so einer Zuweisung, wenn der Variablenname nicht nach Anzeige
+# klingt. Sprache spielt hier keine Rolle: " Runs Reserve" war englisch ohne
+# t() und waere in der deutschen Fassung englisch geblieben.
+_RATSCHE6_271 = 0     # Sitzung 22: 20 -> 0
+_de6_271 = _scan271("de_scan6.py")
+check(f"aa271 de_scan6.py steigt nicht ueber die Ratsche "
+      f"({_de6_271} <= {_RATSCHE6_271})",
+      _de6_271 is not None and _de6_271 <= _RATSCHE6_271)
+_d6_271 = _il271.import_module("de_scan6")
+_probe271c = os.path.join(_tmp223.mkdtemp(prefix="de6-"), "probe.py")
+with open(_probe271c, "w", encoding="utf-8") as _fh271c:
+    _fh271c.write('def f(self, n):\n'
+                  '    _dauer = f"bei {n} parallel"\n'
+                  '    _rest = f" {n} Runs Reserve"\n'
+                  '    self.lbl.setText(_dauer + _rest)\n')
+_zeilen6_271 = {_z for _z, _s in _d6_271.scanne(_probe271c)}
+check("aa271 de_scan6 findet den Variablen-Weg (deutscher Text)",
+      2 in _zeilen6_271)
+check("aa271 de_scan6 findet ihn auch bei ENGLISCHEM Text ohne t()",
+      3 in _zeilen6_271)
+_probe271d = os.path.join(_tmp223.mkdtemp(prefix="de6b-"), "probe.py")
+with open(_probe271d, "w", encoding="utf-8") as _fh271d:
+    _fh271d.write('def f(self, n):\n'
+                  '    _dauer = t("at {n} in parallel").format(n=n)\n'
+                  '    self.lbl.setText(_dauer)\n')
+eq("aa271 de_scan6 meldet uebersetzten Text NICHT",
+   _d6_271.scanne(_probe271d), [])
+# Die eigenen Anzeige-Helfer muessen als Senke bekannt bleiben - ueber sie
+# lief "% Erfolg" (addItem(_dv_label(...))) und jedes "kopiert ✓".
+for _h271 in ("_flash_tip", "_copied_popup", "_dv_label", "_kv_rows"):
+    check(f"aa271 de_scan6 kennt den Anzeige-Helfer {_h271}",
+          _h271 in getattr(_d6_271, "SENKEN", set()))
+
+# EINE UEBERSETZTE MELDUNG DARF NICHT AM WORTLAUT WIEDERERKANNT WERDEN.
+# In main_window stand `if "Kein Zugriff" in str(msg)` - `msg` ist aber der
+# bereits UEBERSETZTE Text. Auf der englischen Oberflaeche hiess er
+# "No access to the order book of ...", die Bedingung traf nie zu, und die
+# Neupruefung der Struktur (Nutzer-Wunsch "dann soll sie nicht auswaehlbar
+# sein") lief dort NIE an. Seit Sitzung 22 geht der Vergleich ueber den
+# Katalog - hier in BEIDEN Sprachen nachgemessen.
+from eve_trader import hubs as _hubs271
+_key271 = _hubs271.KEIN_ZUGRIFF_SCHLUESSEL
+check("aa271 der 401/403-Schluessel steht im Katalog",
+      _key271 in _sp234.KATALOG["de"])
+check("aa271 der englische Wortlaut wird als Zugriffsfehler erkannt",
+      _hubs271.ist_zugriffsfehler(_key271.format(name="X-1")))
+check("aa271 der deutsche Wortlaut ebenso",
+      _hubs271.ist_zugriffsfehler(
+          _sp234.KATALOG["de"][_key271].format(name="X-1")))
+check("aa271 und eine fremde Meldung nicht",
+      not _hubs271.ist_zugriffsfehler("Hub fetch incomplete: 3 of 9 pages"))
+check("aa271 main_window prueft nicht mehr auf den deutschen Wortlaut",
+      '"Kein Zugriff" in str(msg)' not in _src_txt)
+
 # TEXTE OHNE WOERTLICHES t("...") - aa257 sieht nur woertliche Aufrufe. Diese
 # hier gehen als Konstante durch t(): steht eine nicht im Katalog, bleibt sie
 # auf der deutschen Oberflaeche englisch, und niemand merkt es.
@@ -12583,7 +12761,9 @@ from eve_trader import esi as _esi271
 for _nm271, _txt271 in (("CCP_HINWEIS", getattr(_et271, "CCP_HINWEIS", None)),
                         ("_ESI_403_TEXT", getattr(_esi271, "_ESI_403_TEXT", None)),
                         ("_ESI_NICHT_EINGELOGGT",
-                         getattr(_esi271, "_ESI_NICHT_EINGELOGGT", None))):
+                         getattr(_esi271, "_ESI_NICHT_EINGELOGGT", None)),
+                        ("hubs.KEIN_ZUGRIFF_SCHLUESSEL",
+                         getattr(_hubs271, "KEIN_ZUGRIFF_SCHLUESSEL", None))):
     check(f"aa271 {_nm271} steht im Katalog",
           bool(_txt271) and _txt271 in _sp234.KATALOG["de"])
 
@@ -15711,9 +15891,15 @@ eq("aa352 Standard: Decryptoren kaufen", _cfg336.DEFAULT_SETTINGS["bau_buy_decry
 # Kosten je Stueck. Bei ihm traf es die Capital-Blaupausen, die "no contract
 # price" tragen: Revenant, Molok, Vanquisher.
 _rb353 = _fn_src("rebuild")
+# BEIDE ANKER MUESSEN DA SEIN. `_pos_von` gibt bei einem fehlenden Anker
+# bewusst 0 zurueck (damit die Suite weiterlaeuft) - ein reiner
+# "kleiner als"-Vergleich blieb dadurch GRUEN, wenn die Stueckzahl ganz
+# verschwand. Die Rotprobe meldete diese Mutation deshalb als BLIND,
+# obwohl der Ausfall woanders auffiel. Jetzt faellt genau sie hier auf.
+_iq353 = _rb353.find("_q = max(1, int(qty or 1))")
+_iif353 = _rb353.find("if _sell_eff:")
 check("aa353 die Stueckzahl steht VOR der Verzweigung",
-      _pos_von(_rb353, "_q = max(1, int(qty or 1))")
-      < _pos_von(_rb353, "if _sell_eff:"))
+      _iq353 >= 0 and _iif353 >= 0 and _iq353 < _iif353)
 check("aa353 und wird nur EINMAL gesetzt",
       _rb353.count("_q = max(1, int(qty or 1))") == 1)
 check("aa353 der Tooltip benutzt sie weiterhin",
@@ -15771,6 +15957,608 @@ check("aa354 die Umleitung wird beim Start aktiviert",
 check("aa354 und zwar VOR dem Hauptfenster",
       _pos_von(open("eve_trader/__main__.py", encoding="utf-8").read(), "_tt.aktivieren()")
       < _pos_von(open("eve_trader/__main__.py", encoding="utf-8").read(), "win = MainWindow()"))
+
+# ---------------------------------------------------------------- (aa355)
+# OHNE VERKAUFSPREIS DARF DER BAUPLAN NICHT ABSTUERZEN.
+# NUTZER "buyenne" (Discord, 15.09.2026): Hel und Phoenix stuerzten beim
+# Oeffnen ab, Stork und Avalanche nicht - Capitals haben in Jita praktisch
+# keine Sell-Orders. Ohne geladene Contract-Preise bleibt `_sell_eff` leer.
+#   UnboundLocalError: cannot access local variable 'gross'
+#
+# DIE FEHLERKLASSE, nicht nur der eine Name: im Block `if _sell_eff:` von
+# `rebuild` entstehen die Gewinn-Zahlen. Die rechte Spalte liest sie
+# danach BEDINGUNGSLOS. `marge` und `fees` waren vorbelegt, `gross` und
+# `prof` wurden beim Nachruesten der Spalte vergessen. Wer morgen eine
+# weitere Zahl in den Block schreibt und unten liest, macht denselben
+# Fehler - deshalb prueft das hier den GANZEN Block, nicht vier Namen.
+#
+# Der Verhaltenstest dazu ist b7d in test_bauplan_aufbau.py; diese hier ist
+# die strukturelle Gegenprobe, die auch dann anschlaegt, wenn das
+# Testszenario den neuen Namen nicht beruehrt.
+import ast as _ast355                                        # noqa: E402
+_src355 = open(os.path.join(_here222, "eve_trader", "ui",
+                            "mw_bauplan_fenster.py"), encoding="utf-8").read()
+_baum355 = _ast355.parse(_src355)
+_rebuild355 = None
+for _n355 in _ast355.walk(_baum355):
+    if isinstance(_n355, _ast355.FunctionDef) and _n355.name == "rebuild":
+        if _rebuild355 is None or ((_n355.end_lineno - _n355.lineno)
+                                   > (_rebuild355.end_lineno - _rebuild355.lineno)):
+            _rebuild355 = _n355
+check("aa355 rebuild() ist auffindbar", _rebuild355 is not None)
+_block355 = None
+for _n355 in _ast355.walk(_rebuild355):
+    if isinstance(_n355, _ast355.If) and isinstance(_n355.test, _ast355.Name) \
+       and _n355.test.id == "_sell_eff":
+        _block355 = _n355
+check("aa355 der Gewinn-Block haengt weiterhin an `if _sell_eff:`",
+      _block355 is not None)
+
+
+def _namen355(knoten, ctx):
+    return {x.id for x in _ast355.walk(knoten)
+            if isinstance(x, _ast355.Name) and isinstance(x.ctx, ctx)}
+
+
+_im_block355 = _namen355(_block355, _ast355.Store)
+# Vor dem Block unbedingt vorbelegt? (Zuweisung auf der Ebene von rebuild,
+# oberhalb des Blocks - genau dort stehen `marge = None` und `fees = 0.0`.)
+_vorbelegt355 = set()
+for _n355 in _ast355.walk(_rebuild355):
+    if isinstance(_n355, (_ast355.Assign, _ast355.AnnAssign, _ast355.AugAssign)) \
+       and _n355.lineno < _block355.lineno:
+        _ziele355 = (_n355.targets if isinstance(_n355, _ast355.Assign)
+                     else [_n355.target])
+        for _z355 in _ziele355:
+            _vorbelegt355 |= _namen355(_z355, _ast355.Store)
+# Wer wird NACH dem Block gelesen, ohne vorbelegt zu sein?
+_ungedeckt355 = sorted(
+    {x.id for x in _ast355.walk(_rebuild355)
+     if isinstance(x, _ast355.Name) and isinstance(x.ctx, _ast355.Load)
+     and x.id in _im_block355 and x.id not in _vorbelegt355
+     and x.lineno > _block355.end_lineno})
+eq("aa355 keine Gewinn-Zahl wird ohne Verkaufspreis gelesen, die es dann "
+   "gar nicht gibt", _ungedeckt355, [])
+# UND DIE VORBELEGUNG DARF KEINE ZAHL ERFINDEN: eine 0 im Feld "Gewinn"
+# liest sich wie ein gerechnetes Ergebnis (dieselbe Fehlerklasse, die in
+# Sitzung 9 fuenf von sieben Fehlern ausgemacht hat). None wird zum Strich.
+for _nm355 in ("gross", "prof", "marge"):
+    check(f"aa355 {_nm355} ist ohne Verkaufspreis None, nicht 0",
+          f"\n            {_nm355} = None\n" in _src355)
+
+# ---------------------------------------------------------------- (aa356)
+# EINE ABLAGE FUER CONTRACT-PREISE, NICHT ZWEI.
+# Der Capital-Scan speichert nach store.ALL_REGIONS (New Eden). Die
+# Capital-Tabelle liest beides - erst die Region, dann New Eden darueber.
+# DAS OEFFNEN DES BAUPLANS LAS BIS SITZUNG 22 NUR DIE REGION: wer im
+# Capital-Modus Contract-Preise geladen hatte, bekam im Bauplan trotzdem
+# keinen Preis. Genau das fuehrte zum Absturz aus dem Bugreport (aa355).
+# Zwei Ablagen fuer dieselbe Frage - dieselbe Fehlerklasse wie zwei Dateien
+# mit denselben Zahlen.
+_bp356 = open(os.path.join(_here222, "eve_trader", "ui", "main_window.py"),
+              encoding="utf-8").read()
+_i356 = _bp356.find("sell_is_contract = False")
+# GROSSZUEGIGES FENSTER: die Begruendung daneben ist laenger als der Code.
+_ab356 = _bp356[_i356:_i356 + 1600] if _i356 >= 0 else ""
+check("aa356 das Oeffnen des Bauplans liest den regionalen Stand",
+      "store.get_scan_region()" in _ab356)
+check("aa356 UND den New-Eden-Stand", "store.ALL_REGIONS" in _ab356)
+check("aa356 New Eden gewinnt (update danach, nicht davor)",
+      _pos_von(_ab356, "store.get_scan_region()")
+      < _pos_von(_ab356, "store.ALL_REGIONS"))
+# DER KNOPF STEHT IN DER LEISTE, nicht nur im Menue (Nutzer-Wunsch
+# 15.09.2026). Verhalten prueft b7e; hier nur, dass er nicht wieder
+# zurueck ins Dropdown wandert.
+_bf356 = open(os.path.join(_here222, "eve_trader", "ui",
+                           "mw_bauplan_fenster.py"), encoding="utf-8").read()
+check("aa356 der Contract-Knopf haengt in der Knopfleiste",
+      "ctrl.addWidget(ct_btn)" in _bf356)
+check("aa356 der Menueeintrag bleibt zusaetzlich bestehen",
+      '_txt("Load contract prices (New Eden)")' in _bf356)
+check("aa356 und er blinkt ueber DIESELBE Regel wie der Markt-Scan",
+      "self._blink_rahmen(" in _bf356
+      and "def _blink_rahmen(" in _bp356
+      and _bp356.count("def _blink_rahmen(") == 1)
+
+# ---------------------------------------------------------------- (aa357)
+# RIGS FINDEN (Nutzer, 15.09.2026: "Preset Filter nur fuer Rigs ... ich
+# moechte auch Rigs finden koennen fuers Bauen").
+# BEFUND VORWEG: Rigs waren NIE ausgeschlossen - Kategorie 7 (Modul),
+# Meta 1/2, in keiner Sperrliste. Sie gehen nur zwischen allen anderen
+# Modulen unter, und der Feinfilter kennt nur "Module" als Ganzes.
+#
+# DIE NAMENSREGEL IST DIE FALLE: der gemeinsame Helfer _gids_matching_from
+# sucht TEILWORTE, und "rig" steckt auch in "F-rig-ate". Deshalb eine
+# eigene Regel auf den Namensanfang - und genau das wird hier gemessen.
+eq("aa357 die Rig-Gruppen werden erkannt",
+   _I122._rig_gids_from({1: "Rig Armor", 2: "Rig Shield",
+                         3: "Rig Resource Processing"}),
+   {1, 2, 3})
+eq("aa357 Fregatten sind KEINE Rigs (Teilwort-Falle)",
+   _I122._rig_gids_from({4: "Frigate", 5: "Assault Frigate",
+                         6: "Storyline Frigate"}),
+   set())
+eq("aa357 'Rigging' (Skill) ist kein Rig",
+   _I122._rig_gids_from({7: "Rigging"}), set())
+eq("aa357 die Rig-BLAUPAUSEN-Gruppe bleibt draussen",
+   _I122._rig_gids_from({8: "Rig Blueprint"}), set())
+eq("aa357 leere Eingabe -> leeres Set (Schutzgitter)",
+   _I122._rig_gids_from(None), set())
+# DAS PRESET SELBST.
+_rp357 = dict([(l, p) for l, p in MW._BUILD_PRESETS
+               if l == "Rigs (T1 + T2)"] or [(None, None)])
+check("aa357 das Preset traegt den Rig-Schalter",
+      bool((_rp357.get("Rigs (T1 + T2)") or {}).get("rigs")))
+check("aa357 und laesst die Tech-Stufe offen (es gibt T1- UND T2-Rigs)",
+      (_rp357.get("Rigs (T1 + T2)") or {}).get("tech") == "all")
+# DIE VERDRAHTUNG: Schalter setzen, beim neutralen Eintrag zuruecksetzen,
+# und im Scan die Gruppe verengen.
+_so357 = open(os.path.join(_here222, "eve_trader", "ui",
+                           "mw_optimizer.py"), encoding="utf-8").read()
+check("aa357 das Preset setzt den Schalter",
+      'self._build_rigs_only = bool(p.get("rigs", False))' in _so357)
+check("aa357 und 'Eigene Einstellung' setzt ihn zurueck",
+      "self._build_rigs_only = False" in _so357)
+check("aa357 die Hinweiszeile kann auch wieder LEER werden",
+      '_nur = ""' in _so357)
+_sm357 = open(os.path.join(_here222, "eve_trader", "ui",
+                           "main_window.py"), encoding="utf-8").read()
+check("aa357 der Scan verengt auf die Rig-Gruppen",
+      "if rigs_only and _rig_gids and _g not in _rig_gids:" in _sm357)
+# SCHUTZGITTER: ohne SDE ist das Set leer - dann darf NICHT alles
+# wegfallen, sonst stuende der Nutzer vor einer leeren Liste ohne Grund.
+check("aa357 ohne Gruppen filtert nichts (Schutzgitter)",
+      "industry.rig_group_ids() if rigs_only else set()" in _sm357)
+check("aa357 Rigs laufen durch DIESELBEN Tore wie andere Module",
+      _pos_von(_sm357, "rigs_only and _rig_gids") > 0
+      and _pos_von(_sm357, "if meta not in self._BUILDABLE_META:") > 0
+      and (_pos_von(_sm357, "rigs_only and _rig_gids")
+           < _pos_von(_sm357, "if meta not in self._BUILDABLE_META:")))
+# UND DIE KATEGORIE, in der Rigs liegen, muss bei "Alle Kategorien"
+# ueberhaupt durchkommen - sonst waere das Preset wirkungslos.
+check("aa357 Module (Kategorie 7) sind im Scan zugelassen",
+      7 in MW._SELLABLE_CATEGORIES)
+
+# ---------------------------------------------------------------- (aa358)
+# NUR STATION-CONTAINER WURDEN GETRACKT (Nutzer-Befund 15.09.2026: "das
+# Portfolio trackt nur Items in Station Containern und in keinen anderen
+# Containern").
+#
+# URSACHE: ein Behaelter wurde am INHALT erkannt - daran, dass dessen
+# ESI-Markierung `Unlocked`/`Locked` lautete. Die tragen nur die
+# abschliessbaren Station-Container. Ein Freight Container im Hangar galt
+# damit als gewoehnliches Item, sein Inhalt war fuer das Portfolio nicht
+# vorhanden. Jetzt wird der BEHAELTER an seinem TYP erkannt (SDE-Gruppe).
+from eve_trader.esi import hangar_und_container as _H358          # noqa: E402
+_FREIGHT358 = 24445        # irgendein Behaelter-Typ; welcher, ist egal
+_HANGAR358 = 60003760
+# 1. DER GEMELDETE FALL, nachgestellt: Inhalt OHNE Schloss-Markierung.
+_b358 = [{"item_id": 10, "type_id": _FREIGHT358, "location_id": _HANGAR358,
+          "location_flag": "Hangar", "quantity": 1},
+         {"item_id": 11, "type_id": 34, "location_id": 10,
+          "location_flag": "Cargo", "quantity": 900}]
+_h_alt358, _c_alt358 = _H358(_b358, set())
+eq("aa358 OHNE Typwissen bleibt der Inhalt unsichtbar (der alte Zustand)",
+   (_h_alt358, _c_alt358), ({_FREIGHT358: 1}, []))
+_h358, _c358 = _H358(_b358, {_FREIGHT358})
+eq("aa358 MIT Typwissen wird der Behaelter erkannt", len(_c358), 1)
+
+
+def _inhalt358(liste):
+    """Inhalt des ersten Behaelters - ODER {} statt eines Absturzes.
+
+    NICHT `liste[0]["contents"]`: findet die Regel keinen Behaelter mehr,
+    ist die Liste leer, und ein IndexError reisst die GANZE Suite ab. Die
+    Rotprobe meldet dann BLIND statt ROT - genau so ist diese Mutation beim
+    ersten Anlauf durchgerutscht (dieselbe Falle wie bei b7h).
+    """
+    return liste[0]["contents"] if liste else {}
+
+
+eq("aa358 und sein Inhalt gezaehlt - egal welche Markierung",
+   _inhalt358(_c358), {34: 900})
+eq("aa358 der Behaelter selbst zaehlt nicht als loses Hangar-Item",
+   _h358, {})
+# 2. DIE ALTE REGEL BLEIBT: Station-Container ohne SDE weiter erkannt.
+_s358 = [{"item_id": 1, "type_id": 17366, "location_id": _HANGAR358,
+          "location_flag": "Hangar", "quantity": 1},
+         {"item_id": 2, "type_id": 34, "location_id": 1,
+          "location_flag": "Unlocked", "quantity": 500}]
+eq("aa358 Station-Container werden auch OHNE SDE weiter erkannt",
+   _inhalt358(_H358(_s358, set())[1]), {34: 500})
+# 3. EIN SCHIFF IST KEIN BEHAELTER - sonst zaehlten gefittete Module als
+# Lagerbestand, und ein zu hoch ausgewiesener Bestand ist die gefaehrliche
+# Richtung (Regel 3).
+_sh358 = [{"item_id": 20, "type_id": 587, "location_id": _HANGAR358,
+           "location_flag": "Hangar", "quantity": 1},
+          {"item_id": 21, "type_id": 2048, "location_id": 20,
+           "location_flag": "HiSlot0", "quantity": 1}]
+eq("aa358 ein Schiff im Hangar bleibt ein Item, kein Behaelter",
+   _H358(_sh358, {_FREIGHT358}), ({587: 1}, []))
+# 4. BEHAELTER IM BEHAELTER: eine Ebene tiefer wird weitergezaehlt.
+_n358 = [{"item_id": 30, "type_id": _FREIGHT358, "location_id": _HANGAR358,
+          "location_flag": "Hangar", "quantity": 1},
+         {"item_id": 31, "type_id": _FREIGHT358, "location_id": 30,
+          "location_flag": "Cargo", "quantity": 1},
+         {"item_id": 32, "type_id": 34, "location_id": 31,
+          "location_flag": "Cargo", "quantity": 7}]
+eq("aa358 verschachtelte Behaelter werden mitgezaehlt",
+   _inhalt358(_H358(_n358, {_FREIGHT358})[1]), {_FREIGHT358: 1, 34: 7})
+# 5. DIE GRUPPENREGEL. "Freighter" ist ein SCHIFF und darf nicht mitkommen.
+eq("aa358 Behaelter-Gruppen werden erkannt",
+   _I122._container_gids_from({1: "Cargo Container", 2: "Freight Container",
+                               3: "Audit Log Secure Container"}),
+   {1, 2, 3})
+eq("aa358 Freighter/Jump Freighter sind KEINE Behaelter",
+   _I122._container_gids_from({4: "Freighter", 5: "Jump Freighter",
+                               6: "Irregular Freighter"}),
+   set())
+eq("aa358 Behaelter-BLAUPAUSEN bleiben draussen",
+   _I122._container_gids_from({7: "Container Blueprints"}), set())
+eq("aa358 leere Eingabe -> leeres Set (Schutzgitter)",
+   _I122._container_gids_from(None), set())
+# 6. DER ABRUF BENUTZT DIE NEUE REGEL WIRKLICH.
+_se358 = open(os.path.join(_here222, "eve_trader", "esi.py"),
+              encoding="utf-8").read()
+check("aa358 der Assets-Abruf reicht die Behaelter-Typen durch",
+      "hangar_und_container(assets, _ctypes)" in _se358)
+check("aa358 und holt sie ohne Absturzrisiko",
+      "def container_type_ids_safe()" in _se358)
+
+# ---------------------------------------------------------------- (aa360)
+# DER BAUPLAN-BEREICH "UEBERALL" ZAEHLT WIE DAS PORTFOLIO.
+# NUTZER-FRAGE 16.09.2026, nachdem aa358 das Portfolio geheilt hatte: zaehlt
+# der Bauplan Material aus Frachtcontainern? Im ortsgebundenen Bereich
+# ("Nur Bau-Strukturen", der Standard) ja - `assets_at_locations` steigt in
+# JEDES Kind hinab und fragt keine Markierung. Im Bereich "Ueberall" lief
+# aber `fetch_assets` mit einer ZWEITEN, eigenen Regel: Inhalt nur bei
+# `Unlocked`/`Locked`. Genau die Regel, an der das Portfolio gescheitert
+# ist. Jetzt benutzen beide `hangar_summe`.
+#
+# DIE RICHTUNG IST WICHTIG (Regel 3): die neue Regel ist ein OBERBEGRIFF der
+# alten, sie kann also nichts wegnehmen. Deshalb steht unten beides - der
+# neue Fall UND der alte, der weiter gelten muss.
+from eve_trader.esi import hangar_summe as _HS360                  # noqa: E402
+_FREIGHT360 = 24445
+_HANGAR360 = 60003760
+# 1. DER GEMELDETE FALL: Inhalt ohne Schloss-Markierung zaehlt jetzt mit.
+_b360 = [{"item_id": 10, "type_id": _FREIGHT360, "location_id": _HANGAR360,
+          "location_flag": "Hangar", "quantity": 1},
+         {"item_id": 11, "type_id": 34, "location_id": 10,
+          "location_flag": "Cargo", "quantity": 900}]
+eq("aa360 Inhalt eines Frachtcontainers zaehlt zum Bestand",
+   _HS360(_b360, {_FREIGHT360}), {_FREIGHT360: 1, 34: 900})
+# 2. DER BEHAELTER SELBST DARF NICHT VERSCHWINDEN. Ein Cargo Container ist
+# ein baubares Item und kann Material sein; ihn fallen zu lassen waere ein
+# zu NIEDRIGER Bestand - und damit ein Einkauf zu viel.
+check("aa360 der Behaelter selbst bleibt gezaehlt",
+      _HS360(_b360, {_FREIGHT360}).get(_FREIGHT360) == 1)
+# 3. DER ALTE FALL GILT WEITER: Station-Container, auch ohne SDE-Typwissen.
+_s360 = [{"item_id": 1, "type_id": 17366, "location_id": _HANGAR360,
+          "location_flag": "Hangar", "quantity": 1},
+         {"item_id": 2, "type_id": 34, "location_id": 1,
+          "location_flag": "Unlocked", "quantity": 500}]
+eq("aa360 Station-Container zaehlen weiter, auch ohne Typwissen",
+   _HS360(_s360, set()), {17366: 1, 34: 500})
+# 4. GEGENPROBE: ein SCHIFF ist kein Behaelter. Gefittete Module und
+# Schiffsladung duerfen NICHT als Lagerbestand durchgehen - ein zu hoch
+# ausgewiesener Bestand ist die gefaehrliche Richtung.
+_sh360 = [{"item_id": 20, "type_id": 587, "location_id": _HANGAR360,
+           "location_flag": "Hangar", "quantity": 1},
+          {"item_id": 21, "type_id": 2048, "location_id": 20,
+           "location_flag": "HiSlot0", "quantity": 1},
+          {"item_id": 22, "type_id": 34, "location_id": 20,
+           "location_flag": "Cargo", "quantity": 5}]
+eq("aa360 gefittete Module und Schiffsladung zaehlen NICHT",
+   _HS360(_sh360, {_FREIGHT360}), {587: 1})
+# 5. UND DER ABRUF BENUTZT SIE WIRKLICH - sonst gilt das alles nur im Test.
+check("aa360 der Bestands-Abruf benutzt dieselbe Zaehlung",
+      "return hangar_summe(assets, container_type_ids_safe())" in _se358)
+check("aa360 die alte Zweitregel ist raus",
+      'flag in {"Unlocked", "Locked"} and a.get("location_id")'
+      not in _se358)
+
+# ---------------------------------------------------------------- (aa361)
+# DIE ORTSGEBUNDENEN BEREICHE ERKENNEN BEHAELTER-INHALTE.
+# NUTZER, 16.09.2026: "'Only build structures' und 'only where this plan
+# builds' muessen Container-Inhalte auch erkennen." Sie tun es - aber bis
+# hierher stand dafuer nur mein Wort: die Schleife steckte im ESI-Abruf und
+# war ohne Spielstand nicht nachstellbar. Jetzt ist sie eine eigene
+# Funktion, und die Zusage ist geprueft.
+from eve_trader.esi import bestand_an_orten as _BO361               # noqa: E402
+_STRUKTUR361 = 1035466617946
+_ANDERSWO361 = 60003760
+# Aufbau: an der Bau-Struktur ein loses Item, ein Station-Container und ein
+# Frachtcontainer mit Inhalt, im Frachtcontainer noch ein Behaelter.
+# Woanders liegt dasselbe Material - das darf NICHT mitzaehlen.
+_a361 = [
+    {"item_id": 1, "type_id": 34, "location_id": _STRUKTUR361,
+     "location_flag": "Hangar", "quantity": 100},
+    {"item_id": 2, "type_id": 17366, "location_id": _STRUKTUR361,
+     "location_flag": "Hangar", "quantity": 1},          # Station Container
+    {"item_id": 3, "type_id": 35, "location_id": 2,
+     "location_flag": "Unlocked", "quantity": 200},
+    {"item_id": 4, "type_id": 24445, "location_id": _STRUKTUR361,
+     "location_flag": "Hangar", "quantity": 1},          # Freight Container
+    {"item_id": 5, "type_id": 36, "location_id": 4,
+     "location_flag": "Cargo", "quantity": 300},
+    {"item_id": 6, "type_id": 3296, "location_id": 4,
+     "location_flag": "Cargo", "quantity": 1},           # Cargo Container drin
+    {"item_id": 7, "type_id": 37, "location_id": 6,
+     "location_flag": "Cargo", "quantity": 400},
+    {"item_id": 8, "type_id": 34, "location_id": _ANDERSWO361,
+     "location_flag": "Hangar", "quantity": 999},
+]
+_CT361 = {24445, 3296}      # was die SDE als Behaelter kennt
+_o361, _s361, _p361 = _BO361(_a361, [_STRUKTUR361], _CT361)
+eq("aa361 Station-Container-Inhalt zaehlt am Bau-Ort", _o361.get(35), 200)
+eq("aa361 Frachtcontainer-Inhalt zaehlt am Bau-Ort", _o361.get(36), 300)
+eq("aa361 Behaelter im Behaelter zaehlt auch", _o361.get(37), 400)
+eq("aa361 das lose Item zaehlt", _o361.get(34), 100)
+# DIE GEGENPROBE IST DAS EIGENTLICHE VERSPRECHEN DIESER BEREICHE: Material
+# an einem ANDEREN Ort darf nicht als gedeckt gelten - es kann nicht in den
+# Job. 999 Stueck woanders muessen draussen bleiben.
+check("aa361 Material an einem anderen Ort zaehlt NICHT mit",
+      _o361.get(34) == 100)
+eq("aa361 die Ortsmessung zaehlt die Zeilen am Ort", _p361[_STRUKTUR361], 7)
+# SCHIFFE: RUMPF JA, INHALT NIE.
+# NUTZER, 16.09.2026: "Schiffe und deren Fittings und Inhalt sollten niemals
+# zaehlen, in keinem Szenario" - fuers BAUEN. Vorher stieg die Ortszaehlung
+# in JEDES Kind hinab, also auch in gefittete Module, Drohnen und
+# Schiffsladung; die galten als Baumaterial an der Struktur. Ein zu HOCH
+# ausgewiesener Bestand ist die gefaehrliche Richtung (Regel 3).
+# Der Rumpf bleibt gezaehlt - er liegt an der Struktur wie jedes Item, und
+# im Portfolio steht er mit seinem Wert (Nutzer: "im Portfolio soll es
+# zaehlen, ich rede nur vom Bauen").
+_sh361 = [
+    {"item_id": 50, "type_id": 587, "location_id": _STRUKTUR361,
+     "location_flag": "Hangar", "quantity": 1},              # Rifter
+    {"item_id": 51, "type_id": 2048, "location_id": 50,
+     "location_flag": "HiSlot0", "quantity": 1},             # gefittet
+    {"item_id": 52, "type_id": 34, "location_id": 50,
+     "location_flag": "Cargo", "quantity": 5000},            # Ladung
+    {"item_id": 53, "type_id": 2486, "location_id": 50,
+     "location_flag": "DroneBay", "quantity": 5},            # Drohnen
+    {"item_id": 54, "type_id": 24445, "location_id": 50,
+     "location_flag": "Cargo", "quantity": 1},               # Behaelter IM Schiff
+    {"item_id": 55, "type_id": 35, "location_id": 54,
+     "location_flag": "Cargo", "quantity": 700},
+]
+_o361s, _s361s, _p361s = _BO361(_sh361, [_STRUKTUR361], _CT361)
+eq("aa361 der Schiffsrumpf zaehlt", _o361s.get(587), 1)
+check("aa361 gefittete Module zaehlen NICHT", 2048 not in _o361s)
+check("aa361 Schiffsladung zaehlt NICHT", 34 not in _o361s)
+check("aa361 Drohnen im Schiff zaehlen NICHT", 2486 not in _o361s)
+check("aa361 auch ein Behaelter IM Schiff bleibt draussen",
+      35 not in _o361s and 24445 not in _o361s)
+eq("aa361 vom Schiff bleibt genau eine Zeile uebrig", _o361s, {587: 1})
+# UND DER ABRUF BENUTZT SIE WIRKLICH - mit den Behaelter-Typen.
+check("aa361 der ortsgebundene Abruf benutzt dieselbe Zaehlung",
+      "out, seen, _per_loc = bestand_an_orten(assets, location_ids,"
+      in _se358)
+check("aa361 und reicht die Behaelter-Typen durch",
+      "container_type_ids_safe())" in _se358)
+
+# ---------------------------------------------------------------- (aa362)
+# CORP-HANGAR ALS BAU-BESTAND (1.0.8). Die reine Logik in corp.py - alles
+# ohne Netz nachgestellt, weil die gefaehrlichen Fehler genau hier liegen.
+#
+# DIE DREI ENTSCHEIDE VOM 14.09.2026 (CLAUDE.md): Standard AUS, Divisions
+# einzeln, Portfolio spaeter. Und DIE GEFAHR: drei Charaktere derselben Corp
+# liefern denselben Hangar - ungeprueft zaehlt er dreifach und der Plan
+# kauft ZU WENIG (Regel 3, die gefaehrliche Richtung).
+import eve_trader.corp as _C362                                     # noqa: E402
+import eve_trader.config as _cfg362                                 # noqa: E402
+_STAT362 = 60003760          # NPC-Station mit Buero
+_STRUCT362 = 1035466617946   # Upwell-Struktur, Hangar direkt daran
+_FREIGHT362 = 24445
+_a362 = [
+    # Buero an der Station - die Division-Items haengen DARUNTER, nicht an
+    # der Station selbst. Genau deshalb muss die Ortsaufloesung hochlaufen.
+    {"item_id": 100, "type_id": 27, "location_id": _STAT362,
+     "location_flag": "OfficeFolder", "quantity": 1},
+    {"item_id": 1, "type_id": 34, "location_id": 100,
+     "location_flag": "CorpSAG1", "quantity": 1000},
+    {"item_id": 2, "type_id": 35, "location_id": 100,
+     "location_flag": "CorpSAG2", "quantity": 2000},
+    # Frachtcontainer in Division 1 mit Inhalt
+    {"item_id": 3, "type_id": _FREIGHT362, "location_id": 100,
+     "location_flag": "CorpSAG1", "quantity": 1},
+    {"item_id": 4, "type_id": 36, "location_id": 3,
+     "location_flag": "Cargo", "quantity": 300},
+    # Corp-Schiff in Division 1: Rumpf ja, Fitting/Ladung nie
+    {"item_id": 5, "type_id": 587, "location_id": 100,
+     "location_flag": "CorpSAG1", "quantity": 1},
+    {"item_id": 6, "type_id": 2048, "location_id": 5,
+     "location_flag": "HiSlot0", "quantity": 1},
+    {"item_id": 7, "type_id": 34, "location_id": 5,
+     "location_flag": "Cargo", "quantity": 5000},
+    # Dieselbe Division an einer ANDEREN Struktur
+    {"item_id": 8, "type_id": 37, "location_id": _STRUCT362,
+     "location_flag": "CorpSAG1", "quantity": 77},
+    # Lieferungen sind KEINE Division
+    {"item_id": 9, "type_id": 38, "location_id": 100,
+     "location_flag": "CorpDeliveries", "quantity": 9},
+]
+_s362, _d362 = _C362.corp_bestand(_a362, [1], None, {_FREIGHT362})
+# 1. DIVISION-FILTER: nur Division 1.
+eq("aa362 Material der gewaehlten Division zaehlt", _s362.get(34), 1000)
+check("aa362 Material einer NICHT gewaehlten Division zaehlt nicht",
+      35 not in _s362)
+check("aa362 Corp-Lieferungen (CorpDeliveries) sind keine Division",
+      38 not in _s362)
+# 2. BEHAELTER JA, SCHIFF NEIN - dieselben Regeln wie beim eigenen Bestand.
+eq("aa362 Inhalt eines Frachtcontainers in der Division zaehlt",
+   _s362.get(36), 300)
+eq("aa362 der Schiffsrumpf zaehlt", _s362.get(587), 1)
+check("aa362 Schiffs-Fitting zaehlt NICHT", 2048 not in _s362)
+check("aa362 Schiffsladung zaehlt NICHT (sonst 6000 statt 1000 Tritanium)",
+      _s362.get(34) == 1000)
+# 3. ORTSGRENZE: an der Station haengt das Buero dazwischen; die Aufloesung
+# muss bis zur Station hochlaufen. Und die Struktur bleibt draussen.
+_s362s, _ = _C362.corp_bestand(_a362, [1], [_STAT362], {_FREIGHT362})
+eq("aa362 Ortsgrenze: unter dem Buero wird die Station erkannt",
+   _s362s.get(34), 1000)
+check("aa362 Ortsgrenze: die andere Struktur bleibt draussen",
+      37 not in _s362s)
+_s362x, _ = _C362.corp_bestand(_a362, [1], [_STRUCT362], {_FREIGHT362})
+eq("aa362 Ortsgrenze: an der Struktur nur, was dort liegt",
+   _s362x, {37: 77})
+eq("aa362 ohne Ortsgrenze zaehlt beides", _s362.get(37), 77)
+# 4. KEINE DIVISION GEWAEHLT -> NICHTS. Nicht "alle" - der Entscheid.
+eq("aa362 keine Division gewaehlt -> nichts", _C362.corp_bestand(_a362, [], None), ({}, {}))
+eq("aa362 kaputte Einstellung wird bereinigt",
+   _C362.divisions_bereinigt(["3", 1, "x", 8, 0, 3, None]), [1, 3])
+# 5. DER RIEGEL GEGEN DIE VERDREIFACHUNG: drei Charaktere, eine Corp, alle
+# Director -> GENAU EIN Abruf.
+_ch362 = [{"character_id": 11}, {"character_id": 12}, {"character_id": 13},
+          {"character_id": 14}]
+_plan362, _ohne362 = _C362.abrufplan(
+    _ch362, {11: 900, 12: 900, 13: 900, 14: 901},
+    {11: {"Director"}, 12: {"Director"}, 13: {"Director"}, 14: set()},
+    _C362.ROLLE_ASSETS)
+eq("aa362 drei Charaktere derselben Corp -> EIN Abruf", _plan362, {900: 11})
+eq("aa362 eine Corp ohne Director wird beim Namen genannt",
+   _ohne362, {901: [14]})
+# Der ERSTE mit Rolle gewinnt - nicht der erste ueberhaupt.
+_plan362b, _ = _C362.abrufplan(
+    _ch362, {11: 900, 12: 900}, {11: set(), 12: {"Director"}},
+    _C362.ROLLE_ASSETS)
+eq("aa362 ohne Rolle wird der naechste Charakter genommen", _plan362b, {900: 12})
+eq("aa362 unbekannte Corp -> kein Abruf",
+   _C362.abrufplan(_ch362, {}, {11: {"Director"}}, "Director"), ({}, {}))
+# 6. DIVISION-NAMEN: ESI liefert nur die umbenannten.
+eq("aa362 Division-Namen mit Vorgabe", _C362.division_namen(
+    {"hangar": [{"division": 3, "name": "Minerals"}]}, [1, 3]),
+   {1: "Division 1", 3: "Minerals"})
+# 7. STANDARD AUS, KEINE DIVISION - der Entscheid, im Code.
+eq("aa362 Corp-Hangar ist standardmaessig AUS",
+   _cfg362.DEFAULT_SETTINGS.get("use_corp"), False)
+eq("aa362 standardmaessig ist keine Division gewaehlt",
+   _cfg362.DEFAULT_SETTINGS.get("corp_divisions"), [])
+# 8. DIE SCOPES - genau die aus der ESI-Doku (16.09.2026), mit Namen.
+eq("aa362 die fuenf Corp-Scopes", sorted(_cfg362.CORP_SCOPES), sorted([
+    "esi-assets.read_corporation_assets.v1",
+    "esi-corporations.read_blueprints.v1",
+    "esi-corporations.read_divisions.v1",
+    "esi-industry.read_corporation_jobs.v1",
+    "esi-characters.read_corporation_roles.v1"]))
+check("aa362 Corp-Scopes sind NICHT in den Standard-Scopes",
+      not set(_cfg362.CORP_SCOPES) & set(_cfg362.DEFAULT_SCOPES))
+# 9. UND DER WEG IST ANGESCHLOSSEN: Scopes beim Verlinken, Bestand in
+# BEIDEN Bereichen, Abruf ueber den Plan je Corp.
+_mw362 = open(os.path.join(_here222, "eve_trader", "ui", "main_window.py"),
+              encoding="utf-8").read()
+check("aa362 beim Verlinken kommen die Corp-Scopes nur mit Schalter",
+      'if self.settings.get("use_corp"):\n'
+      '            scopes.extend(config.CORP_SCOPES)' in _mw362)
+_bf362 = open(os.path.join(_here222, "eve_trader", "ui",
+                           "mw_bauplan_fenster.py"), encoding="utf-8").read()
+eq("aa362 der Corp-Bestand wird in BEIDEN Bereichen aufaddiert",
+   _bf362.count('for t, q in (_corp.get("summe") or {}).items():'), 2)
+check("aa362 der Abruf laeuft ueber den Plan je Corporation",
+      "_corp.abrufplan(chars, corp_von, rollen_von, _corp.ROLLE_ASSETS)"
+      in _bf362)
+check("aa362 ohne verknuepfte Struktur zaehlt auch die Corp nichts",
+      ") if not _no_locs else self._corp_bau_daten(client_id, [], [])"
+      in _bf362)
+
+# ---------------------------------------------------------------- (aa363)
+# ZWEI KNOEPFE, ZWEI NAMEN (17.09.2026). Der Knopf oben in der Leiste laedt
+# die REZEPTDATEN (SDE), der im Blaupausen-Panel holt die EIGENEN Blaupausen
+# aus ESI. Beide hiessen "Load blueprints" - und der Leer-Hinweis der
+# Blaupausen-Seite zeigte prompt auf den falschen (Nutzer: "keine Wirkung").
+# Auf Deutsch hiess sogar die Blaupausen-Seite "Baurezepte laden".
+import eve_trader.sprache as _sp363                                 # noqa: E402
+check("aa363 der SDE-Knopf oben heisst 'Load recipes'",
+      'self.g_sde_btn = QPushButton(t("Load recipes"))' in _mw362)
+check("aa363 der Blaupausen-Knopf heisst 'Load blueprints'",
+      'self.bp_refresh_btn = QPushButton(t("Load blueprints"))' in _mw362)
+eq("aa363 auf Deutsch heissen sie verschieden",
+   (_sp363.KATALOG["de"].get("Load recipes"),
+    _sp363.KATALOG["de"].get("Load blueprints")),
+   ("Baurezepte laden", "Blaupausen laden"))
+check("aa363 kein SDE-Hinweis nennt mehr 'Load blueprints'",
+      "\u201eLoad blueprints\u201c once" not in _mw362
+      and "„Load blueprints“ (once)" not in _mw362)
+
+# ---------------------------------------------------------------- (aa359)
+# DIE ROTPROBE FAEHRT NUR NOCH DIE PASSENDE SUITE.
+# NUTZER, 16.09.2026: "reicht es nicht, nur den Bereich zu fahren, den wir
+# gerade geaendert haben?" Fuer die Rotprobe ja - und zwar beweisbar: eine
+# Mutation nennt die Pruefung, die rot werden soll, und jede Pruefung lebt
+# in genau EINER Suite. Gemessen: eine b-Mutation von ~62 s auf ~17 s.
+#
+# DIESE ZUORDNUNG DARF NIE RATEN. Griffe sie daneben, liefe die falsche
+# Suite, die erwartete Pruefung waere gar nicht dabei - und die Rotprobe
+# meldete BLIND fuer eine Mutation, die in Wahrheit sauber ROT ist. Ein
+# Wachhund, der falschen Alarm schlaegt, wird abgeschaltet.
+import importlib.util as _ilu359
+_spec359 = _ilu359.spec_from_file_location(
+    "_rp359", os.path.join(_here222, "rotprobe.py"))
+_rp359 = _ilu359.module_from_spec(_spec359)
+_spec359.loader.exec_module(_rp359)
+eq("aa359 eine aa-Pruefung fuehrt zur aa-Suite",
+   _rp359.suite_fuer("aa358 irgendwas"), "aa")
+eq("aa359 eine b-Pruefung fuehrt zur b-Suite",
+   _rp359.suite_fuer("b7o irgendwas"), "b")
+# IM ZWEIFEL BEIDE: leer, None oder ein unbekanntes Praefix (kuenftige
+# dritte Suite, Tippfehler) - dann lieber gruendlich als schnell.
+for _u359 in ("", None, "xyz etwas", "   "):
+    eq(f"aa359 unbekannt ({_u359!r}) faehrt beide Suiten",
+       _rp359.suite_fuer(_u359), "beide")
+# NICHT JEDE MUTATION IST ZUORDENBAR - UND DAS IST IN ORDNUNG.
+# GEMESSEN: von 859 Mutationen nennen 317 eine Pruef-Nummer ("aa..."/"b..."),
+# 542 aeltere tragen als Erwartung nur ein Textstueck der Pruefzeile. Die
+# fahren unveraendert BEIDE Suiten - langsamer, aber exakt wie bisher. Eine
+# Pflicht, alle 542 nachtraeglich umzubenennen, waere ein grosser Eingriff
+# ins Sicherheitsnetz fuer reinen Zeitgewinn; das ist es nicht wert.
+# Gefordert wird nur, dass die Abkuerzung ueberhaupt benutzt WIRD - sonst
+# waere sie toter Code, der nichts spart.
+_zu359 = [_m[4] for _m in _rp359.MUTATIONEN
+          if _rp359.suite_fuer(_m[4]) != "beide"]
+check("aa359 die Zuordnung wird ueberhaupt genutzt", len(_zu359) > 100)
+# DER EIGENTLICHE BEWEIS: wo zugeordnet wird, muss die erwartete Pruefung
+# in GENAU dieser Suite auch vorkommen. Ohne ihn koennte die Zuordnung
+# formal stimmen und trotzdem auf die falsche Datei zeigen - dann liefe die
+# falsche Suite, die erwartete Pruefung waere nicht dabei, und die Rotprobe
+# meldete BLIND fuer eine Mutation, die in Wahrheit sauber ROT ist.
+_aa359 = open(os.path.join(_here222, "test_bestand_herkunft.py"),
+              encoding="utf-8").read()
+_b359 = open(os.path.join(_here222, "test_bauplan_aufbau.py"),
+             encoding="utf-8").read()
+# WAS HIER GEPRUEFT WIRD - UND WAS NICHT.
+# Ein Teil der Pruefnamen entsteht ERST BEIM LAUFEN, aus f-Strings
+# ("b7n Seite {i}: ..."). Die stehen nirgends woertlich im Quelltext, und
+# ein Suchen danach faende sie nie. "In keiner der beiden Dateien gefunden"
+# heisst deshalb NICHT "falsch zugeordnet", sondern "von hier aus nicht
+# entscheidbar" - und eine Pruefung, die Unentscheidbares rot faerbt, wuerde
+# irgendwann ignoriert.
+# ROT WIRD NUR DER ECHTE FEHLER: der Text steht in der ANDEREN Suite. Genau
+# so sah der erste Anlauf aus (deutsche Woerter mit b am Anfang landeten bei
+# der b-Suite), und genau den muss diese Pruefung fangen.
+_fehl359 = []
+_belegt359 = 0
+for _m359 in _rp359.MUTATIONEN:
+    _erw359 = _m359[4]
+    _wo359 = _rp359.suite_fuer(_erw359)
+    if _wo359 == "beide":
+        continue
+    # Nur der NAMENSTEIL vor dem ersten Klammerzusatz - die Fehlerzeile
+    # traegt spaeter noch die gemessenen Werte dahinter.
+    _kern359 = _erw359.split("  (")[0]
+    _in_aa359 = _kern359 in _aa359
+    _in_b359 = _kern359 in _b359
+    if _in_aa359 or _in_b359:
+        _belegt359 += 1
+        if (_wo359 == "aa" and not _in_aa359) or (_wo359 == "b" and not _in_b359):
+            _fehl359.append(_erw359)
+eq("aa359 keine zugeordnete Pruefung liegt in der ANDEREN Suite",
+   _fehl359[:3], [])
+# UND DIE PRUEFUNG DARF NICHT LEERLAUFEN: waeren alle Namen erst zur
+# Laufzeit gebaut, haette sie nichts zu vergleichen und waere still gruen.
+check("aa359 und die Zuordnung ist an vielen Stellen wirklich belegt",
+      _belegt359 > 100)
 
 print(f"(aa) Bestand-Herkunft: {_ok}/{_ok + len(_fail)} gruen")
 for f in _fail:

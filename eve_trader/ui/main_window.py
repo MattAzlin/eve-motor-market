@@ -18,8 +18,9 @@ from ..sprache import t
 from ..workers import Worker
 from . import theme
 from . import icons
-from .mw_basis import (IskGroupedSpin, IskMillionSpin, MinimizableDialog,
-                       NumericItem, isk, tab_icon)
+from .mw_basis import (KEIN_DECRYPTOR, IskGroupedSpin, IskMillionSpin,
+                       KartenSortierer, MinimizableDialog, NumericItem,
+                       dec_anzeige, isk, tab_icon)
 from .mw_bauplan_fenster import BauplanFenster
 from .mw_bauplan_tabs import BauplanTabs
 from .mw_helpers import MainWindowHelpers
@@ -240,15 +241,47 @@ class TabNav(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._stack)
         self._stack.currentChanged.connect(self.currentChanged.emit)
+        # RUECKFRAGE VOR DEM VERLASSEN (Nutzer, 15.09.2026): "wenn man in
+        # Einstellungen etwas einstellt und nicht speichert, bekommt man
+        # keine Meldung, wenn man irgendwo anders im Tool klickt ... diese
+        # Warnung muss kommen, sobald wir versuchen ungespeichert den
+        # Einstellungs-Tab zu verlassen, EGAL WOHIN."
+        #
+        # WARUM HIER UND NICHT IN `_on_tab_changed`: das Signal kommt erst,
+        # wenn der Wechsel schon passiert ist - dort liesse sich nur noch
+        # zurueckspringen, was flackert. Jeder Weg durchs Programm
+        # (Seitenleiste, obere Leiste, Sprung aus dem Code) laeuft durch
+        # setCurrentIndex/setCurrentWidget, also greift ein Riegel hier
+        # ausnahmslos - genau sein "egal wohin".
+        self.vor_wechsel = None      # optional: callable(alt, neu) -> bool
+
+    def _darf_wechseln(self, i):
+        """Darf von der aktuellen Seite auf Seite `i` gewechselt werden?"""
+        f = self.vor_wechsel
+        alt = self._stack.currentIndex()
+        if f is None or i == alt or i < 0:
+            return True
+        try:
+            return bool(f(alt, i))
+        except Exception:
+            # EINE RUECKFRAGE DARF DIE NAVIGATION NIE SPERREN. Faellt sie
+            # aus, ist der Wechsel erlaubt - ein Programm, in dem man
+            # wegen eines Anzeigefehlers festsitzt, waere schlimmer als
+            # eine verlorene Einstellung.
+            return True
 
     def addTab(self, widget, title):
         self._titles.append(title)
         return self._stack.addWidget(widget)
 
     def setCurrentWidget(self, w):
+        if not self._darf_wechseln(self._stack.indexOf(w)):
+            return
         self._stack.setCurrentWidget(w)
 
     def setCurrentIndex(self, i):
+        if not self._darf_wechseln(i):
+            return
         self._stack.setCurrentIndex(i)
 
     def currentWidget(self):
@@ -460,7 +493,27 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         # top toolbar: one smart refresh + data age
         tb = QToolBar()
         tb.setMovable(False)
+        # RECHTSKLICK AUF DIE OBERE LEISTE: NICHTS (Nutzer, 15.09.2026, mit
+        # fuenf Screenshots): "wenn ich Rechtsklick auf einen dieser oberen
+        # Leisten-Knoepfe mache und dann da drauf klicke, schliesst sich
+        # diese obere Leiste - diese Rechtsklick-Option muss weg, verursacht
+        # unnoetige Bugs."
+        #
+        # WOHER DAS KAM: das kleine Kaestchen im Bild ist KEIN eigener Code,
+        # sondern Qts eingebautes Fenster-Menue. Ein QMainWindow bietet auf
+        # Rechtsklick von sich aus jede Werkzeugleiste zum Aus- und
+        # Einblenden an - mit einem Haken, der die Leiste versteckt. Danach
+        # ist die ganze obere Reihe weg, und niemand kommt darauf, dass ein
+        # unbeabsichtigter Rechtsklick schuld war.
+        #
+        # ZWEI RIEGEL, weil es zwei Wege dorthin gibt: die Leiste selbst
+        # reicht den Rechtsklick nicht mehr weiter (PreventContextMenu, die
+        # eigenen Kontextmenues der Knoepfe darin bleiben davon unberuehrt),
+        # und `createPopupMenu` liefert gar kein Menue mehr - das ist die
+        # Stelle, an der Qt es baut, auch beim Rechtsklick neben die Leiste.
+        tb.setContextMenuPolicy(Qt.PreventContextMenu)
         self.addToolBar(tb)
+        self._toolbar = tb
         self.global_refresh_btn = QPushButton(t("Refresh all"))
         self.global_refresh_btn.setIcon(icons.icon("refresh"))
         self.global_refresh_btn.setObjectName("Primary")
@@ -521,7 +574,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         # Gespeicherte Zensur anwenden, sobald alle Karten stehen
         # (Sitzung 20) - sonst zeigt der Start die Zahlen kurz offen.
         QTimer.singleShot(0, self._kpi_zensur_anwenden)
-        self.g_sde_btn = QPushButton(t("Load blueprints"))
+        self.g_sde_btn = QPushButton(t("Load recipes"))
         self.g_sde_btn.setIcon(icons.icon("blueprint"))
         self.g_sde_btn.setToolTip(t(
             "Loads the EVE database (SDE, ~140 MB, once) for "
@@ -1758,6 +1811,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         head.addWidget(QLabel(t("Character:")))
         self.pf_char = QComboBox()
         self.pf_char.currentIndexChanged.connect(self._render_portfolio)
+        # DIE BEHAELTER-LISTE MUSS MITGEHEN (Nutzer, 15.09.2026). Ohne das
+        # wirkt der Charakter-Filter erst beim naechsten Datenabruf - man
+        # waehlt um, oben stimmt es, unten steht der alte Stand. Genau die
+        # Sorte halbe Aenderung, die wie ein Fehler aussieht.
+        self.pf_char.currentIndexChanged.connect(self._container_neu_zeichnen)
         head.addWidget(self.pf_char)
         self.refresh_btn = QPushButton(t("Refresh"))
         self.refresh_btn.setIcon(icons.icon("refresh"))
@@ -1992,15 +2050,57 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
 
         self.tabs.addTab(w, t("Portfolio"))
 
+    def _container_neu_zeichnen(self):
+        """Die Behaelter-Liste neu zeichnen - aber nur, wenn es sie gibt.
+
+        Der Charakter-Wahlschalter wird frueher gebaut als die Behaelter-
+        Karte; ohne die Pruefung liefe der erste Aufbau in einen Fehler.
+        Eine Anzeige darf das Portfolio nie kosten.
+        """
+        if not hasattr(self, "cont_tree") or not hasattr(self, "cont_box"):
+            return
+        try:
+            self._render_containers()
+        except Exception as _e_cz:
+            self._log_exception("Behaelter-Liste zeichnen", str(_e_cz))
+
+    def _sichtbare_container(self):
+        """Die Behaelter, die zur aktuellen Charakter-Wahl gehoeren.
+
+        NUTZER-BEFUND 15.09.2026: "jetzt habe ich da ploetzlich Container von
+        allen Charakteren anstatt nur dem gewaehlten."
+
+        EHRLICH ZUR URSACHE: das lag NICHT an der neuen Behaelter-Erkennung.
+        Die Liste hat den Charakter-Wahlschalter noch nie beachtet - sie lief
+        immer ueber `_assets_struct.items()`, also ueber alle Charaktere. Nur
+        fiel es nicht auf, solange fast nur die Station-Container des
+        Hauptcharakters ueberhaupt erkannt wurden. Mehr Treffer haben einen
+        alten Fehler sichtbar gemacht, keinen neuen erzeugt.
+
+        DIESELBE REGEL WIE DIE ITEM-LISTE (`_filtered_holdings`): "Alle" oder
+        keine Wahl zeigt alles, sonst genau dieser Charakter. Eine Seite mit
+        zwei verschiedenen Auffassungen davon, was "gewaehlt" heisst, waere
+        wieder eine Doppel-Wahrheit.
+        """
+        _wahl = None
+        try:
+            _wahl = self.pf_char.currentData()
+        except Exception:
+            _wahl = None
+        out = []
+        for _cid, st in (getattr(self, "_assets_struct", {}) or {}).items():
+            if _wahl not in (None, "all") and _cid != _wahl:
+                continue
+            out.extend(st.get("containers", []) or [])
+        return out
+
     def _render_containers(self):
         tree = self.cont_tree
         tree.blockSignals(True)
         tree.clear()
         from PySide6.QtWidgets import QTreeWidgetItem
         ignored = store.ignored_containers()
-        containers = []
-        for cid, st in getattr(self, "_assets_struct", {}).items():
-            containers.extend(st.get("containers", []))
+        containers = self._sichtbare_container()
         self.cont_box.setVisible(bool(containers))
         names = store.cached_names(
             [t for c in containers for t in c["contents"]] +
@@ -2041,9 +2141,13 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
 
     def _apply_toggle_all(self, ignore):
         try:
-            all_ids = []
-            for st in getattr(self, "_assets_struct", {}).values():
-                all_ids.extend(c["item_id"] for c in st.get("containers", []))
+            # NUR WAS MAN SIEHT (Nutzer, 15.09.2026): der Haken heisst "alle
+            # Container ausblenden" und steht ueber einer gefilterten Liste.
+            # Wuerde er die Behaelter anderer Charaktere mit umschalten,
+            # aenderte ein sichtbarer Klick etwas Unsichtbares - und beim
+            # naechsten Charakter-Wechsel waere alles weg, ohne dass jemand
+            # weiss, warum. Dieselbe Quelle wie die Anzeige.
+            all_ids = [c["item_id"] for c in self._sichtbare_container()]
             for cid in all_ids:
                 store.set_container_ignored(cid, ignore)
             self._rebuild_asset_totals()
@@ -2675,7 +2779,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         self.d_hub.currentIndexChanged.connect(self._on_hub_change)
         self.scan_btn = QPushButton(t("Market scan"))
         self.scan_btn.clicked.connect(self.scan_jita)
-        self.sde_btn = QPushButton(t("Load blueprints"))
+        self.sde_btn = QPushButton(t("Load recipes"))
         self.sde_btn.clicked.connect(self.load_sde)
         self.deals_btn = QPushButton(t("Load deals"))
         self.deals_btn.setIcon(icons.icon("search"))
@@ -2789,7 +2893,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         self.d_cat = QComboBox()
         self.d_cat.setMinimumWidth(90)
         self.d_cat.setToolTip(t("Only show items of this category (e.g. ships, modules, charges/ammo, "
-                                "drones). Needs the SDE data \u2013 run \u201eLoad blueprints\u201c once."))
+                                "drones). Needs the SDE data \u2013 run \u201eLoad recipes\u201c once."))
         self.d_meta = QComboBox()
         self.d_meta.setMinimumWidth(90)
         self.d_meta.setToolTip(t("Filter by meta class: Tech I (standard), Tech II, Tech III, Storyline, "
@@ -3215,6 +3319,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 return
             n = f"{len(rows):,}".replace(",", "'")
             self.update_ages()
+            self._leerhinweise_aktualisieren()   # "Market scan" -> "Load deals"
             if hasattr(self, "deal_status"):
                 self.deal_status.setText(
                     t("{n} items captured in {hub}. Now „Load deals“.")
@@ -3225,7 +3330,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     .format(n=n, hub=hub_label))
             if hasattr(self, "build_status"):
                 self.build_status.setText(
-                    t("{hub}: {n} items captured. „Load blueprints“ (once), "
+                    t("{hub}: {n} items captured. „Load recipes“ (once), "
                       "then „Find blueprints“.").format(n=n, hub=hub_label))
             # Frische Preise da → "Meine Baupläne"-Schätzungen im Hintergrund
             # neu rechnen, auch wenn die Seite gerade gar nicht offen ist (der
@@ -3328,7 +3433,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             for st, tail in (("deal_status", t("Now \u201eLoad deals\u201c.")),
                              ("hold_status", t("„Load deals“.")),
                              ("build_status",
-                              t("„Load blueprints“, then „Find blueprints“."))):
+                              t("„Load recipes“, then „Find blueprints“."))):
                 lbl = getattr(self, st, None)
                 if lbl is not None:
                     lbl.setText(
@@ -3432,22 +3537,43 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         if btn is None:
             return
         self._scan_blink_an = not self._scan_blink_an
-        # BEIDE ZUSTAENDE MUESSEN GLEICH GROSS SEIN (Nutzer-Befund, Sitzung 20:
-        # "das Blinken laesst das ganze UI minimal nach unten rutschen").
-        # Die erste Fassung setzte im An-Zustand einen 2-px-Rahmen und im
-        # Aus-Zustand gar keinen - der Knopf wurde also im Takt groesser und
-        # kleiner und schob die Leiste mit. Jetzt steht in BEIDEN Zustaenden
-        # ein 2-px-Rahmen, nur einmal amber und einmal durchsichtig.
-        # Auch die Schriftstaerke bleibt gleich: fett ist breiter als normal.
-        _farbe = theme.AMBER if self._scan_blink_an else "transparent"
-        # AUCH DER MAUSZEIGER DARF NICHTS VERSCHIEBEN (Nutzer, zweiter
-        # Befund): das eigene Stylesheet verdraengt die :hover-Regel der
-        # Oberflaeche, und deren Rahmen hat eine andere Staerke - beim
-        # Darueberfahren sprang die Leiste erneut. Deshalb steht hier
-        # dieselbe Regel auch fuer :hover.
+        self._blink_rahmen(btn, self._scan_blink_an)
+
+    @staticmethod
+    def _blink_rahmen(btn, an, basis=""):
+        """Rahmen EINES blinkenden Knopfes setzen.
+
+        EINE STELLE FUER DIE REGEL: der Markt-Scan-Knopf und der
+        Contract-Preis-Knopf im Bauplan blinken gleich. Zwei Kopien waeren
+        zwei Wahrheiten - und die beiden Nutzer-Befunde unten sind teuer
+        genug erkauft, um sie nicht zweimal pflegen zu muessen.
+
+        BEIDE ZUSTAENDE MUESSEN GLEICH GROSS SEIN (Nutzer-Befund, Sitzung 20:
+        "das Blinken laesst das ganze UI minimal nach unten rutschen").
+        Die erste Fassung setzte im An-Zustand einen 2-px-Rahmen und im
+        Aus-Zustand gar keinen - der Knopf wurde also im Takt groesser und
+        kleiner und schob die Leiste mit. Jetzt steht in BEIDEN Zustaenden
+        ein 2-px-Rahmen, nur einmal amber und einmal durchsichtig.
+        Auch die Schriftstaerke bleibt gleich: fett ist breiter als normal.
+
+        AUCH DER MAUSZEIGER DARF NICHTS VERSCHIEBEN (Nutzer, zweiter
+        Befund): das eigene Stylesheet verdraengt die :hover-Regel der
+        Oberflaeche, und deren Rahmen hat eine andere Staerke - beim
+        Darueberfahren sprang die Leiste erneut. Deshalb steht hier
+        dieselbe Regel auch fuer :hover.
+        """
+        # `basis` steht VORNE: Qt nimmt bei gleicher Eigenschaft die
+        # spaetere Regel, der Blink-Rahmen gewinnt also ueber den Rahmen des
+        # Grund-Stylesheets - Polsterung, Farbe und Radius bleiben aber
+        # erhalten. Ohne das verlor ein Knopf mit eigenem Aussehen beim
+        # ersten Blinkschritt seine Polsterung und sprang in der Groesse.
+        # WER `basis` MITGIBT, schreibt dort 2px Rahmen hinein (s. den
+        # Contract-Knopf im Bauplan) - sonst wechselt die Breite im Takt.
+        _farbe = theme.AMBER if an else "transparent"
         btn.setStyleSheet(
-            f"QPushButton{{border:2px solid {_farbe};}}"
-            f"QPushButton:hover{{border:2px solid {theme.AMBER};}}")
+            basis
+            + f"QPushButton{{border:2px solid {_farbe};}}"
+            + f"QPushButton:hover{{border:2px solid {theme.AMBER};}}")
 
     def _scan_warnung_setzen(self, text):
         """Warnung ein- oder ausschalten. `text` leer = alles in Ordnung."""
@@ -3955,7 +4081,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             if not cmap:
                 self.deal_status.setText(
                     t("The category/meta filter needs the SDE data – please "
-                      "run „Load blueprints“ once."))
+                      "run „Load recipes“ once."))
                 return
             # metaLevel map only needed when the meta filter targets Meta 0 vs 1-4
             mlmap = {}
@@ -4488,12 +4614,13 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         bronze_c = QColor(198, 143, 92)
         tbl.setRowCount(len(rows))
         for i, a in enumerate(rows):
+            # Anzeigetext, kein Schluessel - s. _fill_swing_gold_table.
             if i < 5:
-                rank, rc = "Gold", gold_c
+                rank, rc = t("Gold"), gold_c
             elif i < 15:
-                rank, rc = "Silber", silver_c
+                rank, rc = t("Silver"), silver_c
             else:
-                rank, rc = "Bronze", bronze_c
+                rank, rc = t("Bronze"), bronze_c
             nm = names.get(a["type_id"], f"#{a['type_id']}")
             # Sitzung 17: die Modus-Namen sind SCHLUESSEL (Spanne, Stunden ...),
             # angezeigt wird die Uebersetzung.
@@ -5629,6 +5756,16 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         ("Reactions only",
          {"sym": "flask", "window": 30, "margin": 10, "vol": 200, "tech": "all", "pmin": 0,
           "pmax": 0, "reactions": True}),
+        # RIGS (Nutzer-Wunsch 15.09.2026: "ich moechte auch Rigs finden
+        # koennen fuers Bauen"). Sie waren NIE ausgeschlossen - Kategorie 7
+        # (Modul), Meta 1/2, in keiner Sperrliste (nachgemessen). Sie gehen
+        # nur zwischen den uebrigen Modulen unter, und der Feinfilter kennt
+        # nur "Module" als Ganzes. TECH BEWUSST "all": es gibt Rigs auf T1
+        # UND T2, und welche Stufe er will, stellt er daneben ein - zwei
+        # Stellen mit derselben Aussage waeren wieder zwei Wahrheiten.
+        ("Rigs (T1 + T2)",
+         {"sym": "wrench", "window": 30, "margin": 10, "vol": 20, "tech": "all",
+          "pmin": 0, "pmax": 0, "rigs": True}),
         # "Nur dicke Margen" ist GESTRICHEN (Preset-Durchsicht mit dem
         # Nutzer): seit der Bewertungs-Spalte ("lohnt sich klar" ab
         # BAU_MARGE_GUT) und der sortierbaren Marge-Spalte filterte es nur
@@ -5662,7 +5799,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
     _DECRYPTORS = [   # Fallback (gegen Ingame-Tooltips verifiziert); primär aus
                       # der SDE, s. _decryptor_list. Format: (prob_mult, run_mod,
                       # me_mod, te_mod, type_id).
-        ("Kein Decryptor", (1.0, 0, 0, 0, None)),
+        (KEIN_DECRYPTOR, (1.0, 0, 0, 0, None)),
         ("Accelerant", (1.2, 1, 2, 10, 34201)),
         ("Attainment", (1.8, 4, -1, 4, 34202)),
         ("Augmentation", (0.6, 9, -2, 2, 34203)),
@@ -5680,7 +5817,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         except Exception:
             sde = []
         if sde:
-            out = [("Kein Decryptor", (1.0, 0, 0, 0, None))]
+            out = [(KEIN_DECRYPTOR, (1.0, 0, 0, 0, None))]
             for d in sde:
                 out.append((d["name"], (d["prob_mult"], int(d["run_mod"]),
                                         int(d["me_mod"]), int(d["te_mod"]), d["type_id"])))
@@ -5691,7 +5828,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         """{inv_prob_mult, inv_run_mod, inv_me_mod, inv_te_mod, inv_decryptor_id}
         für den global gewählten Decryptor (Bau-Setup) - Fallback für Items ohne
         eigenen Decryptor im Invention-Tab (s. _resolve_inv_decryptor_map)."""
-        key = self.settings.get("bau_decryptor", "Kein Decryptor")
+        key = self.settings.get("bau_decryptor", KEIN_DECRYPTOR)
         for nm, (pm, rm, me_mod, te_mod, tid) in self._decryptor_list():
             if nm == key:
                 return {"inv_prob_mult": pm, "inv_run_mod": rm, "inv_me_mod": me_mod,
@@ -6492,7 +6629,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             n_cov, n_tot = self._load_stage_bp_from_esi(
                 stage, plan, recipes, None, silent=True, owned_bp=owned_bp)
             if n_cov:
-                summary.append(f"{label}: {n_cov}/{n_tot} Items abgedeckt")
+                summary.append(t("{label}: {cov}/{tot} items covered").format(
+                    label=label, cov=n_cov, tot=n_tot))
         # 3) Invention (alle T2-Items)
         items = []
         for tid, runs in (plan.get("build_runs") or {}).items():
@@ -8070,7 +8208,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             # bewusst NICHT mehr angezeigt - irrelevant, solange keine Invention
             # gemacht wird (auf Wunsch entfernt; die Rohdaten/Checkboxen bleiben
             # für später bestehen, falls doch mal gebraucht).
-            return (f"Fert. {mx[0]} \u00b7 Reakt. {mx[1]}")
+            return t("Mfg. {mfg} \u00b7 React. {react}").format(
+                mfg=mx[0], react=mx[1])
         return t("\u2014 (load skills)")
 
     def _load_char_slots(self, silent=False):
@@ -8081,7 +8220,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         client_id = self.settings.get("client_id")
         chars = store.list_characters()
         if not client_id or not chars:
-            self._flash_tip("Keine Charaktere / Client-ID")
+            self._flash_tip(t("No characters / client ID"))
             return
 
         def job():
@@ -8474,7 +8613,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             if not hasattr(self, "_bd_struct_diag"):
                 self._bd_struct_diag = {}
             self._bd_struct_choice[activity] = (
-                ([(f"{_fest.get('name', '?')} (fest zugewiesen)",
+                ([(t("{name} (fixed assignment)").format(
+                       name=_fest.get('name', '?')),
                    round(benefit(_fest), 2))] if _fest is not None else [])
                 + [(x.get("name", "?"), round(benefit(x), 2))
                    for x in ranked
@@ -8627,7 +8767,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         config.save_settings(self.settings)
         self._reload_bau_profiles()
         self._combo_select(self.bs_profile, name)
-        self._flash_tip(f"Profil \u201e{name}\u201c gespeichert \u2713")
+        self._flash_tip(t("Profile \u201e{name}\u201c saved \u2713").format(name=name))
 
     def _load_bau_profile(self):
         name = self.bs_profile.currentData()
@@ -8668,7 +8808,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             self.bs_bpte.setValue(int(s.get("bau_te", 0)))
             self.bs_react.setCurrentIndex(0 if s.get("bau_reactions", True) else 1)
             self.bs_inv.setCurrentIndex(0 if s.get("bau_invention", False) else 1)
-            self._combo_select(self.bs_decry, s.get("bau_decryptor", "Kein Decryptor"))
+            self._combo_select(self.bs_decry, s.get("bau_decryptor", KEIN_DECRYPTOR))
         finally:
             for w in widgets:
                 w.blockSignals(False)
@@ -9542,7 +9682,21 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             sell_is_contract = False
             if not sell_val:
                 try:
-                    cp = store.get_contract_prices(store.get_scan_region()).get(type_id)
+                    # DIESELBE REIHENFOLGE WIE DIE CAPITAL-TABELLE
+                    # (_compute_capital_costs): erst der regionale Stand,
+                    # dann NEW EDEN darueber - der gewinnt.
+                    # BIS SITZUNG 22 STAND HIER NUR DIE REGION. Der
+                    # Capital-Scan speichert aber nach ALL_REGIONS. Wer im
+                    # Capital-Modus Contract-Preise geladen hatte, bekam beim
+                    # Oeffnen des Bauplans trotzdem keinen Preis - und ohne
+                    # Preis stuerzte der Bauplan ab (Nutzer "buyenne",
+                    # 15.09.2026; der Absturz selbst ist mit aa355/b7d
+                    # abgefangen). Zwei Ablagen fuer dieselbe Frage.
+                    cp = dict(store.get_contract_prices(
+                        store.get_scan_region()) or {})
+                    cp.update(store.get_contract_prices(
+                        store.ALL_REGIONS) or {})
+                    cp = cp.get(type_id)
                 except Exception:
                     cp = None
                 if cp:
@@ -9818,7 +9972,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         from PySide6.QtWidgets import QApplication as _QApp
         _QApp.clipboard().setText(str(int(runs)))
         try:
-            self._flash_tip(f"{int(runs)} kopiert \u2713"
+            self._flash_tip(t("{n} copied \u2713").format(n=int(runs))
                             + (f" \u00b7 {item_name}" if item_name else ""))
         except Exception:
             pass          # Rueckmeldung ist Komfort, das Kopieren zaehlt
@@ -9856,12 +10010,29 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         rv = QVBoxLayout(rail)
         rv.setContentsMargins(12, 14, 12, 14); rv.setSpacing(5)
 
-        active = (f"QPushButton{{text-align:left; padding:13px 14px; border:none; "
+        # WO BIN ICH? (Nutzer, 15.09.2026: "im Trading-Bereich sieht man in
+        # der linken Sidebar, wo man sich befindet. Im Industrie-Bereich
+        # sieht man in der rechten Sidebar noch nicht, wo man sich befindet -
+        # kannst du das mit derselben Optik machen?")
+        #
+        # DIESELBE HANDSCHRIFT WIE LINKS (theme.py, QPushButton#NavItem:
+        # checked): Cyan-Schrift, ruhige Cyan-Flaeche, fetter - und vor
+        # allem der 3 px breite Cyan-Balken an der linken Kante. Der Balken
+        # ist das eigentliche Erkennungszeichen der linken Leiste; ohne ihn
+        # waere es eine AEHNLICHE, keine GLEICHE Optik.
+        #
+        # BEIDE ZUSTAENDE TRAGEN DENSELBEN BALKEN, nur in anderer Farbe -
+        # sonst springt der Text um 1,5 px, sobald man die Seite wechselt.
+        # Dieselbe Falle wie beim blinkenden Rahmen (CLAUDE.md).
+        active = (f"QPushButton{{text-align:left; padding:13px 14px; "
+                  f"border:1.5px solid {theme.CYAN}; "
+                  f"border-left:3px solid {theme.CYAN}; "
                   f"border-radius:8px; color:{theme.CYAN}; "
                   f"background:{theme.CYAN_FILL}; "
                   f"font-weight:800; font-size:15px;}}")
         idle = (f"QPushButton{{text-align:left; padding:13px 14px; border:1.5px solid "
-                f"{theme.BORDER}; border-radius:8px; background:transparent; "
+                f"{theme.BORDER}; border-left:3px solid {theme.BORDER}; "
+                f"border-radius:8px; background:transparent; "
                 f"font-size:15px; font-weight:600; color:{theme.TEXT};}}"
                 f"QPushButton:hover{{background:rgba(70,224,200,0.10); "
                 f"border-color:{theme.CYAN}; color:{theme.CYAN};}}")
@@ -9922,6 +10093,16 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         b_struct = page_btn(t("Structures"), 3, icon="factory")
 
         self._bau_page_btns = [b_scan, b_myblue, b_plans, b_struct]
+        # BEIM AUFBAU SCHON RICHTIG: sonst stuende die Leiste bis zum ersten
+        # Klick durchweg neutral da - also genau in dem Moment ohne Antwort,
+        # in dem man zum ersten Mal hinsieht. Gefragt wird der Stapel selbst,
+        # statt "0" anzunehmen: er ist zu diesem Zeitpunkt schon gefuellt,
+        # und eine angenommene Zahl waere eine zweite Wahrheit.
+        try:
+            self._bau_page_btns[self.b_stack.currentIndex()].setStyleSheet(
+                active)
+        except Exception:
+            pass          # eine Hervorhebung darf den Reiter nie kosten
         rv.addStretch()
         return rail
 
@@ -10129,11 +10310,22 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
 
     def _bau_nav(self, idx):
         self.b_stack.setCurrentIndex(idx)
-        # Seiten-Buttons bleiben jetzt alle farblos/neutral (kein aktiv-Highlight
-        # mehr) - der Stack-Inhalt zeigt ja schon, welche Seite offen ist. Die
-        # Farbe steckt stattdessen im "🔍 Blaupausen suchen"-Aktionsknopf.
-        for b in getattr(self, "_bau_page_btns", []):
-            b.setStyleSheet(self._bau_rail_idle_css)
+        # DIE OFFENE SEITE IST HERVORGEHOBEN (Nutzer, 15.09.2026). Hier stand
+        # frueher das Gegenteil: "Seiten-Buttons bleiben alle farblos - der
+        # Stack-Inhalt zeigt ja schon, welche Seite offen ist." Das stimmt
+        # fuer den, der das Programm gebaut hat; wer es benutzt, sucht die
+        # Antwort dort, wo sie links seit jeher steht - in der Leiste.
+        #
+        # NUR SEITEN-Knoepfe: "New build plan" ist ein Werkzeug, kein Ort -
+        # es oeffnet ein Fenster und steht deshalb gar nicht in dieser Liste.
+        #
+        # DIE LISTE IST IN SEITEN-REIHENFOLGE gebaut ([Scanner, My blueprints,
+        # My build plans, Structures] = Stapel 0..3), die Position IST also
+        # die Seitennummer. Kein zweites Verzeichnis, das auseinanderlaufen
+        # koennte.
+        for _i, b in enumerate(getattr(self, "_bau_page_btns", [])):
+            b.setStyleSheet(self._bau_rail_active_css if _i == idx
+                            else self._bau_rail_idle_css)
         # Kalender-Seite beim Öffnen aktualisieren (Pläne/Platzierungen könnten
         # sich seit dem letzten Rendern geändert haben).
         # (Kalender-Seite entfernt - nichts mehr nachzuziehen.)
@@ -10313,7 +10505,45 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
               "button for a manual re-check."))
         chk_btn.clicked.connect(lambda: self._check_saved_plan_completions(
             self.settings.get("bau_saved_plans", []) or []))
-        head_row.addWidget(chk_btn); head_row.addStretch()
+        head_row.addWidget(chk_btn)
+        # SELBER ANORDNEN (Nutzer, 15.09.2026). Ein Umschalter zum ANLASSEN:
+        # solange er gedrueckt ist, laesst sich jede Karte mit gehaltener
+        # linker Maustaste an ihren Platz ziehen - und die automatische
+        # Sortierung nach Fortschritt bleibt aussen vor.
+        # DIE KNOEPFE AUF DEN KARTEN BLEIBEN BEDIENBAR (sein Einwand: "was
+        # bringt der Arrange-Modus, wenn ich nichts druecken kann?"). Gezogen
+        # wird an Name, Zahlen und freier Flaeche; "Open", "Done", "Delete"
+        # und das Schloss gehoeren weiter dem Knopf - s. KartenSortierer.
+        # _ist_bedienelement.
+        self.bp_order_btn = QPushButton(" " + t("Arrange plans yourself"))
+        self.bp_order_btn.setIcon(icons.icon("menu"))
+        self.bp_order_btn.setCheckable(True)
+        self.bp_order_btn.setChecked(
+            bool(self.settings.get("bau_plan_manuell")))
+        self.bp_order_btn.setToolTip(t(
+            "Drag the cards into the order you want with the left mouse "
+            "button held down; the wheel keeps scrolling, and the buttons on "
+            "the cards keep working. Your order is kept – also after closing "
+            "the program and after an update. Switching this off only stops "
+            "the dragging; your order stays until you click „Sort by "
+            "progress“."))
+        self.bp_order_btn.toggled.connect(self._plan_handsortierung_umschalten)
+        head_row.addWidget(self.bp_order_btn)
+        # ZURUECK ZUR AUTOMATIK - AUF KLICK, NICHT ALS NEBENWIRKUNG (Nutzer,
+        # 15.09.2026: "die Reihenfolge bleibt, aber dann fuehren wir einen
+        # Knopf ein 'Nach Fortschritt sortieren'"). Vorher erledigte das das
+        # Ausschalten des Anordnen-Modus - dadurch liess sich der Modus weder
+        # anlassen noch ausschalten, ohne etwas zu verlieren.
+        self.bp_progress_btn = QPushButton(" " + t("Sort by progress"))
+        self.bp_progress_btn.setIcon(icons.icon("trend_up"))
+        self.bp_progress_btn.setToolTip(t(
+            "Sorts the cards by progress again: started plans on top, the "
+            "furthest along first, finished ones at the bottom. Your own "
+            "order stays saved – drag a card again and it applies once more."))
+        self.bp_progress_btn.clicked.connect(
+            self._plan_nach_fortschritt_sortieren)
+        head_row.addWidget(self.bp_progress_btn)
+        head_row.addStretch()
 
         # ZWEITEILUNG (Nutzer, Sitzung 9): links die Karten, rechts eine
         # Auflistung aller Plaene mit Gewinn und Gesamtsumme. Beides haengt in
@@ -10343,7 +10573,14 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         # zuletzt sortierte Folge; sie stimmt beim Oeffnen fast immer noch,
         # also springt nichts mehr. Kommt der frische Stand, wird trotzdem
         # nachsortiert - nur faellt es dann nicht mehr auf.
-        _letzte = self.settings.get("bau_plan_sortierung") or []
+        # HANDSORTIERUNG GEWINNT (Nutzer, 15.09.2026): ist sie an, gilt
+        # SEINE Folge - nicht die zuletzt automatisch sortierte. Neue Plaene,
+        # die er noch nie einsortiert hat, haengen hinten an (10**6), statt
+        # unsichtbar nach vorn zu rutschen.
+        if self._plan_eigene_folge_gilt():
+            _letzte = self.settings.get("bau_plan_reihenfolge") or []
+        else:
+            _letzte = self.settings.get("bau_plan_sortierung") or []
         if _letzte:
             _rang = {str(_p): _i for _i, _p in enumerate(_letzte)}
             plans = sorted(plans, key=lambda _p: _rang.get(str(_p.get("id")), 10**6))
@@ -10407,7 +10644,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             text_v.addWidget(title_lbl)
             sub_txt = f"{p['item_name']} \u00d7{p['qty']}"
             if nchecked:
-                sub_txt += f"   \u00b7   {nchecked} abgehakt"
+                sub_txt += "   \u00b7   " + t("{n} ticked off").format(n=nchecked)
             sub_lbl = QLabel(sub_txt); sub_lbl.setObjectName("Muted")
             sub_lbl.setToolTip(sub_txt)
             text_v.addWidget(sub_lbl)
@@ -10555,6 +10792,25 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         _scroll = QScrollArea(); _scroll.setWidgetResizable(True)
         _scroll.setFrameShape(QScrollArea.NoFrame); _scroll.setWidget(_liste)
         lv.addWidget(_scroll, 1)
+        # HANDSORTIERUNG: der Sortierer haengt am Karten-Layout und wird mit
+        # ihm weggeraeumt. Er ist erst scharf, wenn der Knopf gedrueckt ist.
+        try:
+            _wrap_zu_pid = {id(_w): _p for _p, _w in
+                            self._plan_karte_wrap.items()}
+            self._plan_sortierer = KartenSortierer(
+                _lz, _scroll,
+                lambda _w: _wrap_zu_pid.get(id(_w)),
+                self._plan_reihenfolge_merken,
+                theme.CYAN, theme.CYAN_FILL, _liste)
+            for _w in self._plan_karte_wrap.values():
+                self._plan_sortierer.ueberwache(_w)
+            _an_jetzt = bool(self.settings.get("bau_plan_manuell"))
+            self._plan_sortierer.aktiv = _an_jetzt
+            self._plan_manuell_war_an = _an_jetzt
+            self._plan_order_btn_stil(_an_jetzt)
+        except Exception as _e_srt:
+            self._plan_sortierer = None
+            self._log_exception("Handsortierung Bauplan-Karten", str(_e_srt))
         outer.addWidget(links, 1)
         _side = self._build_plan_profit_panel(plans, SIDEW)
         # Auch die Gewinn-Uebersicht darf schmaler werden, statt das
@@ -10692,10 +10948,13 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     self.settings, _cid9, _hub9)
                 return float(_t9), float(_b9), _q9
             except Exception:
+                # de_scan5: aus  (Herkunfts-Vermerk fuer den Schnappschuss,
+                # landet in "fee_quelle" und wird nirgends angezeigt)
                 return (float(self.settings.get("sales_tax_pct", 0) or 0)
                         / 100.0,
                         float(self.settings.get("broker_fee_pct", 0) or 0)
                         / 100.0, "globale Einstellungen")
+                # de_scan5: an
 
         if _frz and _frz.get("plan_snapshot") \
                 and int(_frz.get("qty") or 0) == qty:
@@ -11154,6 +11413,115 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             self._sortiere_plan_karten(res)
         self._run(Worker(job), done, overlay=False)
 
+    def _plan_handsortierung_umschalten(self, an):
+        """Knopf "Bauplaene selber anordnen" (Nutzer, 15.09.2026).
+
+        AN: der Sortierer greift, die Automatik bleibt draussen, und die
+        aktuelle Folge wird sofort als SEINE Folge festgehalten - sonst
+        stuende beim naechsten Oeffnen wieder die Automatik-Folge da,
+        obwohl er nie etwas verschoben hat.
+        AUS: die Automatik ordnet beim naechsten ESI-Lauf wieder. Die
+        gemerkte Handfolge bleibt liegen - schaltet er wieder ein, ist sie
+        noch da.
+        """
+        an = bool(an)
+        # KEINE WARNUNG MEHR BEIM AUSSCHALTEN (Nutzer, 15.09.2026): sie warnte
+        # davor, dass die Handarbeit gleich wieder umgeworfen wird. Das
+        # passiert nicht mehr - die eigene Folge bleibt stehen, bis er
+        # "Sort by progress" drueckt. Eine Warnung vor etwas, das nicht mehr
+        # eintritt, ist eine Unwahrheit im Programm.
+        self._plan_manuell_war_an = an
+        self.settings["bau_plan_manuell"] = an
+        srt = getattr(self, "_plan_sortierer", None)
+        if srt is not None:
+            srt.aktiv = an
+            if an:
+                # EINSCHALTEN HEISST: ab jetzt gilt SEINE Folge. Der
+                # Schnappschuss ist der Anfangszustand - sonst stuende beim
+                # naechsten Oeffnen wieder die Automatik-Folge da, obwohl er
+                # nie etwas verschoben hat.
+                self.settings["bau_plan_reihenfolge"] = [
+                    str(_p) for _p in srt.reihenfolge()]
+                self.settings["bau_plan_eigene_folge"] = True
+            else:
+                srt.alles_zuruecksetzen()
+        self._plan_order_btn_stil(an)
+        config.save_settings_async(self.settings)
+
+    def _plan_eigene_folge_gilt(self):
+        """Haelt sich die automatische Sortierung gerade heraus?
+
+        EINE Frage, EINE Antwort - sie wird an drei Stellen gebraucht (beim
+        Kartenaufbau, beim ESI-Lauf und beim Umsortieren). Frueher stand
+        dreimal `settings.get("bau_plan_manuell")` da; seit der Anordnen-
+        Modus und "meine Folge gilt" zwei verschiedene Dinge sind, waeren
+        das drei Stellen, die auseinanderlaufen koennen.
+        """
+        return bool(self.settings.get("bau_plan_manuell")
+                    or self.settings.get("bau_plan_eigene_folge"))
+
+    def _plan_nach_fortschritt_sortieren(self):
+        """Knopf "Sort by progress" (Nutzer, 15.09.2026).
+
+        Der EINZIGE Weg zurueck zur Automatik. Vorher erledigte das
+        Ausschalten des Anordnen-Modus - was bedeutete, dass man den Modus
+        nicht anlassen konnte, ohne die Sortierung zu verlieren, und ihn
+        nicht ausschalten konnte, ohne die Handarbeit zu verlieren.
+
+        Der Anordnen-Modus bleibt, wie er ist: Sortieren und Ziehen sind
+        zwei Fragen. Wer nach dem Sortieren weiterschiebt, ist sofort wieder
+        in seiner eigenen Folge (`_plan_reihenfolge_merken` setzt die Marke).
+        """
+        self.settings["bau_plan_eigene_folge"] = False
+        config.save_settings_async(self.settings)
+        _res = getattr(self, "_plan_letzter_fortschritt", None)
+        if _res:
+            self._sortiere_plan_karten(_res)
+        else:
+            # NICHT STILL (Regel 6): ohne ESI-Lauf gibt es keinen
+            # Fortschritt, nach dem sich sortieren liesse. Das muss man
+            # sagen, sonst sieht der Klick wie ein kaputter Knopf aus.
+            self._flash_tip(t("No progress known yet \u2013 click \u201eCheck "
+                              "finished status (ESI)\u201c first."))
+
+    def _plan_order_btn_stil(self, an):
+        """Der Knopf sieht man an, dass der Modus laeuft (Nutzer: "soll er
+        hervorgehoben werden oder gar leuchten, blaues transparent, wie der
+        Refresh-all-Button").
+
+        DERSELBE OBJEKTNAME wie dort - damit gilt eine Regel aus dem
+        Stylesheet, nicht ein zweiter handgemalter Knopf. Qt liest den
+        Objektnamen nur beim Polieren, deshalb unpolish/polish.
+        """
+        btn = getattr(self, "bp_order_btn", None)
+        if btn is None:
+            return
+        try:
+            btn.setObjectName("Primary" if an else "")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+            btn.update()
+        except Exception:
+            pass
+
+    def _plan_reihenfolge_merken(self, pids):
+        """Nach dem Ablegen einer Karte: neue Folge sichern.
+
+        IN DIE EINSTELLUNGEN, nicht neben das Programm: settings.json liegt
+        im Nutzerordner (%APPDATA%), ein Update ersetzt nur die .exe. Genau
+        das war die Bedingung des Nutzers ("auch bei einem Update").
+        """
+        try:
+            self.settings["bau_plan_reihenfolge"] = [
+                str(_p) for _p in (pids or []) if _p is not None]
+            # WER SCHIEBT, WILL SEINE FOLGE (Nutzer, 15.09.2026). Auch wenn er
+            # vorher "Sort by progress" gedrueckt hatte - das Schieben ist die
+            # juengere Aussage.
+            self.settings["bau_plan_eigene_folge"] = True
+            config.save_settings_async(self.settings)
+        except Exception as _e_ord:
+            self._log_exception("Bauplan-Reihenfolge speichern", str(_e_ord))
+
     def _sortiere_plan_karten(self, res):
         """Karten in "Meine Bauplaene" nach Fortschritt ordnen.
 
@@ -11167,9 +11535,21 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         stehen. Sortiert wird deshalb nachtraeglich im Layout, statt die
         Liste vorher mit einer geratenen Reihenfolge zu bauen.
         """
+        # DEN LETZTEN FORTSCHRITT MERKEN: beim Ausschalten der Handsortierung
+        # soll SOFORT wieder nach Fortschritt geordnet werden (Nutzer,
+        # 15.09.2026), nicht erst beim naechsten ESI-Lauf. Ohne den
+        # gemerkten Stand stuenden die Karten bis dahin unsortiert da.
+        if res:
+            self._plan_letzter_fortschritt = res
         lz = getattr(self, "_plan_sortier_layout", None)
         wraps = getattr(self, "_plan_karte_wrap", None) or {}
         if lz is None or not wraps:
+            return
+        # HAND VOR AUTOMATIK (Nutzer, 15.09.2026): wer selbst angeordnet hat,
+        # will nicht, dass der naechste ESI-Lauf seine Reihenfolge umwirft.
+        # UND DAS ENDET NICHT MIT DEM ANORDNEN-MODUS, sondern erst mit einem
+        # Klick auf "Sort by progress" - deshalb die gemeinsame Frage.
+        if self._plan_eigene_folge_gilt():
             return
 
         def _rang(pid):
@@ -11585,7 +11965,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 return
             from PySide6.QtWidgets import QApplication as _QA
             _QA.clipboard().setText("\n".join(names_out))
-            self._flash_tip(f"Blueprint-Name kopiert: {names_out[0]}"
+            self._flash_tip(t("Blueprint name copied: {name}").format(
+                                name=names_out[0])
                             + (f" (+{len(names_out) - 1})" if len(names_out) > 1 else ""))
 
         def _bp_table_key(ev):
@@ -11628,10 +12009,10 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 rows = [
                     {"type_id": 12005, "quantity": 1, "material_efficiency": 10,
                      "time_efficiency": 20, "runs": -1, "is_bpo": True,
-                     "location_id": 0, "_char": "(Beispiel)"},
+                     "location_id": 0, "_char": _txt("(example)")},
                     {"type_id": 11987, "quantity": 3, "material_efficiency": 4,
                      "time_efficiency": 10, "runs": 25, "is_bpo": False,
-                     "location_id": 0, "_char": "(Beispiel)"},
+                     "location_id": 0, "_char": _txt("(example)")},
                 ]
 
             # --- Schritt 2+3: Kategorie + Baukosten + Gewinn + ISK/Std pro
@@ -11713,7 +12094,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 rows.extend(_inv_rows)
                 _inv_bp_types = {r["type_id"] for r in _inv_rows}
                 # Decryptor-Optionen: „Kein Decryptor" + die (SDE-)Liste.
-                _dec_opts = ([("Kein Decryptor", (1.0, 0, 0, 0, None))]
+                _dec_opts = ([(KEIN_DECRYPTOR, (1.0, 0, 0, 0, None))]
                              + list(self._decryptor_list()))
                 unique_bp_types = {b["type_id"] for b in rows if b.get("type_id")}
 
@@ -11960,7 +12341,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 inv_from = b.get("_inventable_from")
                 if inv_from:
                     nm = f"{nm}"
-                    typ = "erfindbar"
+                    typ = _txt("inventable")
                 else:
                     typ = "BPO" if b.get("is_bpo") else "BPC"
                 runs = b.get("runs", -1)
@@ -12004,7 +12385,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 product_id = None
                 if econ is not None:
                     product_id = econ.get("product_id")
-                _dec_txt = ((econ.get("decryptor") or "\u2013", None)
+                # dec_anzeige: der gespeicherte Schluessel bleibt deutsch,
+                # die Zelle nicht (s. mw_basis.KEIN_DECRYPTOR).
+                _dec_txt = ((dec_anzeige(econ.get("decryptor")) or "\u2013", None)
                             if econ else ("\u2013", None))
                 # Gewinn je m3: nur wo Gewinn UND Volumen bekannt sind.
                 _vol = volmap.get(product_id) if product_id else None
@@ -12141,6 +12524,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         Kategorie/Profit aus den Zell-Metadaten (Qt.UserRole) der jeweiligen
         Zeile -- damit funktioniert das Filtern auch nach einer Spalten-
         Sortierung korrekt."""
+        from ..sprache import t as _txt   # `t` ist hier lokal belegt
         t = getattr(self, "bp_table", None)
         if t is None or not hasattr(self, "bp_cb_end"):
             return
@@ -12212,7 +12596,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         self._apply_missing_blueprints_display(want_cat, want_group, want_meta, search_txt)
         if hasattr(self, "bp_status"):
             base = self.bp_status.text().split("  |  ")[0]
-            self.bp_status.setText(f"{base}  |  {shown} sichtbar")
+            self.bp_status.setText(
+                base + "  |  " + _txt("{n} shown").format(n=shown))
 
     def _apply_missing_blueprints_display(self, want_cat, want_group, want_meta, search_txt=""):
         from ..sprache import t as _txt   # `t` ist hier lokal belegt
@@ -12373,7 +12758,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     else cell.text())
             from PySide6.QtWidgets import QApplication as _QA
             _QA.clipboard().setText(clean)
-            self._flash_tip(f"Blueprint-Name kopiert: {clean}")
+            self._flash_tip(t("Blueprint name copied: {name}").format(name=clean))
         elif a_plan is not None and chosen == a_plan:
             # In den Bauen-Tab wechseln und den Bauplan für das Produkt öffnen.
             try:
@@ -12578,7 +12963,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         # einen Standardwert unterstellt.
         "npc":     {"mfg": 0.0, "react": 0.0},
     }
+    # de_scan5: aus  (Klassenkonstante ohne Leser - kein Anzeigetext.
+    # Nicht entfernt: Aufraeumen im Quelltext macht aa-Waechter rot, die
+    # Quelltextzeilen samt Kommentar pruefen.)
     _RIG_LEVELS = [(0, "Kein Rig"), (1, "T1-Rig"), (2, "T2-Rig")]
+    # de_scan5: an
     _SEC_LEVELS = [(1.0, "Highsec (\u00d71.0)"), (1.9, "Lowsec (\u00d71.9)"),
                    (2.1, "Null / Wurmloch (\u00d72.1)")]
     # Voller Rig-Katalog: jeder Slot kann jedes Rig aufnehmen (wie RAVWorks).
@@ -12849,7 +13238,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 if b.get("me"):
                     tags.append(f"\u2212{b['me']:g}% Mat")
                 if b.get("te"):
-                    tags.append(f"\u2212{b['te']:g}% Zeit")
+                    tags.append(t("\u2212{v}% time").format(v=f"{b['te']:g}"))
                 if b.get("cost"):
                     tags.append(f"\u2212{b['cost']:g}% Job")
                 out.append((key, label + (f"   ({' · '.join(tags)})" if tags else "")))
@@ -13333,7 +13722,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 if _f.get("structure_id") == _lid:
                     _lname = _f.get("name")
                     break
-            _auto = " (automatisch)" if s.get("link_auto") else ""
+            _auto = t(" (automatic)") if s.get("link_auto") else ""
             _ltxt = (f"<span style='color:{theme.GREEN}'>"
                      + t("linked to {where}{auto} \u2013 material lying there "
                          "counts towards this plan").format(
@@ -14406,8 +14795,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 # de_scan2: aus  (Kategorie-SCHLUESSEL, Anzeige via _kategorie_anzeige)
                 stage = ("H\u00fcllen" if _kbp == "t1_hulls"
                 # de_scan2: an
+                         # de_scan6: aus  (Kategorie-SCHLUESSEL wie die
+                         # Nachbarzeilen; Anzeige via _kategorie_anzeige)
                          else "Fuel" if _kbp == "fuel_blocks"
                          else "Tools" if _kbp == "tools"
+                         # de_scan6: an
                          # de_scan4: aus - interner SCHLUESSEL (Kategorie/Stufe/Dict), Anzeige uebersetzt woanders
                          else "Komponente")
                          # de_scan4: an
@@ -14556,7 +14948,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     a1 = m.addAction(t("Copy blueprint name"))
                     a1.triggered.connect(lambda *_a, _n=_nm9: (
                         _QA9.clipboard().setText(_n),
-                        self._flash_tip(f"kopiert: {_n}")))
+                        self._flash_tip(t("copied: {name}").format(name=_n))))
             a2 = m.addAction(t("Copy all blueprint names"))
 
             def _alle_kopieren():
@@ -14945,6 +15337,15 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         # (Rig-Domaenen, me_map_reaction, System-Index Reaktion) laeuft schon.
         reactions_only = bool(getattr(self, "_build_reactions_only", False))
         _reac_ids = set(getattr(_rec0, "reaction_products", set()) or set())
+        # NUR RIGS (Nutzer-Wunsch 15.09.2026). Anders als bei den Reaktionen
+        # KEIN eigener frueher Zweig: Rigs sind ganz normale Module und
+        # sollen durch dieselben Tore wie alles andere - Tech-Stufe,
+        # Kategorie, Blaupausen-Erhaeltlichkeit. Das Preset verengt nur die
+        # GRUPPE. Wird nichts geladen (keine SDE), ist das Set leer und die
+        # Liste bliebe leer - deshalb greift der Filter nur, wenn wirklich
+        # Gruppen da sind (Schutzgitter, wie bei den Schwesterlisten).
+        rigs_only = bool(getattr(self, "_build_rigs_only", False))
+        _rig_gids = industry.rig_group_ids() if rigs_only else set()
         # CAPITAL-BAU-TEILE (Capital Construction Components) bleiben aus den
         # normalen Scans draussen - das sind Zulieferteile, keine Marktware.
         # Frueher versteckte ein "Capital "-NAMENS-Praefix pauschal ALLES,
@@ -15030,6 +15431,12 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 return False
             c_id, _g, m_id = info
             meta = m_id or 0
+            # NUR RIGS (Preset, Nutzer-Wunsch 15.09.2026). `_rig_gids` ist
+            # nur gefuellt, wenn das Preset laeuft UND die SDE Gruppen
+            # liefert - ohne Datenbank filtert hier also nichts, statt alles
+            # wegzuwerfen.
+            if rigs_only and _rig_gids and _g not in _rig_gids:
+                return False
             # only ever real player-buildable tech (T1/T2/T3). Faction(4)/Officer(5)/
             # Deadspace(6)/Storyline(3) and unknown(0) are excluded → no LP fantasy.
             if meta not in self._BUILDABLE_META:
@@ -15229,7 +15636,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         # sichtbar sein, nicht im Tooltip versteckt (Arbeitsregel 6).
         _full_status = " ".join(_parts)
         if deals:
-            _kurz = f"{len(deals)} Treffer"
+            _kurz = _txt("{n} hits").format(n=len(deals))
             if _n_fb:
                 _kurz += f"  \u26a0 {_n_fb}"
             if _n_bpc:
@@ -15637,6 +16044,58 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             self.b_cap_status.setText(t("Error: ") + msg)
         self._run(Worker(job), done, fail_cb=fail)
 
+    # AB WANN GILT DER CONTRACT-STAND ALS ALT?
+    # NUTZER, 15.09.2026: "sonst vergleicht man hier alte Preise von gestern
+    # oder so". Contracts laufen tagelang, ein Stand von heute Morgen ist
+    # also brauchbar - einer von gestern nicht mehr verlaesslich. 24 Stunden
+    # ist die Grenze, ab der der Knopf blinkt. Bewusst LANG im Vergleich zum
+    # Markt-Scan (15 Minuten): ein Contract-Scan kostet Minuten, ein
+    # staendig blinkender Knopf waere hier eine Zumutung.
+    _CONTRACT_ALT_SEKUNDEN = 24 * 3600
+
+    def _capital_contract_alter_pruefen(self):
+        """Contract-Knopf blinken lassen, wenn der Stand fehlt oder alt ist.
+
+        Dieselbe Blink-Regel wie der Markt-Scan-Knopf (`_blink_rahmen`) -
+        EINE Stelle fuer das Aussehen. Der Status daneben sagt, WARUM.
+        """
+        btn = getattr(self, "b_cap_contract_btn", None)
+        if btn is None:
+            return
+        try:
+            from PySide6.QtCore import QTimer as _QTimer
+            _alter = store.contract_prices_age_seconds(store.ALL_REGIONS)
+            _alt = _alter is None or _alter > self._CONTRACT_ALT_SEKUNDEN
+            if not hasattr(btn, "_ct_css"):
+                # 2 PX SCHON IM RUHEZUSTAND, sonst waechst der Knopf im Takt
+                # und schiebt die Kopfzeile (Nutzer-Befund Sitzung 20 am
+                # Markt-Scan-Knopf).
+                btn._ct_css = "QPushButton{border:2px solid transparent;}"
+                btn.setStyleSheet(btn._ct_css)
+            tmr = getattr(btn, "_ct_blink_timer", None)
+            if not _alt:
+                if tmr is not None and tmr.isActive():
+                    tmr.stop()
+                btn.setStyleSheet(btn._ct_css)
+                return
+            if tmr is None:
+                tmr = _QTimer(btn)
+                tmr.setInterval(700)
+
+                def _schritt(_b=btn):
+                    try:
+                        _b._ct_blink_an = not getattr(_b, "_ct_blink_an", False)
+                        self._blink_rahmen(_b, _b._ct_blink_an,
+                                           getattr(_b, "_ct_css", ""))
+                    except Exception:
+                        pass
+                tmr.timeout.connect(_schritt)
+                btn._ct_blink_timer = tmr
+            if not tmr.isActive():
+                tmr.start()
+        except Exception:
+            pass          # ein Hinweis darf die Seite nie kosten
+
     def _load_capital_contract_prices(self):
         """Scannt öffentliche Contracts in GANZ NEW EDEN nach Capital-Verkäufen
         (siehe scanner.scan_capital_contract_prices_all_regions) und speichert
@@ -15646,6 +16105,22 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         from .. import industry as _ind
         if not _ind.sde_ready():
             self.b_cap_status.setText(t("Run \u201eLoad recipes\u201c first."))
+            return
+        # VORHER FRAGEN (Nutzer, 15.09.2026: "ist das normal dass das fast 5
+        # Minuten dauert? ... sollte ein Popup kommen mit einer Warnung").
+        # JA, ES IST NORMAL: der Scan holt die Contract-Listen ALLER Regionen
+        # und danach zu JEDEM Treffer dessen Inhalt einzeln - das sind
+        # tausende Einzelabrufe, und die laufen der Reihe nach, damit ESI
+        # nicht ins Error-Limit laeuft. Wer das nicht weiss, haelt das
+        # Programm fuer haengen geblieben.
+        from PySide6.QtWidgets import QMessageBox as _QMB
+        if _QMB.question(
+                self, t("Load contract prices"),
+                t("This searches the public contracts of ALL regions and then "
+                  "looks into every hit individually \u2013 that takes SEVERAL "
+                  "MINUTES (around five is normal).\n\nIt runs in the "
+                  "background, you can keep working. Start now?"),
+                _QMB.Ok | _QMB.Cancel, _QMB.Ok) != _QMB.Ok:
             return
         region = store.get_scan_region()
         self.b_cap_contract_btn.setEnabled(False)
@@ -15674,6 +16149,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
 
         def done(n_found):
             self.b_cap_contract_btn.setEnabled(True)
+            # Stand ist jetzt frisch - das Blinken gehoert sofort aus, nicht
+            # erst beim naechsten Oeffnen des Capital-Modus.
+            self._capital_contract_alter_pruefen()
             self.b_cap_status.setText(t(
                 "Contract scan finished (all of New Eden): {n} capital type(s) with "
                 "public offers found. Public contracts only - ESI does not see "
@@ -15750,6 +16228,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 self.b_cap_table.setMinimumHeight(320)
         if checked and hasattr(self, "b_cap_table") and self.b_cap_table.rowCount() == 0:
             self._compute_capital_costs()
+        # BEIM OEFFNEN DES CAPITAL-MODUS PRUEFEN (Nutzer, 15.09.2026): ist
+        # der Contract-Stand alt oder gar nicht da, blinkt der Knopf. Ohne
+        # das vergleicht man stillschweigend Preise von gestern.
+        if checked:
+            self._capital_contract_alter_pruefen()
 
     def _build_menu_cap(self, pos):
         """Rechtsklick im Capital-Bereich: wie _build_menu für die normale
@@ -17095,12 +17578,15 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         tbl.setRowCount(len(rows))
         gold = QColor(theme.AMBER); green = QColor(theme.GREEN); cyan = QColor(theme.CYAN)
         for i, a in enumerate(rows):
+            # Die Raenge sind ANZEIGETEXT, kein Schluessel - sie landen
+            # direkt in der Zelle. "Silber" stand hier bis Sitzung 22
+            # deutsch in der englischen Oberflaeche.
             if i < 5:
-                rank = "Gold"
+                rank = t("Gold")
             elif i < 15:
-                rank = "Silber"
+                rank = t("Silver")
             else:
-                rank = "Bronze"
+                rank = t("Bronze")
             trend = a.get("trend", "—")
             trend_txt = {"falling": t("\u2193 falling"), "sideways": t("\u2192 sideways"),
                          "rising": t("\u2191 rising")}.get(trend, "\u2014")
@@ -17826,7 +18312,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                                     "top says \u201e0 to buy\u201c, there is nothing to copy here (built/covered does "
                                     "not count as missing)."))
             _b_miss.clicked.connect(
-                lambda: _copy_rows("missing", "fehlende Position(en)"))
+                lambda: _copy_rows("missing", _txt("missing item(s)")))
             _close = QPushButton(_txt("Close")); _close.clicked.connect(dlg.reject)
             _close.setIcon(icons.icon("close"))
             row.insertWidget(0, _b_miss)
@@ -19114,7 +19600,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             # sie aus den Dropdowns (Nutzer-Wunsch "dann soll sie nicht
             # auswählbar sein"); war es nur ein transienter Token-Fehler,
             # bleibt sie (Probe liefert dann wieder True).
-            if "Kein Zugriff" in str(msg):
+            if hubs.ist_zugriffsfehler(str(msg)):
                 probe = [x for x in (src, tgt)
                          if x and x.get("kind") == "structure"]
                 if probe:
@@ -20331,7 +20817,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             in_order = (getattr(self, "_sh_mark_orders", False)
                         and r["type_id"] in getattr(self, "_buy_order_ids", set()))
             f = nm_it.font(); f.setBold(in_order); nm_it.setFont(f)
-            src_txt = {"daytrade": "Daytrade", "swing": "Swing"}.get(src, "manuell/Portfolio")
+            src_txt = {"daytrade": "Daytrade", "swing": "Swing"}.get(
+                src, t("manual/portfolio"))
             if in_order:
                 nm_it.setForeground(QColor(theme.RED))
                 # AUCH IM TEXT, nicht nur in der Farbe (Nutzer, Sitzung 20).
@@ -20966,7 +21453,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         else:
             txt = f"{price:.4f}".rstrip("0").rstrip(".")
         QApplication.clipboard().setText(txt)
-        self._copied_popup("kopiert ✓")
+        self._copied_popup()
         self.statusBar().showMessage(t(
             "Sale price {price} for {name} copied \u2013 paste it into the price field of "
             "the sell order in game (undercuts the best sell by one tick).").format(
@@ -20982,9 +21469,16 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             txt = (it.text() if it else "").lower()
             table.setRowHidden(row, bool(needle) and needle not in txt)
 
-    def _flash_tip(self, text="kopiert ✓"):
+    def _flash_tip(self, text=None):
         """Kurzes Bestätigungs-Tooltip an der Maus – bleibt lange genug sichtbar,
-        um es lesen zu können (~2,2 s bzw. bis die Maus das Fenster verlässt)."""
+        um es lesen zu können (~2,2 s bzw. bis die Maus das Fenster verlässt).
+
+        DER STANDARDTEXT WIRD HIER IM RUMPF UEBERSETZT, nicht im
+        Vorgabewert: ein `text=t("...")` im Kopf laeuft beim IMPORT, also
+        vor der Sprachwahl, und stuende dann in jeder Fassung auf der
+        Startsprache fest (dieselbe Falle wie t() in einer Klassenkonstante)."""
+        if text is None:
+            text = t("copied ✓")
         from PySide6.QtWidgets import QToolTip
         from PySide6.QtGui import QCursor
         from PySide6.QtCore import QRect, QPoint
@@ -20995,7 +21489,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         QToolTip.showText(pos - QPoint(24, 44), text, self, QRect(), 2000)
 
     # Rückwärtskompatibler Alias (alte Aufrufer):
-    def _copied_popup(self, text="kopiert ✓"):
+    def _copied_popup(self, text=None):
         self._flash_tip(text)
 
     def _sell_name_dblclick(self, row, col):
@@ -21009,7 +21503,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             return
         from PySide6.QtWidgets import QApplication
         QApplication.clipboard().setText(it.text())
-        self._copied_popup("kopiert ✓")
+        self._copied_popup()
         self.statusBar().showMessage(
             t("\u201e{name}\u201c copied \u2013 paste into the search in the inventory.").format(
                 name=it.text()))
@@ -21778,7 +22272,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                       key=lambda r: r["name"])   # Verlust-Items nie ansteuern
         st = self._step_state.setdefault(key, {"idx": 0, "prev": None, "done": set()})
         if not rows:
-            self._flash_tip("Nichts nachzubessern ✓")
+            self._flash_tip(t("Nothing to adjust ✓"))
             self.statusBar().showMessage(
                 t("No orders to adjust on this page \u2013 run \u201eCheck orders\u201c first."))
             return
@@ -22088,7 +22582,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             # No thousands separators — plain numbers parse most reliably.
             lines.append(f"{h.name} {price:.2f}")
         QApplication.clipboard().setText("\n".join(lines))
-        self._flash_tip(f"{len(lines)} Preise kopiert ✓")
+        self._flash_tip(t("{n} prices copied ✓").format(n=len(lines)))
         # INGAME-GRENZE (Nutzer-Angabe, Sitzung 8): das Verkaufsfenster nimmt
         # hoechstens SELL_LIMIT Items auf einmal. Darueber muss man in
         # Bloecken arbeiten - sonst faellt der Rest still unter den Tisch
@@ -22439,7 +22933,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             price = self._overbid_price(lad["buy"][0][0]) if (lad and lad.get("buy")) else 0.0
             steps.append((r["type_id"], r["name"], price, r["id"]))
         if not steps:
-            self._flash_tip("Nichts abzuarbeiten ✓")
+            self._flash_tip(t("Nothing to process ✓"))
             self.statusBar().showMessage(t("Shopping cart is empty."))
             return
         if getattr(self, "_sh_step_idx", 0) >= len(steps):
@@ -22495,7 +22989,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         daytrade_rows = [r for r in rows if (r.get("source") or "") == "daytrade"]
         copyable = [r for r in rows if (r.get("source") or "") != "daytrade"]
         if not copyable:
-            self._flash_tip("Nichts zu kopieren")
+            self._flash_tip(t("Nothing to copy"))
             msg = (t("No non-daytrade items in the shopping list.")
                    if daytrade_rows else
                    t("No items in the shopping list. Add items first (e.g. in the build "
@@ -22952,7 +23446,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             self.statusBar().showMessage(t("No transactions to export."))
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, t("Export transactions"), "transaktionen.csv",
+            self, t("Export transactions"), t("transactions.csv"),
             t("CSV files (*.csv)"))
         if not path:
             return
@@ -23057,7 +23551,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         p1.scene().addItem(self._vol_vb)
         p1.getAxis("right").linkToView(self._vol_vb)
         self._vol_vb.setXLink(p1)
-        p1.getAxis("right").setLabel("Tagesvolumen")
+        p1.getAxis("right").setLabel(t("Daily volume"))
         p1.getAxis("right").setTextPen(theme.MUTED)
 
         def _sync_vol_view():
@@ -23135,10 +23629,16 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 ys = [d["average"] for d in self._mk_full if d.get("average")]
                 vols = [d.get("volume") or 0 for d in self._mk_full]
                 if ys:
+                    # Der Tausenderpunkt wird jetzt NUR auf das Volumen
+                    # angewendet (vorher auf die ganze Zeile) - isk() setzt
+                    # seine Apostrophe selbst, und ein Komma im Itemnamen
+                    # gehoert nicht ersetzt.
                     self.statusBar().showMessage(
-                        f"{self.mk_item.currentText()} · {len(ys)} Tage Historie · "
-                        f"Ø {isk(sum(ys)/len(ys))} · "
-                        f"Σ Volumen {sum(vols):,}".replace(",", "'"))
+                        t("{item} · {days} days history · Ø {avg} "
+                          "· Σ volume {vol}").format(
+                            item=self.mk_item.currentText(), days=len(ys),
+                            avg=isk(sum(ys) / len(ys)),
+                            vol=f"{sum(vols):,}".replace(",", "'")))
             else:
                 self.statusBar().showMessage(
                     t("No history available (item may be traded rarely)."))
@@ -23483,6 +23983,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             scopes.extend(config.SKILL_SCOPES)   # read Accounting/Broker + standings
         if self.settings.get("use_implants"):
             scopes.append(config.IMPLANT_SCOPE)  # Fertigungszeit-Bonus-Implantate erkennen
+        if self.settings.get("use_corp"):
+            scopes.extend(config.CORP_SCOPES)    # Corp-Hangar fuers Bauen (1.0.8)
         self._run(
             Worker(auth.login, self.settings["client_id"],
                    int(self.settings["callback_port"]), scopes),
@@ -23590,6 +24092,40 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         self.s_implants.addItem(t("Off"), False)
         self.s_implants.addItem(t("On (detect manufacturing-time implants)"), True)
         self.s_implants.setCurrentIndex(1 if self.settings.get("use_implants") else 0)
+        # CORP-HANGAR FUERS BAUEN (1.0.8). STANDARD AUS (Entscheid 14.09.2026,
+        # Regel 3). Wirkt wie die anderen Berechtigungs-Schalter SOFORT und
+        # verlangt ein Neu-Verlinken - EVE erteilt Scopes nur beim Login.
+        self.s_corp = QComboBox()
+        self.s_corp.addItem(t("Off"), False)
+        self.s_corp.addItem(t("On (count corp hangars when building)"), True)
+        self.s_corp.setCurrentIndex(1 if self.settings.get("use_corp") else 0)
+        # DIE SIEBEN DIVISIONS EINZELN (Entscheid 14.09.2026): nicht
+        # pauschal alle - Material einer Division, die der Corp-Verkauf
+        # nutzt, darf nicht ungefragt in die Bauplanung wandern. Namen
+        # kommen per Knopf aus ESI (braucht Director + Corp-Scope); bis
+        # dahin heissen sie "Division N".
+        self._corp_div_row = QWidget()
+        _dl = QHBoxLayout(self._corp_div_row)
+        _dl.setContentsMargins(0, 0, 0, 0); _dl.setSpacing(6)
+        self.s_corp_divs = {}
+        from .. import corp as _corp_mod
+        _gewaehlt = set(_corp_mod.divisions_bereinigt(
+            self.settings.get("corp_divisions")))
+        for _n in _corp_mod.ALLE_DIVISIONS:
+            _cb = QCheckBox(t("Division {n}").format(n=_n))
+            _cb.setIcon(icons.icon("package"))
+            _cb.setChecked(_n in _gewaehlt)
+            _cb.toggled.connect(lambda _on, n=_n: self._corp_division_sofort())
+            self.s_corp_divs[_n] = _cb
+            _dl.addWidget(_cb)
+        self.s_corp_names_btn = QPushButton(t("Load names"))
+        self.s_corp_names_btn.setIcon(icons.icon("refresh"))
+        self.s_corp_names_btn.setToolTip(t(
+            "Fetches the division names of your corporation from ESI. Needs a "
+            "linked character with the Director role and the corp permission."))
+        self.s_corp_names_btn.clicked.connect(self._corp_division_namen_laden)
+        _dl.addWidget(self.s_corp_names_btn)
+        _dl.addStretch(1)
         # BERECHTIGUNGS-SCHALTER WIRKEN SOFORT (Sitzung 17, Nutzer-Befund bei
         # der Erstinstallation): "Structure markets" stand sichtbar auf On,
         # intern galt weiter Off - uebernommen wurde erst per "Save" ganz unten
@@ -23600,7 +24136,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         # wird - was man sieht, muss auch gelten. ERST NACH setCurrentIndex
         # verbinden, sonst schreibt schon der Aufbau.
         for _key, _cb in (("use_structures", self.s_struct), ("use_assets", self.s_source),
-                          ("use_ui", self.s_ui), ("use_implants", self.s_implants)):
+                          ("use_ui", self.s_ui), ("use_implants", self.s_implants),
+                          ("use_corp", self.s_corp)):
             _cb.currentIndexChanged.connect(
                 lambda _i, k=_key, c=_cb: self._scope_schalter_sofort(k, c))
 
@@ -23633,21 +24170,15 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             wdg.currentIndexChanged.connect(self._update_fee_preview) if isinstance(
                 wdg, QComboBox) else wdg.valueChanged.connect(self._update_fee_preview)
 
-        # CLIENT-ID + EINRICHTUNGS-KNOPF IN EINER ZEILE: wer eine eigene
-        # ESI-Anwendung eintragen will, findet die Anleitung dort, wo der
-        # Wert steht. Sonst muesste er raten, wo sie hin ist.
+        # KEIN ANLEITUNGS-KNOPF MEHR (Nutzer-Entscheid 17.09.2026: "raus").
+        # Er fuehrte zur Anleitung fuer eine EIGENE ESI-Anwendung - ein Rest
+        # aus der Zeit vor der eingebauten Client-ID. Das Feld selbst bleibt
+        # (die Login-Logik liest es), der Einrichtungs-Dialog bleibt als
+        # Notausgang fuer den Fall "Client-ID leer" (open_setup).
         _client_row = QWidget()
         _cl = QHBoxLayout(_client_row)
         _cl.setContentsMargins(0, 0, 0, 0); _cl.setSpacing(8)
         _cl.addWidget(self.s_client, 1)
-        self.s_setup_btn = QPushButton(t("Instructions"))
-        self.s_setup_btn.setIcon(icons.icon("info"))
-        self.s_setup_btn.setToolTip(
-            t("Step by step: create your own ESI application at CCP and enter its "
-              "client ID here.\n"
-              "Only needed if you do NOT want to use the built-in application."))
-        self.s_setup_btn.clicked.connect(self.open_setup)
-        _cl.addWidget(self.s_setup_btn)
 
         fields = [
             (t("ESI client ID"), _client_row),
@@ -23661,7 +24192,18 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             (t("Structure markets"), self.s_struct),
             (t("Open in game"), self.s_ui),
             (t("Implant manufacturing bonus"), self.s_implants),
+            (t("Corporation hangars (build)"), self.s_corp),
+            (t("Corp divisions"), self._corp_div_row),
         ]
+        self.s_corp.setToolTip(t(
+            "On: the build plan, run planner and blueprints also count the "
+            "hangar divisions ticked below - of every corporation your linked "
+            "characters are in. One fetch per corporation, never per "
+            "character. Needs the Director role in game and re-linking. "
+            "Portfolio and Profits are NOT affected."))
+        self._corp_div_row.setToolTip(t(
+            "Which of the seven corp hangar divisions count as build stock. "
+            "Nothing is counted until at least one is ticked."))
         self.s_implants.setToolTip(t("Detects plugged-in manufacturing time implants (Zainou 'Beancounter' "
                                      "Industry BX-80X) via ESI and includes their bonus in the build time. "
                                      "Needs a new login (new scope) - visible afterwards under 'Build "
@@ -23904,8 +24446,180 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         # 1170 px Mindesthoehe - sie zwang damit das ganze Fenster, obwohl
         # die Reiter mit Werkzeugleiste laengst rollen. Sie hat keine
         # Leiste, gehoert also komplett in einen Rollbereich.
-        self.tabs.addTab(self._roll_mitte(w), t("Settings"))
+        self._settings_w = self._roll_mitte(w)
+        self.tabs.addTab(self._settings_w, t("Settings"))
         self._update_cb_label()
+        # AB JETZT WIRD GEFRAGT (Nutzer, 15.09.2026). Erst HIER anmelden:
+        # vorher gibt es die Felder nicht, und ein Riegel, der ins Leere
+        # greift, waere schlimmer als keiner.
+        self._einstellungen_stand_merken()
+        self.tabs.vor_wechsel = self._einstellungen_wechsel_pruefen
+
+    # ---- ungespeicherte Einstellungen -------------------------------------
+    def _einstellungen_feldstand(self):
+        """Der Stand ALLER Eingabefelder der Einstellungsseite.
+
+        BEWUSST DIE FELDER, NICHT `self.settings`: zwei der gespeicherten
+        Werte (`sales_tax_pct`, `broker_fee_pct`) werden bei "aus Skills
+        rechnen" laufend neu abgeleitet - auch vom aktiven Handelshub. Ein
+        Vergleich gegen die Einstellungen haette deshalb "geaendert"
+        gemeldet, ohne dass jemand etwas angefasst hat, und die Rueckfrage
+        waere zum Dauergast geworden. Was hier zaehlt, ist allein: steht in
+        den Feldern noch dasselbe wie beim letzten Speichern?
+        """
+        stand = {
+            "client": self.s_client.text().strip(),
+            "port": int(self.s_port.value()),
+            "margin": float(self.s_margin.value()),
+            "tax": float(self.s_tax.value()),
+            "broker": float(self.s_broker.value()),
+            "sbroker": float(self.s_sbroker.value()),
+            "fees_skills": bool(self.s_fees_skills.currentData()),
+            "accounting": int(self.s_accounting.value()),
+            "broker_rel": int(self.s_broker_rel.value()),
+            "mode": self.s_mode.currentData(),
+            "source": bool(self.s_source.currentData()),
+            "struct": bool(self.s_struct.currentData()),
+            "ui": bool(self.s_ui.currentData()),
+            "implants": bool(self.s_implants.currentData()),
+            "use_corp": bool(self.s_corp.currentData()),
+            "corp_divs": tuple(n for n, c in self.s_corp_divs.items()
+                               if c.isChecked()),
+        }
+        for _k, _sp in self.s_hub_corp.items():
+            stand["corp_" + str(_k)] = float(_sp.value())
+        for _k, _sp in self.s_hub_faction.items():
+            stand["fac_" + str(_k)] = float(_sp.value())
+        return stand
+
+    def _einstellungen_stand_merken(self):
+        """Den aktuellen Feldstand als "gespeichert" festhalten."""
+        try:
+            self._einst_stand = self._einstellungen_feldstand()
+        except Exception:
+            self._einst_stand = None
+
+    def _einstellungen_offen(self):
+        """Steht etwas in den Feldern, das nicht gespeichert ist?"""
+        alt = getattr(self, "_einst_stand", None)
+        if alt is None:
+            return False        # kein Vergleichsstand -> nichts behaupten
+        try:
+            return self._einstellungen_feldstand() != alt
+        except Exception:
+            return False
+
+    def _einstellungen_wechsel_pruefen(self, alt, _neu):
+        """Riegel vor jedem Seitenwechsel. True = wechseln erlaubt.
+
+        Fragt NUR beim Verlassen der Einstellungsseite und NUR, wenn dort
+        wirklich etwas offen ist - sonst waere es eine Rueckfrage, die man
+        wegklickt, ohne sie zu lesen.
+        """
+        _seite = getattr(self, "_settings_w", None)
+        if _seite is None or self.tabs.widget(alt) is not _seite:
+            return True
+        if not self._einstellungen_offen():
+            return True
+        _antwort = self._einstellungen_frage()
+        if _antwort == "speichern":
+            self.save_settings()        # merkt den Stand selbst nach
+            return True
+        if _antwort == "verwerfen":
+            # ZURUECK AUF DEN GESPEICHERTEN STAND: die Seite wird beim
+            # naechsten Besuch NICHT neu gebaut, die verworfenen Zahlen
+            # stuenden also weiter in den Feldern und saehen aus, als
+            # gaelten sie.
+            self._einstellungen_felder_zuruecksetzen()
+            return True
+        return False                    # "Zurueck zu den Einstellungen"
+
+    def _einstellungen_frage(self):
+        """Die Rueckfrage selbst. Gibt "speichern", "verwerfen" oder
+        "zurueck" zurueck.
+
+        EIGENE METHODE, damit die Entscheidung pruefbar ist: ein modales
+        Fenster laesst sich in der Testsuite nicht bedienen (b59 bewacht
+        genau diese Falle). Der Wächter b7k fährt damit alle drei Wege
+        wirklich durch, statt nur den Quelltext zu lesen.
+        """
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle(t("Unsaved settings"))
+        box.setText(t("You changed settings but did not save them."))
+        box.setInformativeText(t(
+            "Without saving they have no effect – the program keeps "
+            "working with the old values."))
+        _sp = box.addButton(t("Save and continue"), QMessageBox.AcceptRole)
+        _vw = box.addButton(t("Discard changes"), QMessageBox.DestructiveRole)
+        box.addButton(t("Back to settings"), QMessageBox.RejectRole)
+        box.setDefaultButton(_sp)
+        box.exec()
+        _geklickt = box.clickedButton()
+        if _geklickt is _sp:
+            return "speichern"
+        if _geklickt is _vw:
+            return "verwerfen"
+        return "zurueck"
+
+    def _einstellungen_felder_zuruecksetzen(self):
+        """Alle Felder wieder auf den gespeicherten Stand bringen.
+
+        Die Schalter, die SOFORT speichern (Berechtigungen), sind bewusst
+        dabei: ihr gespeicherter Wert ist der, den sie zeigen sollen. Ihre
+        Signale werden dabei still gelegt, sonst schriebe das Zuruecksetzen
+        selbst wieder in die Einstellungen.
+        """
+        _combos = (self.s_mode, self.s_source, self.s_struct, self.s_ui,
+                   self.s_implants, self.s_fees_skills, self.s_corp)
+        for _c in _combos:
+            _c.blockSignals(True)
+        for _c in self.s_corp_divs.values():
+            _c.blockSignals(True)
+        try:
+            self.s_client.setText(self.settings.get("client_id", ""))
+            self.s_port.setValue(int(self.settings.get("callback_port", 8635)))
+            self.s_margin.setValue(float(self.settings.get("target_margin", 0)))
+            self.s_tax.setValue(float(self.settings.get("sales_tax_pct", 0)))
+            self.s_broker.setValue(float(self.settings.get("broker_fee_pct", 0)))
+            self.s_sbroker.setValue(
+                float(self.settings.get("structure_broker_pct", 1.0)))
+            self.s_accounting.setValue(
+                int(self.settings.get("skill_accounting", 0)))
+            self.s_broker_rel.setValue(
+                int(self.settings.get("skill_broker_relations", 0)))
+            self.s_fees_skills.setCurrentIndex(
+                1 if self.settings.get("fees_from_skills") else 0)
+            self.s_mode.setCurrentIndex(
+                0 if self.settings.get("sell_mode") == "relist" else 1)
+            self.s_source.setCurrentIndex(
+                1 if self.settings.get("use_assets") else 0)
+            self.s_struct.setCurrentIndex(
+                1 if self.settings.get("use_structures") else 0)
+            self.s_ui.setCurrentIndex(
+                1 if self.settings.get("use_ui") else 0)
+            self.s_implants.setCurrentIndex(
+                1 if self.settings.get("use_implants") else 0)
+            self.s_corp.setCurrentIndex(
+                1 if self.settings.get("use_corp") else 0)
+            from .. import corp as _corp_r
+            _gw = set(_corp_r.divisions_bereinigt(
+                self.settings.get("corp_divisions")))
+            for _n, _c in self.s_corp_divs.items():
+                _c.setChecked(_n in _gw)
+            _hub_st = self.settings.get("hub_standings", {}) or {}
+            for _k, _sp in self.s_hub_corp.items():
+                _sp.setValue(float((_hub_st.get(_k) or {}).get("corp", 0.0)))
+            for _k, _sp in self.s_hub_faction.items():
+                _sp.setValue(float((_hub_st.get(_k) or {}).get("faction", 0.0)))
+        except Exception as _e_res:
+            self._log_exception("Einstellungen zuruecksetzen", str(_e_res))
+        finally:
+            for _c in _combos:
+                _c.blockSignals(False)
+            for _c in self.s_corp_divs.values():
+                _c.blockSignals(False)
+        self._einstellungen_stand_merken()
 
     def _fmt_size(self, b):
         for unit in ("B", "KB", "MB", "GB"):
@@ -24606,10 +25320,99 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             self.settings.get("skill_broker_relations", 5),
             st.get("faction", 0.0), st.get("corp", 0.0))
 
+    def createPopupMenu(self):
+        """Qt-Override: das Fenster bietet KEIN Rechtsklick-Menue mehr an.
+
+        QMainWindow baut hier von sich aus eine Liste aller Werkzeugleisten
+        zum Aus- und Einblenden. Genau der Haken darin hat dem Nutzer die
+        obere Leiste weggeschaltet (15.09.2026). Es gibt im Programm keinen
+        Grund, eine Leiste zu verstecken - also gibt es das Menue nicht.
+
+        SIEHT UNBENUTZT AUS, IST ES ABER NICHT: Qt ruft die Methode selbst,
+        so wie `__lt__` und `validate` (s. Kopf von mw_basis.py). Nicht
+        loeschen.
+        """
+        return None
+
     def _update_cb_label(self):
         self._cb_label.setText(
             t("Enter this callback URL in the ESI app:  ")
             + config.callback_url(int(self.s_port.value())))
+
+    def _corp_division_sofort(self):
+        """Eine Division an-/abgewaehlt: SOFORT speichern, wie die
+        Berechtigungs-Schalter. Sie entscheidet mit, was der naechste
+        Bauplan zaehlt - was man sieht, muss gelten."""
+        neu = [n for n, c in self.s_corp_divs.items() if c.isChecked()]
+        if list(self.settings.get("corp_divisions") or []) == neu:
+            return
+        self.settings["corp_divisions"] = neu
+        config.save_settings(self.settings)
+        self._einstellungen_stand_merken()
+        self.statusBar().showMessage(
+            t("Corp divisions saved: {n}").format(n=len(neu)) if neu
+            else t("No corp division selected – corp hangars count nothing."))
+
+    def _corp_division_namen_laden(self):
+        """Division-Namen aus ESI holen und an die Kaestchen schreiben.
+
+        Ueber den ERSTEN Charakter, der Corp-Scope und Director-Rolle hat -
+        derselbe Abrufplan wie im Bauplan (corp.abrufplan). Findet sich
+        keiner, sagt die Statuszeile warum, statt still nichts zu tun.
+        """
+        from .. import corp as _corp
+        client_id = self.settings.get("client_id")
+        chars = store.list_characters()
+        if not client_id or not chars:
+            self.statusBar().showMessage(t("No characters / client ID"))
+            return
+
+        def job():
+            corp_von, rollen_von, relink = {}, {}, []
+            for ch in chars:
+                cid = ch["character_id"]
+                corp_von[cid] = esi.fetch_character_corporation(cid)
+                try:
+                    _gs = esi.granted_scopes(client_id, cid)
+                except Exception:
+                    _gs = set()
+                if (config.CORP_ROLES_SCOPE not in _gs
+                        or config.CORP_DIVISIONS_SCOPE not in _gs):
+                    relink.append(ch.get("character_name", str(cid)))
+                    rollen_von[cid] = None
+                    continue
+                try:
+                    rollen_von[cid] = esi.fetch_character_roles(client_id, cid)
+                except Exception:
+                    rollen_von[cid] = None
+            plan, ohne = _corp.abrufplan(chars, corp_von, rollen_von,
+                                         _corp.ROLLE_DIVISIONS)
+            namen = {}
+            for corp_id, cid in plan.items():
+                namen[corp_id] = _corp.division_namen(
+                    esi.fetch_corporation_divisions(client_id, cid, corp_id))
+            return {"namen": namen, "relink": relink, "no_role": list(ohne)}
+
+        def done(res):
+            namen = res.get("namen") or {}
+            if namen:
+                # Bei mehreren Corps: Namen beider nebeneinander, getrennt
+                # durch " / " - die Division-NUMMER ist das, was gilt.
+                for n, cb in self.s_corp_divs.items():
+                    _teile = [v.get(n) for v in namen.values() if v.get(n)]
+                    cb.setText(" / ".join(_teile) if _teile
+                               else t("Division {n}").format(n=n))
+                self.statusBar().showMessage(t("Division names loaded."))
+            elif res.get("relink"):
+                self.statusBar().showMessage(t(
+                    "Re-link {names} first – the login has no corp "
+                    "permission yet.").format(names=", ".join(res["relink"])))
+            else:
+                self.statusBar().showMessage(t(
+                    "No linked character holds the Director role – names "
+                    "cannot be loaded."))
+
+        self._run(Worker(job), done, err_prefix=t("Corp divisions"))
 
     def _scope_schalter_sofort(self, key, combo):
         """Einen Berechtigungs-Schalter SOFORT uebernehmen und speichern.
@@ -24623,6 +25426,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             return
         self.settings[key] = neu
         config.save_settings(self.settings)
+        # Dieser Schalter hat sich SELBST gespeichert - er darf den
+        # Seitenwechsel nicht als "ungespeichert" blockieren.
+        self._einstellungen_stand_merken()
         if neu:
             self.statusBar().showMessage(t(
                 "Switched on and saved. Now re-link your character (Characters "
@@ -24675,8 +25481,15 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             "use_structures": bool(self.s_struct.currentData()),
             "use_ui": bool(self.s_ui.currentData()),
             "use_implants": bool(self.s_implants.currentData()),
+            "use_corp": bool(self.s_corp.currentData()),
+            "corp_divisions": [n for n, c in self.s_corp_divs.items()
+                               if c.isChecked()],
         })
         config.save_settings(self.settings)
+        # STAND NACHZIEHEN (Nutzer, 15.09.2026): ohne das gaelten die eben
+        # gespeicherten Werte weiter als "offen", und die Rueckfrage kaeme
+        # beim naechsten Seitenwechsel trotz Speichern.
+        self._einstellungen_stand_merken()
         self._update_cb_label()
         if new_assets and not old_assets:
             self.statusBar().showMessage(t(
@@ -25671,7 +26484,17 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
     # Kopfzeile 15px in Textfarbe, darunter EIN Knopf, der genau das tut, was
     # fehlt. Kein Symbol, keine Erklaerung, keine Links.
     def _leerhinweis(self, table, titel, knopf_text=None, aktion=None,
-                     satz=None, symbol=None):
+                     satz=None, symbol=None, zustand=None):
+        """Hinweis in einer leeren Tabelle - mit einem Knopf, der GENAU das
+        tut, was fehlt.
+
+        `zustand`: optionale Funktion -> (titel, knopf_text, symbolname,
+        aktion). Wird bei jedem Einblenden gefragt. NUTZER-BEFUND 17.09.2026:
+        "klickt man auf Market scan unter 'No market data', kommt zwar ein
+        Ladebildschirm, aber keine Auflistung". Der Scan LIEF - was fehlte,
+        war "Load deals". Ein Hinweis, der immer "Market scan" sagt, ist nach
+        dem ersten Scan also falsch. Jetzt sagt er, was WIRKLICH fehlt.
+        """
         from PySide6.QtWidgets import QVBoxLayout as _V, QWidget as _W
         _vp = table.viewport()
         box = _W(_vp)
@@ -25691,8 +26514,12 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             # Bedienelemente ein Symbol haben.
             if symbol is not None and not symbol.isNull():
                 _b.setIcon(symbol)
-            if aktion is not None:
-                _b.clicked.connect(lambda _=False, _a=aktion: _a())
+            box._aktion = aktion
+            box._knopf = _b
+            # Ueber box._aktion, nicht direkt: `zustand` darf die Aktion
+            # beim Einblenden austauschen (Scan -> Deals laden).
+            _b.clicked.connect(
+                lambda _=False, _bx=box: (_bx._aktion() if _bx._aktion else None))
             _bz = QHBoxLayout(); _bz.addStretch(); _bz.addWidget(_b); _bz.addStretch()
             v.addLayout(_bz)
         elif satz:
@@ -25707,6 +26534,16 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             try:
                 _leer = table.rowCount() == 0
                 box.setVisible(_leer)
+                if _leer and zustand is not None and getattr(box, "_knopf", None):
+                    try:
+                        _t2, _k2, _sym2, _a2 = zustand()
+                        _t.setText(_t2)
+                        box._knopf.setText(_k2)
+                        if _sym2:
+                            box._knopf.setIcon(icons.icon(_sym2))
+                        box._aktion = _a2
+                    except Exception as _ze:
+                        self._log_exception("Leerhinweis-Zustand", str(_ze))
                 if _leer:
                     box.adjustSize()
                     box.move(max(0, (_vp.width() - box.width()) // 2),
@@ -25729,24 +26566,43 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         """Fuer jede Liste den passenden Hinweis - EINE Stelle, damit kein
         Tab vergessen wird. Der Knopf tut genau das, was fehlt."""
         _scan = getattr(self, "g_scan_btn", None)
-        _bp = getattr(self, "g_sde_btn", None)
+        # MEINE BLAUPAUSEN: der Knopf laedt die Blaupausen der Charaktere
+        # (bp_refresh_btn) - NICHT die SDE (g_sde_btn). Nutzer-Befund
+        # 17.09.2026: "bei Blueprint genauso, keine Wirkung" - der alte
+        # Hinweis zeigte auf den SDE-Download, der bei geladener SDE nur
+        # zurueckfragt und sonst nichts tut.
+        _bp = getattr(self, "bp_refresh_btn", None) or getattr(self, "g_sde_btn", None)
+
+        def _deals_zustand(load_btn):
+            """Vor dem ersten Scan: "Market scan". Danach fehlt nur noch
+            "Load deals" - und genau den bekommt der Knopf."""
+            def _z():
+                if store.snapshot_age_seconds() is None:
+                    return (t("No market data yet"), t("Market scan"),
+                            "satellite",
+                            (lambda: _scan.click()) if _scan is not None else None)
+                return (t("Market scanned \u2013 now load the deals"),
+                        t("Load deals"), "search",
+                        (lambda: load_btn.click()) if load_btn is not None else None)
+            return _z
+
         # SYMBOL AUSDRUECKLICH (Sitzung 17): das Symbol des Vorbild-Knopfes
         # zu kopieren lieferte ein leeres QIcon - b55 wurde zu Recht rot.
         _fuer = (
             ("deals_table", t("No market data yet"), t("Market scan"),
-             _scan, "satellite"),
+             _scan, "satellite", _deals_zustand(getattr(self, "deals_btn", None))),
             ("hold_table", t("No market data yet"), t("Market scan"),
-             _scan, "satellite"),
+             _scan, "satellite", _deals_zustand(getattr(self, "hold_btn", None))),
             ("rg_table", t("No market data yet"), t("Market scan"),
-             _scan, "satellite"),
+             _scan, "satellite", _deals_zustand(getattr(self, "rg_go", None))),
             ("bp_table", t("No blueprints loaded yet"), t("Load blueprints"),
-             _bp, "blueprint"),
+             _bp, "blueprint", None),
             ("pf_table", t("Nothing here yet"), t("Market scan"),
-             _scan, "satellite"),
-            ("pr_table", t("No transactions yet"), None, None, None),
-            ("tx_table", t("No transactions yet"), None, None, None),
+             _scan, "satellite", None),
+            ("pr_table", t("No transactions yet"), None, None, None, None),
+            ("tx_table", t("No transactions yet"), None, None, None, None),
         )
-        for _n, _titel, _btxt, _btn, _sym in _fuer:
+        for _n, _titel, _btxt, _btn, _sym, _zu in _fuer:
             _tbl = getattr(self, _n, None)
             if _tbl is None:
                 continue
@@ -25756,9 +26612,20 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     (lambda _b=_btn: _b.click()) if _btn is not None else None,
                     symbol=(icons.icon(_sym) if _sym else None),
                     satz=(None if _btn is not None
-                          else t("Link a character under \u201eCharacters\u201c.")))
+                          else t("Link a character under \u201eCharacters\u201c.")),
+                    zustand=_zu)
             except Exception as _lh:            # pragma: no cover
                 self._log_exception("Leerhinweis " + _n, str(_lh))
+
+    def _leerhinweise_aktualisieren(self):
+        """Alle Leer-Hinweise neu stellen - nach einem Scan wechselt ihr
+        Knopf von "Market scan" auf "Load deals", ohne dass sich die Tabelle
+        geaendert haette (die Signale der Tabelle feuern dann nicht)."""
+        for _tbl, _f in getattr(self, "_leerhinweise", []) or []:
+            try:
+                _f()
+            except Exception:
+                pass
 
     def _autosize_once(self, table, key):
         """Size columns to their contents on first fill only, so later manual

@@ -280,9 +280,6 @@ def fetch_character_orders(client_id: str, character_id: int) -> list:
     return r.json()
 
 
-_STORAGE_FLAGS = {"Hangar", "Unlocked", "Locked"}
-
-
 def _fetch_all_assets(client_id: str, character_id: int) -> list:
     base = f"{config.ESI_BASE}/characters/{character_id}/assets/"
     headers = _auth_headers(client_id, character_id)
@@ -312,6 +309,184 @@ def fetch_asset_names(client_id: str, character_id: int, item_ids: list) -> dict
     return out
 
 
+def container_type_ids_safe() -> set:
+    """Die Behaelter-Typen aus der SDE - darf nie etwas kosten.
+
+    Spaeter Import wie beim SDE-Download weiter unten: `esi` soll nicht beim
+    Laden schon an `industry` haengen. Faellt die SDE aus, kommt ein leeres
+    Set zurueck und es gilt wieder allein die alte Inhalts-Regel.
+    """
+    try:
+        from . import industry
+        return industry.container_type_ids()
+    except Exception:
+        return set()
+
+
+def _behaelter_pruefer(by_parent, container_typen=None):
+    """Liefert die Frage "ist das ein Behaelter?" - EINE Regel fuer alle.
+
+    Sie steht hier fuer sich, weil beide Bestands-Zaehlungen sie brauchen
+    (Portfolio/"Ueberall" und die ortsgebundenen Bau-Bereiche). Zwei Kopien
+    derselben Regel waeren zwei Wahrheiten - genau der Zustand, aus dem der
+    Frachtcontainer-Fehler entstanden ist.
+
+    `by_parent`: {location_id: [Assets darin]}.
+    """
+    _ctypes = set(container_typen or ())
+    inner = {"Unlocked", "Locked"}
+
+    def _ist_behaelter(a):
+        if a.get("type_id") in _ctypes:
+            return True
+        # Alte Regel als Rueckfall: hat es Kinder mit Schloss-Markierung?
+        return any(c.get("location_flag") in inner
+                   for c in by_parent.get(a.get("item_id"), []))
+
+    return _ist_behaelter
+
+
+def hangar_und_container(assets, container_typen=None):
+    """Hangar-Inhalt und Behaelter aus einer rohen Assets-Liste trennen.
+
+    Gibt ({type_id: Menge}, [{item_id, type_id, name, contents}]) zurueck.
+
+    EIGENE, PURE FUNKTION (statt mitten im ESI-Abruf): nur so laesst sich
+    der Fall ohne Netz und ohne Spielstand nachstellen - genau daran ist der
+    Fehler unten jahrelang unbemerkt geblieben.
+
+    DER FEHLER, den der Nutzer am 15.09.2026 gemeldet hat: "das Portfolio
+    trackt nur Items in Station Containern und in keinen anderen
+    Containern." Ein Behaelter wurde bisher allein daran erkannt, dass sein
+    INHALT die Markierung `Unlocked`/`Locked` trug. Die tragen aber nur die
+    abschliessbaren Station-Container. Ein Freight Container im Hangar galt
+    damit als gewoehnliches Item - und alles darin war fuer das Portfolio
+    schlicht nicht vorhanden.
+
+    JETZT WIRD DER BEHAELTER ERKANNT, NICHT SEIN INHALT: `container_typen`
+    kommt aus der SDE (Gruppenname "... Container"). Bei so einem Typ zaehlt
+    JEDES Kind als Inhalt, egal welche Markierung ESI dranschreibt - ein
+    Behaelter hat keine Modulplaetze, alles darin IST Inhalt. Damit ist die
+    Regel unabhaengig davon, welche Markierung CCP je Behaelterart vergibt.
+
+    DIE ALTE REGEL BLEIBT DANEBEN BESTEHEN: ohne SDE (leeres
+    `container_typen`) werden Station-Container weiter ueber ihren Inhalt
+    erkannt. Eine Verbesserung darf nie schlechter sein als der Zustand,
+    den sie ersetzt.
+
+    NUR EINE EBENE TIEF WEITER: in einen Behaelter IM Behaelter wird
+    hinabgestiegen, in ein SCHIFF im Behaelter nicht. Sonst zaehlten
+    gefittete Module und Drohnen als Lagerbestand - und ein Bestand, der zu
+    hoch ausgewiesen wird, ist die gefaehrliche Richtung (Regel 3).
+    """
+    _ctypes = set(container_typen or ())
+    by_parent = {}
+    for a in assets or []:
+        by_parent.setdefault(a.get("location_id"), []).append(a)
+    _ist_behaelter = _behaelter_pruefer(by_parent, _ctypes)
+
+    hangar = {}
+    containers = []
+    for a in assets or []:
+        if a.get("location_flag") != "Hangar":
+            continue
+        if not _ist_behaelter(a):
+            hangar[a["type_id"]] = hangar.get(a["type_id"], 0) + a.get("quantity", 1)
+            continue
+        contents = {}
+        stack = list(by_parent.get(a.get("item_id"), []))
+        gesehen = set()
+        while stack:
+            c = stack.pop()
+            _cid = c.get("item_id")
+            if _cid in gesehen:
+                continue
+            gesehen.add(_cid)
+            contents[c["type_id"]] = contents.get(c["type_id"], 0) + c.get("quantity", 1)
+            if _ist_behaelter(c):
+                stack.extend(by_parent.get(_cid, []))
+        containers.append({"item_id": a.get("item_id"), "type_id": a["type_id"],
+                           "name": None, "qty": a.get("quantity", 1),
+                           "contents": contents})
+    return hangar, containers
+
+
+def hangar_summe(assets, container_typen=None) -> dict:
+    """{type_id: Menge} fuer ALLES im Hangar - lose Items, die Behaelter
+    selbst und ihr Inhalt.
+
+    EINE WAHRHEIT FUER "WAS LIEGT IM HANGAR" (Arbeitsregel 9). Der Bauplan
+    zaehlte im Bereich "Ueberall" mit einer EIGENEN Regel: Inhalt nur dann,
+    wenn ESI ihn `Unlocked`/`Locked` markiert. Das Portfolio hatte dieselbe
+    Regel - bis der Nutzer am 15.09.2026 zeigte, dass Freight Container so
+    durchfallen. Beide Stellen jetzt auf derselben Funktion.
+
+    DER BEHAELTER SELBST BLEIBT GEZAEHLT: ein Cargo Container ist ein
+    baubares Item und kann Material sein. Ihn stillschweigend fallen zu
+    lassen waere ein zu NIEDRIGER Bestand - und damit ein Einkauf zu viel.
+    """
+    hangar, container = hangar_und_container(assets, container_typen)
+    summe = dict(hangar)
+    for c in container:
+        _t = int(c["type_id"])
+        summe[_t] = summe.get(_t, 0) + int(c.get("qty") or 1)
+        for t, q in (c.get("contents") or {}).items():
+            summe[int(t)] = summe.get(int(t), 0) + int(q)
+    return summe
+
+
+def bestand_an_orten(assets, location_ids, container_typen=None):
+    """Alles, was an diesen Orten haengt - PURE Funktion, ohne Netz pruefbar.
+
+    Gibt ({type_id: Menge}, gesehene item_ids, {location_id: Anzahl Zeilen})
+    zurueck. Das ist die Zaehlung der Bestandsbereiche "Nur Bau-Strukturen"
+    und "Nur wo dieser Plan baut".
+
+    SIE STEIGT IN BEHAELTER HINAB und fragt dort KEINE Markierung: was in
+    einem Behaelter an der Struktur liegt, liegt an der Struktur. Deshalb
+    war der gemeldete Frachtcontainer-Fehler hier nie ein Thema - anders als
+    im Bereich "Ueberall", der bis zum 16.09.2026 eine eigene, markierungs-
+    abhaengige Regel hatte.
+
+    IN SCHIFFE ABER NICHT (Nutzer, 16.09.2026: "Schiffe und deren Fittings
+    und Inhalt sollten niemals zaehlen, in keinem Szenario" - fuers BAUEN;
+    im Portfolio bleibt alles wie es ist). Vorher stieg diese Schleife in
+    JEDES Kind hinab, also auch in gefittete Module, Drohnen und
+    Schiffsladung. Die galten damit als Baumaterial an der Struktur. Ein zu
+    HOCH ausgewiesener Bestand ist die gefaehrliche Richtung (Regel 3): der
+    Plan haelt Material fuer vorhanden, das im Job nicht verfuegbar ist.
+    Der Rumpf selbst zaehlt weiter - er liegt an der Struktur wie jedes
+    andere Item.
+
+    HERAUSGELOEST (16.09.2026, Nutzer-Frage "erkennen die beiden Bereiche
+    Container-Inhalte auch?"): vorher steckte diese Schleife im ESI-Abruf
+    und war damit ohne Spielstand nicht nachstellbar - also unbewacht. Eine
+    Zusage, die niemand nachpruefen kann, ist keine.
+    """
+    by_parent = {}
+    for a in assets or []:
+        by_parent.setdefault(a.get("location_id"), []).append(a)
+    _ist_behaelter = _behaelter_pruefer(by_parent, container_typen)
+    out = {}
+    seen = set()
+
+    def collect(loc):
+        for a in by_parent.get(loc, []):
+            iid = a.get("item_id")
+            if iid in seen:
+                continue
+            seen.add(iid)
+            out[a["type_id"]] = out.get(a["type_id"], 0) + a.get("quantity", 1)
+            if _ist_behaelter(a):
+                collect(iid)     # in den Behaelter-Inhalt hinein
+    per_loc = {}
+    for loc in {int(x) for x in location_ids or ()}:
+        _vorher = len(seen)
+        collect(loc)
+        per_loc[loc] = len(seen) - _vorher
+    return out, seen, per_loc
+
+
 def fetch_assets_structured(client_id: str, character_id: int) -> dict:
     """Return hangar items plus each hangar container with its (nested) contents.
 
@@ -324,31 +499,8 @@ def fetch_assets_structured(client_id: str, character_id: int) -> dict:
     }
     Excludes fitted modules, ship cargo, drones and items in space."""
     assets = _fetch_all_assets(client_id, character_id)
-    by_parent = {}
-    for a in assets:
-        by_parent.setdefault(a.get("location_id"), []).append(a)
-
-    hangar = {}
-    containers = []
-    inner = {"Unlocked", "Locked"}
-    for a in assets:
-        if a.get("location_flag") != "Hangar":
-            continue
-        iid = a["item_id"]
-        kids = [c for c in by_parent.get(iid, []) if c.get("location_flag") in inner]
-        if kids:
-            contents = {}
-            stack = list(kids)
-            while stack:
-                c = stack.pop()
-                contents[c["type_id"]] = contents.get(c["type_id"], 0) + c.get("quantity", 1)
-                for gc in by_parent.get(c["item_id"], []):
-                    if gc.get("location_flag") in inner:
-                        stack.append(gc)
-            containers.append({"item_id": iid, "type_id": a["type_id"],
-                               "name": None, "contents": contents})
-        else:
-            hangar[a["type_id"]] = hangar.get(a["type_id"], 0) + a.get("quantity", 1)
+    _ctypes = container_type_ids_safe()
+    hangar, containers = hangar_und_container(assets, _ctypes)
 
     if containers:
         try:
@@ -386,29 +538,14 @@ def fetch_assets(client_id: str, character_id: int, only_hangar: bool = True) ->
             totals[a["type_id"]] = totals.get(a["type_id"], 0) + a.get("quantity", 1)
         return totals
 
-    # item_ids of things sitting directly in a hangar (these may be containers)
-    container_ids = {a["item_id"] for a in assets
-                     if a.get("location_flag") == "Hangar" and "item_id" in a}
-    # walk down into nested storage containers (not ship slots / cargo)
-    changed = True
-    while changed:
-        changed = False
-        for a in assets:
-            iid = a.get("item_id")
-            if (iid is not None and iid not in container_ids
-                    and a.get("location_flag") in _STORAGE_FLAGS
-                    and a.get("location_id") in container_ids):
-                container_ids.add(iid)
-                changed = True
-
-    totals = {}
-    for a in assets:
-        flag = a.get("location_flag")
-        in_hangar = flag == "Hangar"
-        in_container = flag in {"Unlocked", "Locked"} and a.get("location_id") in container_ids
-        if in_hangar or in_container:
-            totals[a["type_id"]] = totals.get(a["type_id"], 0) + a.get("quantity", 1)
-    return totals
+    # DIESELBE REGEL WIE IM PORTFOLIO (Nutzer-Frage 16.09.2026, ob der
+    # Bauplan-Bereich "Ueberall" noch die alte Erkennung benutzt - er tat
+    # es). Vorher stand hier eine zweite, eigene Zaehlung: Inhalt nur bei
+    # der Markierung `Unlocked`/`Locked`. Die neue Regel erkennt den
+    # BEHAELTER an seinem Typ und ist damit ein OBERBEGRIFF der alten (die
+    # bleibt als Rueckfall in `hangar_und_container` stehen) - es kann
+    # also nichts wegfallen, was frueher gezaehlt wurde.
+    return hangar_summe(assets, container_type_ids_safe())
 
 
 def fetch_type_image_bytes(type_id: int, size: int = 64, kind: str = "icon") -> bytes:
@@ -533,9 +670,11 @@ def _log_name_fail(msg):
     try:
         base = _os.path.dirname(_os.path.abspath(_sys.argv[0])) or _os.getcwd()
         with open(_os.path.join(base, "fehler.log"), "a", encoding="utf-8") as fh:
+            # de_scan5: aus  (Zeile in fehler.log, kein Anzeigetext)
             fh.write("\n" + _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                      + "  [Namensaufloesung] " + str(msg)
                      + "  (aufgerufen aus " + _woher + ")\n")
+            # de_scan5: an
     except Exception:
         pass
 
@@ -744,6 +883,160 @@ def fetch_blueprints(client_id: str, character_id: int) -> list:
             "runs": runs,
             "is_bpo": is_bpo,
             "location_id": b.get("location_id"),
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# CORP-HANGAR (1.0.8, nur fuers Bauen). Reine Logik in corp.py; hier nur die
+# Abrufe. Jeder braucht seinen eigenen Scope (config.CORP_*_SCOPE) UND eine
+# Ingame-Rolle (corp.ROLLE_*); ohne Rolle antwortet ESI mit 403.
+# ---------------------------------------------------------------------------
+
+def _get_alle_seiten(base, headers, params=None, timeout=30):
+    """Alle Seiten eines paginierten ESI-Endpunkts (X-Pages) einsammeln.
+    Gibt (zeilen, erste_antwort) zurueck - die erste Antwort traegt den
+    Last-Modified-Header fuer das Datenalter."""
+    _p = dict(params or {})
+    _p["page"] = 1
+    first = _get_with_retry(base, params=_p, headers=headers, timeout=timeout)
+    first.raise_for_status()
+    pages = int(first.headers.get("X-Pages", "1"))
+    rows = list(first.json() or [])
+    for p in range(2, pages + 1):
+        _p["page"] = p
+        r = _get_with_retry(base, params=_p, headers=headers, timeout=timeout)
+        r.raise_for_status()
+        rows.extend(r.json() or [])
+    return rows, first
+
+
+def fetch_character_corporation(character_id: int):
+    """corporation_id eines Charakters - OEFFENTLICH, kein Token noetig.
+    15 Minuten vorgehalten (Corp-Wechsel sind selten). None bei Fehler."""
+    def _hole():
+        r = _session.get(f"{config.ESI_BASE}/characters/{int(character_id)}/",
+                         timeout=20)
+        r.raise_for_status()
+        return (r.json() or {}).get("corporation_id")
+    try:
+        return _ttl_geholt(("char_corp", int(character_id)), _hole)
+    except Exception:
+        return None
+
+
+def fetch_corporation_name(corporation_id: int) -> str:
+    """Name einer Corporation - oeffentlich; bei Fehler die Nummer."""
+    def _hole():
+        r = _session.get(
+            f"{config.ESI_BASE}/corporations/{int(corporation_id)}/",
+            timeout=20)
+        r.raise_for_status()
+        return (r.json() or {}).get("name") or str(corporation_id)
+    try:
+        return _ttl_geholt(("corp_name", int(corporation_id)), _hole)
+    except Exception:
+        return str(corporation_id)
+
+
+def fetch_character_roles(client_id: str, character_id: int) -> set:
+    """Die Corp-Rollen des Charakters (z.B. {"Director", "Factory_Manager"}).
+    Braucht CORP_ROLES_SCOPE. Nur die ALLGEMEINEN Rollen - `roles_at_hq`
+    usw. sind Standort-Einschraenkungen, die die Corp-Endpunkte nicht
+    freischalten."""
+    url = f"{config.ESI_BASE}/characters/{character_id}/roles/"
+    r = _get_with_retry(url, headers=_auth_headers(client_id, character_id),
+                        timeout=30)
+    r.raise_for_status()
+    return set((r.json() or {}).get("roles") or [])
+
+
+def fetch_corporation_assets(client_id: str, character_id: int,
+                             corporation_id: int) -> list:
+    """ROHE Asset-Liste der Corp (alle Seiten). Rolle: Director.
+    Das Datenalter wird unter der corporation_id gemerkt - so kann der
+    virtuelle Bestand sie wie einen Charakter behandeln."""
+    base = f"{config.ESI_BASE}/corporations/{int(corporation_id)}/assets/"
+    rows, first = _get_alle_seiten(base, _auth_headers(client_id, character_id))
+    _record_assets_meta(int(corporation_id), first)
+    return rows
+
+
+def fetch_corporation_divisions(client_id: str, character_id: int,
+                                corporation_id: int) -> dict:
+    """Rohe Antwort von /divisions/ ({"hangar": [...], "wallet": [...]}).
+    Rolle: Director. Namen aufloesen macht corp.division_namen."""
+    url = f"{config.ESI_BASE}/corporations/{int(corporation_id)}/divisions/"
+    r = _get_with_retry(url, headers=_auth_headers(client_id, character_id),
+                        timeout=30)
+    r.raise_for_status()
+    return r.json() or {}
+
+
+def fetch_corporation_blueprints(client_id: str, character_id: int,
+                                 corporation_id: int, divisions=None) -> list:
+    """Corp-Blueprints in DERSELBEN Form wie fetch_blueprints - plus
+    `location_flag` und `division`. Rolle: Director.
+
+    Mit `divisions` nur die aus diesen Hangar-Divisions: eine Blaupause in
+    einer nicht gewaehlten Division ist fuer den Bauplan so wenig da wie das
+    Material dort."""
+    from . import corp as _corp
+    base = f"{config.ESI_BASE}/corporations/{int(corporation_id)}/blueprints/"
+    rows, _ = _get_alle_seiten(base, _auth_headers(client_id, character_id))
+    gewaehlt = (set(_corp.divisions_bereinigt(divisions))
+                if divisions is not None else None)
+    out = []
+    for b in rows:
+        div = _corp.division_von(b.get("location_flag"))
+        if gewaehlt is not None and div not in gewaehlt:
+            continue
+        raw_qty = b.get("quantity", 1)
+        runs = b.get("runs", -1)
+        is_bpo = (runs == -1) or (raw_qty == -1)
+        qty = raw_qty if raw_qty and raw_qty > 0 else 1
+        out.append({
+            "type_id": b.get("type_id"),
+            "quantity": qty,
+            "material_efficiency": b.get("material_efficiency", 0),
+            "time_efficiency": b.get("time_efficiency", 0),
+            "runs": runs,
+            "is_bpo": is_bpo,
+            "location_id": b.get("location_id"),
+            "location_flag": b.get("location_flag"),
+            "division": div,
+            "corporation_id": int(corporation_id),
+        })
+    return out
+
+
+def fetch_corporation_jobs(client_id: str, character_id: int,
+                           corporation_id: int,
+                           include_delivered: bool = False) -> list:
+    """Industrie-Jobs der Corp in DERSELBEN Form wie fetch_active_jobs.
+    Rolle: Factory_Manager. Paginiert (X-Pages)."""
+    base = f"{config.ESI_BASE}/corporations/{int(corporation_id)}/industry/jobs/"
+    rows, _ = _get_alle_seiten(
+        base, _auth_headers(client_id, character_id),
+        params={"include_completed": "true" if include_delivered else "false"})
+    allowed = ("active", "paused", "ready") + \
+        (("delivered",) if include_delivered else ())
+    out = []
+    for j in rows:
+        st = j.get("status")
+        if st and st not in allowed:
+            continue
+        out.append({
+            "job_id": j.get("job_id"),
+            "activity_id": j.get("activity_id"),
+            "product_type_id": j.get("product_type_id"),
+            "blueprint_type_id": j.get("blueprint_type_id"),
+            "runs": j.get("runs"),
+            "start_date": j.get("start_date"),
+            "end_date": j.get("end_date"),
+            "completed_date": j.get("completed_date"),
+            "status": st,
+            "corporation_id": int(corporation_id),
         })
     return out
 
@@ -1205,25 +1498,8 @@ def assets_at_locations(client_id: str, character_id: int,
         r = _get_with_retry(base, params={"page": p}, headers=headers, timeout=30)
         r.raise_for_status()
         assets.extend(r.json())
-    by_parent = {}
-    for a in assets:
-        by_parent.setdefault(a.get("location_id"), []).append(a)
-    out = {}
-    seen = set()
-
-    def collect(loc):
-        for a in by_parent.get(loc, []):
-            iid = a.get("item_id")
-            if iid in seen:
-                continue
-            seen.add(iid)
-            out[a["type_id"]] = out.get(a["type_id"], 0) + a.get("quantity", 1)
-            collect(iid)     # recurse into container contents
-    _per_loc = {}
-    for loc in {int(x) for x in location_ids}:
-        _before = len(seen)
-        collect(loc)
-        _per_loc[loc] = len(seen) - _before
+    out, seen, _per_loc = bestand_an_orten(assets, location_ids,
+                                           container_type_ids_safe())
     if diag_out is not None:
         # MESSUNG statt Vermutung (Aufgabe "Bestand erreicht den Bauplan
         # nicht"): unterscheidet "Charakter hat GAR keine Assets" (Abruf/

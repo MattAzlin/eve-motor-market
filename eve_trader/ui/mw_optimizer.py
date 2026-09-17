@@ -652,8 +652,8 @@ class Optimizer:
                         limits.append(_txt("cargo hold fits ~{n} units per trip").format(
                             n=g(r['freight_at'])))
                     if abso:
-                        limits.append(f"realistisch verkaufst du ~{g(abso['per_week'])}"
-                                      "/Woche")
+                        limits.append(_txt("realistically you sell ~{n}/week").format(
+                            n=g(abso['per_week'])))
                     lim_txt = (_txt(" \u2013 your real limit: ")
                                + ", ".join(limits)) if limits else ""
                     eff_summary.setText(_txt(
@@ -739,16 +739,16 @@ class Optimizer:
                                  "({qty}, ~{per}/unit) \u2013 no profit maximum within").format(
                                 qty=_qty_full(max_q), per=isk(best['profit'] / max_q)))
                     else:
-                        parts.append(f"Bester Gewinn: {_qty_full(best['qty'])} \u00b7 "
-                                     f"{isk(best['profit'])}")
+                        parts.append(_txt("Best profit: {qty} \u00b7 {isk}").format(
+                            qty=_qty_full(best['qty']), isk=isk(best['profit'])))
                     profitable = [c["qty"] for c in curve if c["profit"] >= 0]
                     if profitable and max(profitable) == max_q:
                         # "Profitabel bis 20" las sich wie eine Obergrenze, ab
                         # der es kippt. Tatsaechlich war einfach alles bis zum
                         # Rand profitabel.
-                        parts.append(
-                            f"Im gerechneten Bereich durchgehend profitabel "
-                            f"(bis {_qty_full(max_q)})")
+                        parts.append(_txt(
+                            "Profitable throughout the calculated range "
+                            "(up to {qty})").format(qty=_qty_full(max_q)))
                     elif profitable:
                         parts.append(_txt("Profitable up to {qty}, not beyond").format(
                             qty=_qty_full(max(profitable))))
@@ -1147,6 +1147,7 @@ class Optimizer:
             # "Eigene Einstellung": Sonderschalter zuruecksetzen, sonst bliebe
             # "Nur Reaktionen" nach einem Preset-Wechsel faelschlich aktiv.
             self._build_reactions_only = False
+            self._build_rigs_only = False
             if hasattr(self, "b_only_cap_lbl"):
                 self.b_only_cap_lbl.setText("")
             return
@@ -1162,10 +1163,19 @@ class Optimizer:
             self.b_pmin.setValue(p.get("pmin", 0))
             self.b_pmax.setValue(p.get("pmax", 0))
             self._build_reactions_only = bool(p.get("reactions", False))
+            self._build_rigs_only = bool(p.get("rigs", False))
+            # EINE ZEILE, DREI MOEGLICHE AUSSAGEN. Sie muss auch LEER werden
+            # koennen: bleibt "Nur Reaktionen" nach dem Wechsel auf ein
+            # anderes Preset stehen, behauptet die Oberflaeche einen Filter,
+            # der gar nicht mehr laeuft (Nutzer-Fall aus Sitzung 11).
             if hasattr(self, "b_only_cap_lbl"):
-                self.b_only_cap_lbl.setText(
-                    t("\u2705 Reactions only (from preset)")
-                    if self._build_reactions_only else "")
+                if self._build_reactions_only:
+                    _nur = t("\u2705 Reactions only (from preset)")
+                elif self._build_rigs_only:
+                    _nur = t("\u2705 Rigs only (from preset)")
+                else:
+                    _nur = ""
+                self.b_only_cap_lbl.setText(_nur)
         finally:
             self._applying_build_preset = False
         # kein Auto-Laden – der Nutzer klickt selbst „🔍 Blaupausen suchen“.

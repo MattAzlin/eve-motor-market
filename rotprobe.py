@@ -13,6 +13,7 @@ rot werden kann. Jede Mutation dreht GENAU EINEN Fix zurueck; danach muss die
 zugehoerige Pruefung fehlschlagen. Faellt nichts aus, war die Pruefung blind.
 """
 import os
+import re
 import shutil
 import tempfile
 import subprocess
@@ -257,8 +258,7 @@ MUTATIONEN = [
      'der aktive Reiter ist AMBER, nicht Cyan'),
     ('Zeilenhoehe wieder geraten statt gemessen (Knopf beschnitten)',
      'eve_trader/ui/mw_bauplan_tabs.py',
-     """                            _cw.adjustSize()
-                            _hoehe = max(30, _cw.sizeHint().height() + 6)""",
+     """                            _hoehe = max(34, _cw.sizeHint().height() + 10)""",
      '                            _hoehe = 30   # MUTATION',
      'die Zeile ist hoch genug fuer den Knopf'),
     # BAUPLAN-POPUP (Sitzung 8, zweimal gemeldet): kehrt der Dialog zurueck,
@@ -377,7 +377,8 @@ MUTATIONEN = [
     ('Struktur-Wahl merkt sich keine Begruendung mehr',
      'eve_trader/ui/main_window.py',
      """            self._bd_struct_choice[activity] = (
-                ([(f"{_fest.get('name', '?')} (fest zugewiesen)",
+                ([(t("{name} (fixed assignment)").format(
+                       name=_fest.get('name', '?')),
                    round(benefit(_fest), 2))] if _fest is not None else [])
                 + [(x.get("name", "?"), round(benefit(x), 2))
                    for x in ranked
@@ -2737,11 +2738,8 @@ MUTATIONEN = [
      '        btnrow.addStretch()',
      "kein Einrichtungs-Knopf mehr neben"),
 
-    ('Anleitung ist gar nicht mehr erreichbar',
-     'eve_trader/ui/main_window.py',
-     '        self.s_setup_btn.clicked.connect(self.open_setup)',
-     '        pass   # MUTATION',
-     'fuehrt wirklich zum Einrichtungs-Dialog'),
+    # MUTATION "Anleitung nicht mehr erreichbar" GESTRICHEN (17.09.2026): der
+    # Anleitungs-Knopf ist auf Nutzer-Entscheid entfernt ("raus").
 
     # --- b23: Tiefenpruefung wieder erreichbar ---
     ('Tiefenpruefung ist wieder aus der Oberflaeche verschwunden',
@@ -4952,8 +4950,10 @@ Source: "settings.json"; DestDir: "{app}"''',
      'b78 die Tour haengt sich an das Fenster des Schritts'),
     ('"Build or buy" haengt wieder nur am Fenster',
      'eve_trader/ui/tutorial.py',
-     '        ("_bd_karte_bauenkaufen", t("Build or buy?"),',
-     '        ("bd:dialog", t("Build or buy?"),',
+     '        (("bd:tab:" + t("Recipe structure"), "_bd_karte_bauenkaufen"),\n'
+     '         t("Build or buy?"),',
+     '        ("bd:dialog",\n'
+     '         t("Build or buy?"),',
      "b78 'Build or buy' zeigt auf seine Karte"),
     ('Der Einfrier-Schritt zeigt nicht mehr auf die Knoepfe',
      'eve_trader/ui/tutorial.py',
@@ -5394,8 +5394,8 @@ Source: "settings.json"; DestDir: "{app}"''',
      'aa353 die Stueckzahl steht VOR der Verzweigung'),
     ('Der Blink-Rahmen aendert wieder die Knopfgroesse',
      'eve_trader/ui/main_window.py',
-     '        _farbe = theme.AMBER if self._scan_blink_an else "transparent"',
-     '        _farbe = theme.AMBER if self._scan_blink_an else "none"',
+     '        _farbe = theme.AMBER if an else "transparent"',
+     '        _farbe = theme.AMBER if an else "none"',
      'b67 der Aus-Zustand hat denselben Rahmen, nur durchsichtig'),
     ('Das Blinken laeuft nach dem Scan weiter',
      'eve_trader/ui/main_window.py',
@@ -5443,10 +5443,552 @@ Source: "settings.json"; DestDir: "{app}"''',
      '                        act = _txt("buy \\u00b7 no recipe")',
      '                    if False:\n                        pass   # MUTATION',
      'aa325 es haengt an product_to_bp'),
+    # ABSTURZ OHNE VERKAUFSPREIS (Nutzer "buyenne", 15.09.2026): faellt die
+    # Vorbelegung weg, ist `gross` im Capital-Fall wieder unbelegt und der
+    # Bauplan stuerzt beim Oeffnen ab. Der Waechter dafuer ist aa355, der
+    # Verhaltenstest b7d.
+    ('Gewinn-Zahlen sind ohne Verkaufspreis wieder unbelegt',
+     'eve_trader/ui/mw_bauplan_fenster.py',
+     '            gross = None\n'
+     '            prof = None\n'
+     '            prof_raw = None\n'
+     '            total_all = None',
+     '            pass   # MUTATION',
+     'aa355 keine Gewinn-Zahl wird ohne Verkaufspreis gelesen'),
+    # CONTRACT-KNOPF (Nutzer-Wunsch 15.09.2026): blinkt er nicht mehr, ist er
+    # wieder so unauffaellig wie im Dropdown - der Grund fuer den Umbau faellt
+    # damit weg, ohne dass irgendetwas kaputt aussieht.
+    ('Der Contract-Knopf blinkt nicht mehr',
+     'eve_trader/ui/mw_bauplan_fenster.py',
+     '            if not tmr.isActive():\n                tmr.start()',
+     '            pass   # MUTATION',
+     'b7e und er blinkt'),
+    # KOPIERBARER FORMEL-NAME (Nutzer-Wunsch 15.09.2026): faellt die Hinterlegung
+    # weg, sieht der Runplaner unveraendert aus - nur klickt man ins Leere.
+    ('Der Formel-Name im Runplaner ist nicht mehr hinterlegt',
+     'eve_trader/ui/mw_bauplan_tabs.py',
+     '                    iit.setData(0, ROLLE_KOPIERNAME,',
+     '                    iit.setData(0, Qt.UserRole + 99,   # MUTATION',
+     'b7f der Formel-Name wird an der Zeile hinterlegt'),
+    # HANDSORTIERUNG (Nutzer-Wunsch 15.09.2026): faellt der Vorrang weg, wirft
+    # der naechste ESI-Lauf die selbst gezogene Reihenfolge wieder um - und
+    # zwar erst Minuten spaeter, wenn niemand mehr den Zusammenhang sieht.
+    ('Die Automatik ordnet wieder um, obwohl handsortiert',
+     'eve_trader/ui/main_window.py',
+     '        if self._plan_eigene_folge_gilt():\n            return',
+     '        if False:   # MUTATION\n            return',
+     'b7g die Automatik ruehrt die Handfolge nicht an'),
+    # ALTER CONTRACT-STAND (Nutzer-Wunsch 15.09.2026): blinkt der Knopf nicht
+    # mehr, vergleicht man still Preise von gestern - die Zahlen sehen dabei
+    # voellig normal aus, nur eben falsch.
+    ('Ein alter Contract-Stand blinkt nicht mehr',
+     'eve_trader/ui/main_window.py',
+     '            _alt = _alter is None or _alter > self._CONTRACT_ALT_SEKUNDEN',
+     '            _alt = False   # MUTATION',
+     'b7h ohne Stand blinkt er'),
+    # WARNUNG VOR DEM SCAN: faellt sie weg, haelt der Naechste das Programm
+    # fuer haengen geblieben (genau die Frage des Nutzers).
+    ('Der Contract-Scan startet wieder ohne Rueckfrage',
+     'eve_trader/ui/main_window.py',
+     '        if _QMB.question(\n                self, t("Load contract prices"),\n                t("This searches the public contracts of ALL regions and then "\n                  "looks into every hit individually \\u2013 that takes SEVERAL "\n                  "MINUTES (around five is normal).\\n\\nIt runs in the "\n                  "background, you can keep working. Start now?"),\n                _QMB.Ok | _QMB.Cancel, _QMB.Ok) != _QMB.Ok:\n            return',
+     '        pass   # MUTATION',
+     'b7h vor dem Scan wird gefragt'),
+    # EIGENE FOLGE UEBERLEBT DAS AUSSCHALTEN (Nutzer-Wunsch 15.09.2026):
+    # zaehlt wieder nur der Anordnen-Modus, wirft das Ausschalten die
+    # Handarbeit sofort um - sein Einwand "da liegt kein Sinn dahinter".
+    ('Nur noch der Anordnen-Modus haelt die Automatik heraus',
+     'eve_trader/ui/main_window.py',
+     '        return bool(self.settings.get("bau_plan_manuell")\n'
+     '                    or self.settings.get("bau_plan_eigene_folge"))',
+     '        return bool(self.settings.get("bau_plan_manuell"))  # MUTATION',
+     'b7g aber die eigene Folge gilt weiter'),
+    # ZUSTAND AM KNOPF: ohne ihn sieht man nicht, ob der Modus laeuft - und
+    # wundert sich, warum die Karten-Knoepfe nicht reagieren.
+    ('Der Anordnen-Knopf zeigt seinen Zustand nicht mehr',
+     'eve_trader/ui/main_window.py',
+     '            btn.setObjectName("Primary" if an else "")',
+     '            btn.setObjectName("")   # MUTATION',
+     'b7g eingeschaltet leuchtet er wie'),
+    # HERVORHEBUNG NUR AUF DER KARTE (Nutzer-Befund 15.09.2026): ohne
+    # Selektor vererbt Qt die Regel an jedes Label darin - dann ist ploetzlich
+    # auch "Profit" umrahmt.
+    ('Die Hervorhebung faerbt wieder die ganze Karte samt Kindern',
+     'eve_trader/ui/mw_basis.py',
+     '    OBJEKTNAME = "SortierKarte"',
+     '    OBJEKTNAME = ""   # MUTATION',
+     'b7g Zustand'),
+    # DER WEG ZURUECK ZUR AUTOMATIK (Nutzer-Wunsch 15.09.2026): beendet der
+    # Knopf die eigene Folge nicht, sortiert er einmal - und der naechste
+    # ESI-Lauf stellt die Handfolge wieder her. Ein Knopf, der sich selbst
+    # widerruft.
+    ('Der Fortschritts-Knopf beendet die eigene Folge nicht mehr',
+     'eve_trader/ui/main_window.py',
+     '        self.settings["bau_plan_eigene_folge"] = False\n',
+     '',
+     'b7g er beendet die eigene Folge'),
+    # DIE ABKUERZUNG DARF NIE RATEN (Nutzer-Frage 16.09.2026): ordnet
+    # `suite_fuer` nach dem Anfangsbuchstaben statt nach der Pruefnummer,
+    # landen deutsche Woerter mit b ("billige Items ...") bei der b-Suite.
+    # Dann laeuft die falsche Suite, die erwartete Pruefung ist nicht dabei
+    # und die Rotprobe meldet BLIND fuer etwas, das sauber ROT ist - der
+    # gefaehrlichste Ausfall, den dieses Werkzeug haben kann.
+    ('Die Suiten-Zuordnung geht wieder nach dem Anfangsbuchstaben',
+     'rotprobe.py',
+     '    if _re_suite.match(_e):\n'
+     '        return "aa" if _e.startswith("aa") else "b"\n',
+     '    if _e.startswith("aa"):\n'
+     '        return "aa"\n'
+     '    if _e.startswith("b"):\n'
+     '        return "b"\n',
+     'aa359 keine zugeordnete Pruefung liegt in der ANDEREN Suite'),
+    # CHARAKTER-FILTER DER BEHAELTER-LISTE (Nutzer-Befund 15.09.2026):
+    # faellt er weg, stehen die Behaelter ALLER Charaktere unter einer
+    # Liste, die oben nur einen zeigt.
+    ('Die Behaelter-Liste beachtet die Charakter-Wahl nicht mehr',
+     'eve_trader/ui/main_window.py',
+     '            if _wahl not in (None, "all") and _cid != _wahl:\n'
+     '                continue\n',
+     '',
+     'b7o bei einem Charakter nur SEINE Behaelter'),
+    # UND SIE MUSS BEIM UMSCHALTEN MITGEHEN.
+    ('Der Charakter-Wechsel zeichnet die Behaelter-Liste nicht mehr neu',
+     'eve_trader/ui/main_window.py',
+     '        self.pf_char.currentIndexChanged.connect('
+     'self._container_neu_zeichnen)\n',
+     '',
+     'b7o der Wahlschalter zeichnet die Liste neu'),
+    # NUR STATION-CONTAINER (Nutzer-Befund 15.09.2026): faellt die
+    # Typ-Erkennung weg, zaehlt wieder nur, was die Schloss-Markierung
+    # traegt - und alles in einem Freight Container ist fuers Portfolio
+    # unsichtbar.
+    ('Ein Behaelter wird wieder nur am Inhalt erkannt, nicht am Typ',
+     'eve_trader/esi.py',
+     '        if a.get("type_id") in _ctypes:\n'
+     '            return True\n',
+     '',
+     'aa358 MIT Typwissen wird der Behaelter erkannt'),
+    # DIE TYPEN MUESSEN AUCH ANKOMMEN.
+    ('Der Assets-Abruf reicht die Behaelter-Typen nicht mehr durch',
+     'eve_trader/esi.py',
+     '    hangar, containers = hangar_und_container(assets, _ctypes)\n',
+     '    hangar, containers = hangar_und_container(assets)   # MUTATION\n',
+     'aa358 der Assets-Abruf reicht die Behaelter-Typen durch'),
+    # UND "FREIGHTER" DARF KEIN BEHAELTER WERDEN - sonst zaehlte die
+    # Ladung jedes Frachters als Hangarbestand.
+    ('Die Behaelter-Regel greift auch nach "freight" im Gruppennamen',
+     'eve_trader/industry.py',
+     '        if "container" in low and "blueprint" not in low:\n',
+     '        if ("container" in low or "freight" in low) and "blueprint" not in low:\n',
+     'aa358 Freighter/Jump Freighter sind KEINE Behaelter'),
+    # DER BAUPLAN-BEREICH "UEBERALL" (Nutzer-Frage 16.09.2026): zaehlt die
+    # gemeinsame Regel den Behaelter-Inhalt nicht mehr, ist im Bauplan
+    # wieder alles unsichtbar, was in einem Frachtcontainer liegt.
+    ('Der Bestand zaehlt den Inhalt eines Behaelters nicht mehr mit',
+     'eve_trader/esi.py',
+     '            summe[int(t)] = summe.get(int(t), 0) + int(q)\n',
+     '            pass   # MUTATION\n',
+     'aa360 Inhalt eines Frachtcontainers zaehlt zum Bestand'),
+    # UND DER BEHAELTER SELBST DARF NICHT VERSCHWINDEN - ein Cargo
+    # Container ist baubares Material. Zu niedriger Bestand = Einkauf zu
+    # viel.
+    ('Der Behaelter selbst faellt aus dem Bestand',
+     'eve_trader/esi.py',
+     '        summe[_t] = summe.get(_t, 0) + int(c.get("qty") or 1)\n',
+     '        pass   # MUTATION\n',
+     'aa360 der Behaelter selbst bleibt gezaehlt'),
+    # UND DER ABRUF MUSS DIE TYPEN AUCH HIER DURCHREICHEN.
+    ('Der Bestands-Abruf faellt auf die alte Inhalts-Regel zurueck',
+     'eve_trader/esi.py',
+     '    return hangar_summe(assets, container_type_ids_safe())\n',
+     '    return hangar_summe(assets, set())   # MUTATION\n',
+     'aa360 der Bestands-Abruf benutzt dieselbe Zaehlung'),
+    # DIE ORTSGEBUNDENEN BEREICHE (Nutzer, 16.09.2026): steigt die Zaehlung
+    # nicht mehr in die Behaelter hinab, ist an der Bau-Struktur nur noch
+    # sichtbar, was lose im Hangar liegt.
+    ('Die Ortszaehlung steigt nicht mehr in Behaelter hinab',
+     'eve_trader/esi.py',
+     '                collect(iid)     # in den Behaelter-Inhalt hinein\n',
+     '                pass   # MUTATION\n',
+     'aa361 Frachtcontainer-Inhalt zaehlt am Bau-Ort'),
+    # UND SIE DARF NICHT EINFACH ALLES ZAEHLEN - sonst waere der ganze Sinn
+    # des Bereichs ("nur was hier liegt") dahin.
+    ('Die Ortszaehlung nimmt jeden Ort mit, nicht nur die gewaehlten',
+     'eve_trader/esi.py',
+     '    for loc in {int(x) for x in location_ids or ()}:\n',
+     '    for loc in list(by_parent.keys()):   # MUTATION\n',
+     'aa361 Material an einem anderen Ort zaehlt NICHT mit'),
+    # UND DER ABRUF MUSS SIE BENUTZEN.
+    ('Der ortsgebundene Abruf benutzt die gemeinsame Zaehlung nicht mehr',
+     'eve_trader/esi.py',
+     '    out, seen, _per_loc = bestand_an_orten(assets, location_ids,\n',
+     '    out, seen, _per_loc = (lambda *a: ({}, set(), {}))(   # MUTATION\n',
+     'aa361 der ortsgebundene Abruf benutzt dieselbe Zaehlung'),
+    # ==== CORP-HANGAR (1.0.8) ====
+    # DIE VERDREIFACHUNG (CLAUDE.md): wird der Plan je CHARAKTER statt je
+    # Corp gefuehrt, holt der Bauplan denselben Hangar dreimal - Bestand
+    # dreifach, Plan kauft ZU WENIG.
+    ('Der Corp-Abruf laeuft wieder je Charakter statt je Corporation',
+     'eve_trader/corp.py',
+     '        if rolle in rollen:\n            plan[corp] = cid\n',
+     '        if rolle in rollen:\n            plan[cid] = cid   # MUTATION\n',
+     'b7q EIN Corp-Abruf fuer drei Charaktere derselben Corp'),
+    # DIVISION-FILTER (Entscheid 14.09.2026): faellt er weg, wandert
+    # Material aus JEDER Division in die Bauplanung.
+    ('Der Corp-Bestand ignoriert die gewaehlten Divisions',
+     'eve_trader/corp.py',
+     '        if not div or div not in gewaehlt:\n',
+     '        if not div:   # MUTATION\n',
+     'aa362 Material einer NICHT gewaehlten Division zaehlt nicht'),
+    # SCHIFFE (Nutzer, 16.09.2026): auch im Corp-Hangar zaehlt Schiffsinhalt
+    # nie.
+    ('Der Corp-Bestand steigt in Corp-Schiffe hinein',
+     'eve_trader/corp.py',
+     '        if ist_behaelter(a):\n            for c in by_parent.get(iid, []):\n',
+     '        if True:   # MUTATION\n            for c in by_parent.get(iid, []):\n',
+     'aa362 Schiffsladung zaehlt NICHT (sonst 6000 statt 1000 Tritanium)'),
+    # ORTSGRENZE: der Corp-Hangar an einer fremden Struktur darf im
+    # Struktur-Bereich nicht zaehlen - dieselbe Regel wie beim eigenen.
+    ('Der Corp-Bestand kennt keine Ortsgrenze mehr',
+     'eve_trader/corp.py',
+     '        if orte is not None and wurzel_ort(a, by_id) not in orte:\n',
+     '        if False:   # MUTATION\n',
+     'aa362 Ortsgrenze: die andere Struktur bleibt draussen'),
+    # DAS BUERO DAZWISCHEN: ohne das Hochlaufen haengt die Division am Buero-
+    # Item, nicht an der Station, und die Ortsgrenze findet nichts.
+    ('Die Ortsaufloesung laeuft nicht mehr bis zur Station hoch',
+     'eve_trader/corp.py',
+     '    loc = a.get("location_id")\n    for _ in range(max_tiefe):\n',
+     '    loc = a.get("location_id")\n    for _ in range(0):   # MUTATION\n',
+     'aa362 Ortsgrenze: unter dem Buero wird die Station erkannt'),
+    # STANDARD AUS (Entscheid 14.09.2026, Regel 3).
+    ('Der Corp-Hangar ist standardmaessig AN',
+     'eve_trader/config.py',
+     '    "use_corp": False,\n',
+     '    "use_corp": True,\n',
+     'aa362 Corp-Hangar ist standardmaessig AUS'),
+    # KEINE DIVISION -> NICHTS, nicht "alle".
+    ('Ohne gewaehlte Division zaehlt der Corp-Bestand ALLE Divisions',
+     'eve_trader/corp.py',
+     '    if not gewaehlt:\n        return {}, {}\n',
+     '    if not gewaehlt:\n        gewaehlt = set(ALLE_DIVISIONS)   # MUTATION\n',
+     'aa362 keine Division gewaehlt -> nichts'),
+    # DIE SCOPES KOMMEN NUR MIT SCHALTER - sonst fragt jedes Verlinken jeden
+    # Nutzer nach Corp-Rechten, die er nie wollte.
+    ('Beim Verlinken werden die Corp-Scopes nicht mehr angehaengt',
+     'eve_trader/ui/main_window.py',
+     '        if self.settings.get("use_corp"):\n'
+     '            scopes.extend(config.CORP_SCOPES)',
+     '        if self.settings.get("use_corp"):\n'
+     '            pass   # MUTATION',
+     'aa362 beim Verlinken kommen die Corp-Scopes nur mit Schalter'),
+    # SCHALTER AUS MUSS "KEIN ABRUF" HEISSEN - nicht nur "nicht zaehlen".
+    ('Der Bauplan fragt die Corp auch bei ausgeschaltetem Schalter ab',
+     'eve_trader/ui/mw_bauplan_fenster.py',
+     '        if not self.settings.get("use_corp"):\n            return leer\n',
+     '        if False:   # MUTATION\n            return leer\n',
+     'b7q Schalter aus -> kein Corp-Bestand, kein Abruf'),
+    # OHNE CORP-SCOPE IM TOKEN: kein Abruf, sondern "neu verknuepfen".
+    ('Ein Token ohne Corp-Scope wird trotzdem fuer den Abruf benutzt',
+     'eve_trader/ui/mw_bauplan_fenster.py',
+     '                out["relink"].append(namen.get(cid, str(cid)))\n'
+     '                rollen_von[cid] = None\n                continue\n',
+     '                out["relink"].append(namen.get(cid, str(cid)))\n'
+     '                rollen_von[cid] = None\n',
+     'b7q ohne Corp-Scope: kein Abruf'),
+    # DER CORP-BESTAND MUSS IM POOL ANKOMMEN - in beiden Bereichen.
+    ('Der Corp-Bestand wird im Struktur-Bereich nicht mehr aufaddiert',
+     'eve_trader/ui/mw_bauplan_fenster.py',
+     '                    for t, q in (_corp.get("summe") or {}).items():\n'
+     '                        agg[int(t)] = agg.get(int(t), 0) + int(q)\n',
+     '',
+     'aa362 der Corp-Bestand wird in BEIDEN Bereichen aufaddiert'),
+    # DIVISION-KAESTCHEN SPEICHERN SOFORT - sonst gilt, was man sieht, nicht.
+    ('Ein Division-Kaestchen speichert nicht mehr sofort',
+     'eve_trader/ui/main_window.py',
+     '        self.settings["corp_divisions"] = neu\n',
+     '        pass   # MUTATION\n',
+     'b7q ein Kaestchen speichert die Division sofort'),
+    # ==== ZWEI KNOEPFE, ZWEI NAMEN (17.09.2026) ====
+    ('Der SDE-Knopf heisst wieder "Load blueprints"',
+     'eve_trader/ui/main_window.py',
+     '        self.g_sde_btn = QPushButton(t("Load recipes"))\n',
+     '        self.g_sde_btn = QPushButton(t("Load blueprints"))   # MUTATION\n',
+     "aa363 der SDE-Knopf oben heisst 'Load recipes'"),
+    # ==== LEER-HINWEIS TUT, WAS FEHLT (Nutzer-Befund 17.09.2026) ====
+    ('Der Leer-Hinweis bietet nach dem Scan weiter nur den Scan an',
+     'eve_trader/ui/main_window.py',
+     '                if store.snapshot_age_seconds() is None:\n',
+     '                if True:   # MUTATION\n',
+     "b7s nach dem Scan bietet der Knopf 'Load deals' an"),
+    ('Der Blaupausen-Hinweis zeigt wieder auf den SDE-Download',
+     'eve_trader/ui/main_window.py',
+     '        _bp = getattr(self, "bp_refresh_btn", None) or getattr(self, "g_sde_btn", None)\n',
+     '        _bp = getattr(self, "g_sde_btn", None)   # MUTATION\n',
+     'b7s der Blaupausen-Knopf laedt MEINE Blaupausen, nicht die SDE'),
+    ('Nach dem Scan werden die Leer-Hinweise nicht mehr neu gestellt',
+     'eve_trader/ui/main_window.py',
+     '            self._leerhinweise_aktualisieren()   # "Market scan" -> "Load deals"\n',
+     '',
+     'b7s nach dem Scan stellt das Programm die Hinweise neu'),
+    # ==== RUNS DIREKT EINGEBEN (Discord, 16.09.2026) ====
+    # Das Runs-Feld muss ins Stueckfeld schreiben - sonst rechnet der Plan
+    # mit der alten Menge, waehrend der Nutzer eine andere sieht.
+    ('Das Runs-Feld schreibt nicht mehr ins Mengenfeld',
+     'eve_trader/ui/mw_bauplan_fenster.py',
+     '                    qty_spin.setValue(runs_spin.value() * _out_per_run)\n',
+     '                    pass   # MUTATION\n',
+     "b10 7 Runs -> 1'400 Stueck im Mengenfeld"),
+    ('Das Mengenfeld schreibt nicht mehr ins Runs-Feld',
+     'eve_trader/ui/mw_bauplan_fenster.py',
+     '                    runs_spin.setValue(-(-qty_spin.value() // _out_per_run))\n',
+     '                    pass   # MUTATION\n',
+     "b10 1'000 Stueck -> 5 Runs"),
+    # NUR BEI MEHR ALS 1 STUECK JE RUN - beim Einzelstueck waere der
+    # Schalter Laerm (Nutzer: "nur bei Produkten, die wirklich mehr liefern").
+    ('Der Runs-Umschalter erscheint auch beim Einzelstueck',
+     'eve_trader/ui/mw_bauplan_fenster.py',
+     '        runs_spin = None\n        _qty_mode_btn = None\n        if _out_per_run > 1:\n',
+     '        runs_spin = None\n        _qty_mode_btn = None\n        if _out_per_run >= 1:   # MUTATION\n',
+     'b10 und keinen Runs-Umschalter (waere nur Laerm)'),
+    ('Enter im Runs-Feld rechnet den Plan nicht mehr sofort',
+     'eve_trader/ui/mw_bauplan_fenster.py',
+     '        if runs_spin is not None:\n'
+     '            runs_spin.editingFinished.connect(_qty_uebernehmen)\n',
+     '',
+     "b10 Enter im Runs-Feld -> der Plan rechnet mit 1'400"),
+    ('Die Runs/Stueck-Wahl wird nicht mehr gespeichert',
+     'eve_trader/ui/mw_bauplan_fenster.py',
+     '                    self.settings["bau_qty_in_runs"] = _qty_mode["runs"]\n',
+     '                    pass   # MUTATION\n',
+     'b10 die Wahl wird gespeichert'),
+    # SCHIFFE (Nutzer, 16.09.2026): steigt die Ortszaehlung wieder in JEDES
+    # Kind hinab, zaehlen gefittete Module, Drohnen und Schiffsladung als
+    # Baumaterial an der Struktur - Bestand zu hoch, die gefaehrliche
+    # Richtung.
+    ('Die Ortszaehlung steigt wieder in Schiffe hinein',
+     'eve_trader/esi.py',
+     '            if _ist_behaelter(a):\n'
+     '                collect(iid)     # in den Behaelter-Inhalt hinein\n',
+     '            collect(iid)   # MUTATION\n',
+     'aa361 Schiffsladung zaehlt NICHT'),
+    # WO BIN ICH (Nutzer-Wunsch 15.09.2026): faellt die Hervorhebung weg,
+    # steht die rechte Leiste wieder durchweg neutral - genau der Zustand,
+    # den er gemeldet hat.
+    ('Die rechte Bau-Leiste hebt die offene Seite nicht mehr hervor',
+     'eve_trader/ui/main_window.py',
+     '            b.setStyleSheet(self._bau_rail_active_css if _i == idx\n'
+     '                            else self._bau_rail_idle_css)\n',
+     '            b.setStyleSheet(self._bau_rail_idle_css)   # MUTATION\n',
+     'b7n Seite 0: genau dieser eine Knopf leuchtet'),
+    # DER BALKEN IST DIE "SELBE OPTIK" - ohne ihn ist es eine aehnliche.
+    ('Dem aktiven Knopf fehlt der Cyan-Balken der linken Leiste',
+     'eve_trader/ui/main_window.py',
+     '                  f"border-left:3px solid {theme.CYAN}; "\n',
+     '',
+     'b7n der aktive Knopf traegt den Cyan-Balken links'),
+    # RIGS FINDEN (Nutzer-Wunsch 15.09.2026): faellt die Verengung weg,
+    # zeigt das Rig-Preset wieder alle Module - der Knopf verspricht dann
+    # etwas, das er nicht haelt.
+    ('Das Rig-Preset verengt nicht mehr auf die Rig-Gruppen',
+     'eve_trader/ui/main_window.py',
+     '            if rigs_only and _rig_gids and _g not in _rig_gids:\n'
+     '                return False\n',
+     '',
+     'aa357 der Scan verengt auf die Rig-Gruppen'),
+    # DIE NAMENSREGEL: mit der Teilwortsuche waeren alle FREGATTEN Rigs.
+    ('Die Rig-Regel sucht wieder Teilworte statt den Namensanfang',
+     'eve_trader/industry.py',
+     '        if low.startswith("rig ") and "blueprint" not in low:\n',
+     '        if "rig" in low:   # MUTATION\n',
+     'aa357 Fregatten sind KEINE Rigs'),
+    # TOUR UEBER DER RECHTEN LEISTE (Nutzer-Befund 15.09.2026): faellt der
+    # Sonderfall weg, steht die Tour wieder UNTER dem Anker - und deckt
+    # damit genau die Leiste zu, ueber die der Schritt gerade spricht.
+    ('Die Tour stellt sich wieder unter einen Anker in der rechten Leiste',
+     'eve_trader/ui/tutorial.py',
+     'if (_win is not self.mw and _r.width() > 0\n'
+     '                        and _a_links.x() >= _r.left() '
+     '+ (_r.width() * 2) // 3):\n'
+     '                    x, y = _a_links.x() - _b - 12, _a_links.y()\n',
+     'pass   # MUTATION\n',
+     'b7m bei einem Anker in der rechten Leiste steht die Tour links '
+     'DANEBEN, nicht darunter'),
+    # MEINE EIGENE REGRESSION (Nutzer-Befund 16.09.2026, Schritt 7/15): gilt
+    # die Links-Regel auch im HAUPTFENSTER, landet die Tour unter dem
+    # modalen "New build plan"-Fenster.
+    ('Die Links-Regel gilt wieder auch im Hauptfenster',
+     'eve_trader/ui/tutorial.py',
+     'if (_win is not self.mw and _r.width() > 0\n',
+     'if (_r.width() > 0\n',
+     'b7m im HAUPTFENSTER bleibt es an derselben Stelle beim Platz DARUNTER'),
+    # MODALES FENSTER (Nutzer-Screenshot 16.09.2026, Schritt 7/15): faellt der
+    # Sonderfall weg, richtet sich die Tour wieder am ANKER aus - und der
+    # steckt im modalen Fenster, das immer oben liegt. Sie ist dann verdeckt.
+    ('Die Tour richtet sich in einem modalen Fenster wieder am Anker aus',
+     'eve_trader/ui/tutorial.py',
+     '                if _modal:\n',
+     '                if False:   # MUTATION\n',
+     'b7m die Tour verdeckt ein MODALES Fenster nicht'),
+    # UND SIE MUSS DABEI WIRKLICH AM FENSTER HAENGEN, nicht nur zufaellig
+    # danebenstehen: unter den DIALOG, nicht unter den Anker.
+    ('Die Tour stellt sich unter den Anker statt unter den ganzen Dialog',
+     'eve_trader/ui/tutorial.py',
+     '                        x, y = _r.left(), _r.bottom() + 8\n',
+     '                        x, y = _r.left(), _a_links.y() + 8\n',
+     'b7m und steht dann unter dem modalen Fenster'),
+    # TOUR LAG HINTER DEM BAUPLAN (Nutzer-Screenshot 16.09.2026): faellt
+    # dieser Vorrang weg, gewinnt der sichtbare Knopf im Hauptfenster und
+    # die Tour bleibt dort haengen - genau das Bild aus dem Screenshot.
+    ('Der Bauplan-oeffnen-Schritt zielt wieder aufs Hauptfenster',
+     'eve_trader/ui/tutorial.py',
+     '            if self.schritte[self.i][4] == "bauplan_offen":\n',
+     '            if False:   # MUTATION\n',
+     'b7p ist der Bauplan offen, zielt er auf den Bauplan'),
+    # TOUR HINTER DEM BAUPLAN (Nutzer-Befund 16.09.2026): oeffnet sich das
+    # Fenster mitten im Schritt, muss die Tour mitgehen.
+    ('Die Tour merkt einen Fensterwechsel mitten im Schritt nicht mehr',
+     'eve_trader/ui/tutorial.py',
+     '            _jetzt = self._zielfenster()\n'
+     '            if _jetzt is not getattr(self, "_letztes_ziel", None):\n'
+     '                self._fenster_ordnen()\n'
+     '                return\n',
+     '            pass   # MUTATION\n',
+     'b7p bei einem Fensterwechsel ordnet sie sich neu'),
+    # UND SIE DARF NICHT BEI JEDEM TICK UMHAENGEN - das zog den Bauplan
+    # frueher nach hinten (Sitzung 17).
+    ('Die Tour haengt bei JEDEM Tick um, nicht nur beim Wechsel',
+     'eve_trader/ui/tutorial.py',
+     '        self._letztes_ziel = _ziel\n',
+     '',
+     'b7p ohne Fensterwechsel wird NICHT umgehaengt'),
+    # "BACK" LANDETE IM FALSCHEN REITER (Nutzer-Befund 16.09.2026): der
+    # Schritt muss seinen Reiter selbst herstellen, sonst haengt er davon
+    # ab, woher man kommt.
+    ('Der Build-or-buy-Schritt stellt seinen Reiter nicht mehr selbst her',
+     'eve_trader/ui/tutorial.py',
+     '        (("bd:tab:" + t("Recipe structure"), "_bd_karte_bauenkaufen"),\n'
+     '         t("Build or buy?"),\n',
+     '        ("_bd_karte_bauenkaufen",\n'
+     '         t("Build or buy?"),\n',
+     'b78 und stellt dabei den Rezeptstruktur-Reiter selbst her'),
+    # RECHTSKLICK AUF DIE OBERE LEISTE (Nutzer-Befund 15.09.2026): faellt
+    # ein Riegel weg, blendet Qts eingebautes Fenster-Menue die ganze obere
+    # Reihe aus - und niemand kommt darauf, dass ein Rechtsklick schuld war.
+    ('Die obere Leiste reicht den Rechtsklick wieder weiter',
+     'eve_trader/ui/main_window.py',
+     '        tb.setContextMenuPolicy(Qt.PreventContextMenu)\n',
+     '',
+     'b7l sie reicht den Rechtsklick nicht mehr weiter'),
+    # DER ZWEITE WEG: Qt baut das Menue in createPopupMenu, auch beim
+    # Rechtsklick NEBEN die Leiste.
+    ('Das Fenster baut sein Werkzeugleisten-Menue wieder',
+     'eve_trader/ui/main_window.py',
+     '        loeschen.\n        """\n        return None\n',
+     '        loeschen.\n        """\n'
+     '        return super().createPopupMenu()   # MUTATION\n',
+     'b7l das Fenster bietet gar kein solches Menue mehr an'),
+    # UNGESPEICHERTE EINSTELLUNGEN (Nutzer-Wunsch 15.09.2026): ohne Riegel
+    # verlaesst man die Seite still, und die Einstellung wirkt nie - genau
+    # der Befund, mit dem er gekommen ist.
+    ('Der Seitenwechsel per Widget fragt nicht mehr nach',
+     'eve_trader/ui/main_window.py',
+     '    def setCurrentWidget(self, w):\n'
+     '        if not self._darf_wechseln(self._stack.indexOf(w)):\n'
+     '            return\n',
+     '    def setCurrentWidget(self, w):\n',
+     'b7k und \u201eZurueck\u201c laesst einen auf der Seite'),
+    # DERSELBE WEG UEBER DEN INDEX - die Seitenleiste nimmt ihn.
+    ('Der Seitenwechsel per Index fragt nicht mehr nach',
+     'eve_trader/ui/main_window.py',
+     '    def setCurrentIndex(self, i):\n'
+     '        if not self._darf_wechseln(i):\n'
+     '            return\n',
+     '    def setCurrentIndex(self, i):\n',
+     'b7k auch der Wechsel ueber den Index wird abgefangen'),
+    # OHNE VERGLEICH KEINE ERKENNUNG: dann ist nie etwas "offen" und der
+    # Riegel schweigt, obwohl er haengt - die gefaehrlichste Variante,
+    # weil alles gebaut aussieht.
+    ('Eine Aenderung in den Einstellungen wird nicht mehr erkannt',
+     'eve_trader/ui/main_window.py',
+     '            return self._einstellungen_feldstand() != alt\n',
+     '            return False   # MUTATION\n',
+     'b7k eine Aenderung wird erkannt'),
+    # NACH DEM SPEICHERN NACHZIEHEN: sonst kommt die Rueckfrage beim
+    # naechsten Wechsel trotz Speichern wieder.
+    ('Der Feldstand wird nach dem Speichern nicht nachgezogen',
+     'eve_trader/ui/main_window.py',
+     '        self._einstellungen_stand_merken()\n        self._update_cb_label()\n',
+     '        self._update_cb_label()\n',
+     'b7k danach ist nichts mehr offen'),
+    # KNOEPFE AUF DEN KARTEN (Nutzer-Wunsch 15.09.2026): schluckt der
+    # Sortierer wieder jeden Druck, ist der Anordnen-Modus ein Modus, in dem
+    # man nichts mehr tun kann.
+    ('Der Sortierer schluckt im Anordnen-Modus wieder jeden Knopfdruck',
+     'eve_trader/ui/mw_basis.py',
+     '                if self._ist_bedienelement(obj):',
+     '                if False:   # MUTATION',
+     "b7g ein Druck auf 'Open' geht an den Knopf"),
+    # CAPITAL-MODUS BEIM START (Nutzer-Wunsch 15.09.2026): bleibt er an,
+    # sucht der Naechste vergeblich nach normalen Blaupausen.
+    ('Der Capital-Modus wird beim Start nicht mehr ausgeschaltet',
+     'eve_trader/ui/mw_bauplan_tabs.py',
+     '        self.b_cap_mode.setChecked(False)\n',
+     '',
+     'b7i und er wird beim Aufbau ausdruecklich ausgeschaltet'),
+    # DER HAKEN, DEN NIEMAND GESETZT HAT (Nutzer-Bild 15.09.2026): ohne den
+    # Kaestchen-Riegel legt die Kinder-Kaskade den Stuecklisten-Zeilen ein
+    # Kaestchen NEU AN - und beim Loesen bleibt das leere stehen.
+    ('Die Kaskade fragt nicht mehr, ob es ueberhaupt ein Kaestchen gibt',
+     'eve_trader/ui/mw_bauplan_fenster.py',
+     '                if (_ch.data(0, Qt.CheckStateRole) is not None\n'
+     '                        and _ch.flags() & Qt.ItemIsUserCheckable\n',
+     '                if (_ch.flags() & Qt.ItemIsUserCheckable\n',
+     'b7j die Kaskade fragt nach dem vorhandenen Kaestchen'),
+    # ZWEITER RIEGEL: die Material-Unterzeile ist gar nicht erst abhakbar.
+    ('Die Material-Unterzeile behaelt die abhakbaren Standard-Flags',
+     'eve_trader/ui/mw_bauplan_tabs.py',
+     '                        mit.setFlags(mit.flags() '
+     '& ~Qt.ItemIsUserCheckable)\n',
+     '',
+     'b7j die Material-Unterzeile ist gar nicht erst abhakbar'),
 ]
 
 
-def lauf():
+_re_suite = re.compile(r"^(aa|b)\d")
+
+
+def suite_fuer(erwartet):
+    """Welche Suite enthaelt die erwartete Pruefung? "aa", "b" oder "beide".
+
+    NUTZER, 16.09.2026: "reicht es nicht, nur den Bereich zu fahren, den wir
+    gerade geaendert haben?" Fuer die Rotprobe: ja, und zwar beweisbar. Eine
+    Mutation nennt die Pruefung, die rot werden SOLL - und jede Pruefung lebt
+    in genau EINER Suite. Die andere kann sie gar nicht enthalten, also
+    aendert ihr Weglassen das Urteil ROT/BLIND nicht.
+
+    GEMESSEN: eine Mutation lief vorher ~62 s (aa ~50 s + b ~12 s). Eine
+    b-Mutation braucht jetzt ~12 s.
+
+    IM ZWEIFEL BEIDE: ein Name, der weder mit "aa" noch mit "b" anfaengt,
+    ist eine kuenftige dritte Suite oder ein Tippfehler. Dann lieber
+    gruendlich als schnell - eine Abkuerzung darf nie raten.
+    """
+    _e = (erwartet or "").strip()
+    # EINE PRUEF-NUMMER, KEIN ANFANGSBUCHSTABE. Der erste Anlauf fragte nur
+    # `startswith("b")` - und ordnete damit "billige Items werden wirklich
+    # unterboten", "build_time kennt die Je-Item-TE" und "beide Preset-Listen
+    # nutzen sie" der b-Suite zu. Das sind Textstuecke aus aa-Pruefungen.
+    # Die falsche Suite waere gelaufen, die erwartete Pruefung waere nicht
+    # dabei gewesen, und die Rotprobe haette BLIND gemeldet fuer etwas, das
+    # sauber ROT ist. Gefunden hat das aa359 - deshalb steht es dort.
+    # Eine Pruefung heisst "aa358 ..." oder "b7o ..." - Buchstaben, dann
+    # ZIFFER. Ein deutsches Wort tut das nie.
+    if _re_suite.match(_e):
+        return "aa" if _e.startswith("aa") else "b"
+    return "beide"
+
+
+def lauf(erwartet=None):
     # NOTAUSSTIEG JE TESTLAUF (Sitzung 10 von 1200 s angehoben): auf dem
     # Rechner des Nutzers riss die aa-Suite die alte 20-Minuten-Grenze schon
     # bei der ERSTEN Mutation - die Rotprobe brach mit TimeoutExpired ab und
@@ -5456,9 +5998,13 @@ def lauf():
     # Sicherung gegen echte Haenger, aber grosszuegiger - ein einzelner
     # langsamer Lauf soll nicht den ganzen Durchgang mitreissen.
     _NOTAUS = 3600
-    r = subprocess.run([sys.executable, "test_bestand_herkunft.py"], cwd=TMP,
-                       capture_output=True, text=True, timeout=_NOTAUS)
-    fehler = [l.strip() for l in r.stdout.splitlines() if "FEHLER" in l]
+    _welche = suite_fuer(erwartet)
+    r = None
+    fehler = []
+    if _welche in ("aa", "beide"):
+        r = subprocess.run([sys.executable, "test_bestand_herkunft.py"], cwd=TMP,
+                           capture_output=True, text=True, timeout=_NOTAUS)
+        fehler = [l.strip() for l in r.stdout.splitlines() if "FEHLER" in l]
     # DIE b-SUITE LAEUFT SEIT SITZUNG 8 MIT. Vorher fuhr die Rotprobe NUR
     # test_bestand_herkunft.py - alle 185 Pruefungen aus test_bauplan_aufbau.py
     # hatten damit ueberhaupt keinen Rot-Nachweis, und eine Mutation, die nur
@@ -5466,25 +6012,27 @@ def lauf():
     # der Bestands-Zeile im Bauplan-Kopf). Kosten: die b-Suite braucht ~2 s
     # gegenueber ~87 s fuer aa, also rund 3 % mehr Laufzeit - fuer 185
     # zusaetzlich abgesicherte Pruefungen ein guter Handel.
-    _umg = dict(os.environ)
-    _umg["QT_QPA_PLATFORM"] = "offscreen"
-    _umg["PYTHONPATH"] = TMP
-    rb = subprocess.run([sys.executable, "test_bauplan_aufbau.py"], cwd=TMP,
-                        capture_output=True, text=True, timeout=_NOTAUS,
-                        env=_umg)
-    fehler += [l.strip() for l in rb.stdout.splitlines() if "FEHLER" in l]
-    if rb.returncode != 0 and not [f for f in fehler if f.startswith("FEHLER: b")]:
-        _tb = [l.strip() for l in (rb.stdout + rb.stderr).splitlines()
-               if l.strip()][-1:]
-        fehler.append("FEHLER: b-SUITE ABGEBROCHEN - "
-                      + (_tb[0] if _tb else "ohne Ausgabe"))
+    if _welche in ("b", "beide"):
+        _umg = dict(os.environ)
+        _umg["QT_QPA_PLATFORM"] = "offscreen"
+        _umg["PYTHONPATH"] = TMP
+        rb = subprocess.run([sys.executable, "test_bauplan_aufbau.py"], cwd=TMP,
+                            capture_output=True, text=True, timeout=_NOTAUS,
+                            env=_umg)
+        fehler += [l.strip() for l in rb.stdout.splitlines() if "FEHLER" in l]
+        if rb.returncode != 0 and not [f for f in fehler
+                                       if f.startswith("FEHLER: b")]:
+            _tb = [l.strip() for l in (rb.stdout + rb.stderr).splitlines()
+                   if l.strip()][-1:]
+            fehler.append("FEHLER: b-SUITE ABGEBROCHEN - "
+                          + (_tb[0] if _tb else "ohne Ausgabe"))
     # ABBRUCH IST NICHT GRUEN (Befund bei Mutation 32): stirbt die Suite
     # unter einer Mutation mit einer Exception, gab es KEINE FEHLER-Zeilen -
     # und die Auswertung meldete faelschlich "BLIND", obwohl die Mutation
     # den Test sehr wohl umwarf. Ein Traceback wird deshalb als eigener
     # Fehler-Eintrag gefuehrt; die letzte Traceback-Zeile macht ihn in der
     # Ausgabe zuordenbar.
-    if r.returncode != 0 and not fehler:
+    if r is not None and r.returncode != 0 and not fehler:
         _tail = [l.strip() for l in (r.stdout + r.stderr).splitlines()
                  if l.strip()][-1:]
         fehler = ["FEHLER: TESTLAUF ABGEBROCHEN - "
@@ -5540,7 +6088,10 @@ def main():
             schlecht += 1
             continue
         open(pfad, "w", encoding="utf-8").write(txt.replace(alt, neu))
-        fehler = lauf()
+        # NUR DIE SUITE, IN DER DIE ERWARTETE PRUEFUNG LEBT (Nutzer-Frage
+        # 16.09.2026). Die andere kann sie nicht enthalten - das Urteil
+        # bleibt gleich, die Wartezeit faellt weg.
+        fehler = lauf(erwartet)
         traf = [f for f in fehler if erwartet in f]
         if traf:
             print(flush=True) or print(f"  ROT  {name}  ({len(fehler)} Fehler, u.a. {traf[0][:70]})")
