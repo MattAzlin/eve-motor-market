@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QTabWidget, QToolBar, QVBoxLayout, QWidget,
 )
 
-from .. import (auth, config, esi, hubs, industry, market, scanner,
+from .. import (auth, config, esi, hubs, industry, market, reprocess, scanner,
                 store, tokens)
 from ..sprache import t
 from ..workers import Worker
@@ -28,6 +28,25 @@ from .mw_optimizer import Optimizer
 from .setup_wizard import SetupWizard
 
 
+
+
+class ElideLabel(QLabel):
+    """Ein Label, das zu langen Text mit "\u2026" kuerzt statt ihn hart
+    abzuschneiden (Gewinn-Uebersicht, Nutzer 18.09.2026: "die Auflistung
+    darf ersichtlicher sein" - "Medium Capacitor Control Circuit II \u00d7"
+    stand halb da). Der volle Text bleibt in text() und im Tooltip."""
+
+    def paintEvent(self, ev):
+        from PySide6.QtGui import QPainter as _QP
+        p = _QP(self)
+        r = self.contentsRect()
+        txt = self.fontMetrics().elidedText(self.text(), Qt.ElideRight, r.width())
+        p.drawText(r, int(self.alignment()) | Qt.TextSingleLine, txt)
+        p.end()
+
+    def minimumSizeHint(self):
+        from PySide6.QtCore import QSize as _QS
+        return _QS(0, super().minimumSizeHint().height())
 
 
 class KpiLabel(QLabel):
@@ -3989,7 +4008,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         w = Worker(industry.download_sde, with_progress=True)
         w.progress.connect(
             # Lambda-Parameter hiess `t` und haette den Uebersetzer verdeckt.
+            # d < 0 = Phase "Entpacken + Einlesen" (industry.download_sde
+            # meldet -1): Nutzer sah "-1/0 MB" (18.09.2026). Gleicher Text
+            # wie im Einrichtungsfenster.
             lambda d, tot: self.deal_status.setText(
+                t("Unpacking and importing \u2026") if d < 0 else
                 t("Loading SDE database \u2026 {d}/{tot} MB (please wait)").format(
                     d=d, tot=tot)))
 
@@ -6145,6 +6168,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         "H\u00fcllen": "Hulls", "Reaktion": "Reaction",
         "Mineralien": "Minerals", "Mond-Materialien": "Moon materials",
         "Rohstoffe": "Raw materials",
+        "Erz": "Compressed ore \u267b",
         "noch nicht aufgel\u00f6st": "not resolved yet",
         # Sitzung 17: die Bau-STUFEN aus dem Blaupausen-Reiter (Schluessel
         # bleiben deutsch, weil sie sortieren - s. _stage_order).
@@ -6172,7 +6196,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
     _MATERIAL_GRUPPEN = [
         "Intermediate Reactions", "Composite Reactions", "Komponenten",
         "H\u00fcllen", "Fuel", "Tools", "PI",
-        "Mineralien", "Mond-Materialien", "Rohstoffe",
+        "Erz", "Mineralien", "Mond-Materialien", "Rohstoffe",
     ]
     # de_scan4: an
     # de_scan2: an
@@ -6218,6 +6242,14 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             return "PI"
         if inv_ids and tid in inv_ids:
             return t("Datacores and decryptors")
+        # KOMPRIMIERTES ERZ (1.0.9, Weg B; Nutzer 19.09.2026: "Materials-Tab
+        # hat keine Eintragsmoeglichkeit fuer Ore"): Kategorie 25 (Asteroid)
+        # ist eine eigene Gruppe - vorher stand es unter "noch nicht
+        # aufgeloest", weil die Erz-Gruppennamen erst spaet dazukommen.
+        if _inf and _inf[0] == 25:
+            # de_scan4: aus - interner SCHLUESSEL (Kategorie/Stufe/Dict), Anzeige uebersetzt woanders
+            return "Erz"
+            # de_scan4: an
         if recipes and tid in getattr(recipes, "product_to_bp", {}):
             # de_scan4: aus - interner SCHLUESSEL (Kategorie/Stufe/Dict), Anzeige uebersetzt woanders
             return "Komponenten"
@@ -6471,7 +6503,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     "te": _schlechteste(_bpos, "time_efficiency")}
         copies = sum(int(m.get("quantity", 1) or 1) for m in matches)
         rep_runs = min(int(m.get("runs", 1) or 1) for m in matches)
-        return {"copies": copies, "runs": rep_runs, "bpo": False,
+        # runs_known: rep_runs ist die KLEINSTE eigene Kopie - der Runplaner
+        # deckelt damit die Runs je Job (Regel 3, kleinste Kopie zaehlt).
+        return {"copies": copies, "runs": rep_runs, "bpo": False, "runs_known": True,
                 "me": _schlechteste(matches, "material_efficiency"),
                 "te": _schlechteste(matches, "time_efficiency")}
 
@@ -7971,6 +8005,14 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                   "(Mfg. = manufacturing / Mass Production, "
                   "React. = reactions / Mass Reactions)").format(
                     name=nm, slots=self._slot_text(cid)))
+            # REPROCESSING-SKILLS NUR IM TOOLTIP (1.0.9, Nutzer 17.09.2026:
+            # "das reprocessen macht man mit einem Klick nur mit einem
+            # Charakter" - keine Spalte, keine Rolle; der Runplaner waehlt
+            # spaeter selbst). Sichtbar erst, wenn Skills geladen sind UND
+            # die SDE die Skill-IDs geliefert hat - sonst keine Zeile.
+            _rz = self._reproc_skill_zeile(cid)
+            if _rz:
+                nm_lbl.setToolTip(nm_lbl.toolTip() + "\n" + _rz)
             imp_combo = QComboBox()
             imp_combo.setMaximumWidth(260)
             imp_combo.addItem(t("No implant"), None)
@@ -8030,6 +8072,23 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         btn_row.addWidget(_app_btn)
         btn_row.addStretch()
         lay.addLayout(btn_row)
+
+    def _reproc_skill_zeile(self, cid):
+        """Tooltip-Zeile "Reprocessing skills: R / Efficiency E" fuer einen
+        Charakter - oder "" wenn seine Skills nie geladen wurden oder die
+        SDE die Skill-IDs (noch) nicht kennt. Nichts wird geraten: ohne ID
+        keine Zeile."""
+        ids = industry.reprocess_skill_ids()
+        rid, eid = ids.get("Reprocessing"), ids.get("Reprocessing Efficiency")
+        sk = (self.settings.get("bau_char_skills", {}) or {}).get(str(cid))
+        if not sk or not rid or not eid:
+            return ""
+        try:
+            sk = {int(k): int(v) for k, v in sk.items()}   # nach JSON sind Schluessel str
+        except (TypeError, ValueError):
+            return ""
+        return t("Reprocessing skills: {r} / Efficiency {e}").format(
+            r=sk.get(int(rid), 0), e=sk.get(int(eid), 0))
 
     def _save_char_implants(self):
         combos = getattr(self, "_char_implant_combos", None)
@@ -8644,8 +8703,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
     # die Zeile "Structure Role Bonus". Engineering Complexes geben ihn,
     # Refineries nicht. Katalog statt Einstellung: der Nutzer waehlt die
     # Struktur, nicht den Bonus (Nutzer: "das App erkennt automatisch").
+    # GEMESSEN am Info-Fenster (Nutzer-Screenshot 19.09.2026): Azbel
+    # "4% reduction in ISK requirements", Sotiyo "5%". Raitaru NICHT
+    # gemessen - steht mit 4 % (alter Wert), bis ein Screenshot vorliegt.
     _STRUCT_ROLE_JOBCOST = {
-        "raitaru": 4.0, "azbel": 4.0, "sotiyo": 4.0,
+        "raitaru": 4.0, "azbel": 4.0, "sotiyo": 5.0,
         "athanor": 0.0, "tatara": 0.0,
     }
 
@@ -8661,7 +8723,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         Dialog; alle anderen Items ihre Kategorie-Basis aus cat_me_map (Komponenten/
         T1-H\u00fcllen/Fuel Blocks/Tools \u2013 s. _bau_category_me_map). Auto w\u00e4hlt je
         Aktivit\u00e4t die f\u00fcr DIESEN Bau beste Struktur. Returns
-        (me_map, me_map_reaction, rig_me_map, used) \u2013 used = {activity: struct|None}."""
+        (me_map, me_map_reaction, rig_me_map, used, ec_me_map) \u2013 used =
+        {activity: struct|None}; ec_me_map = {tid: Rollenbonus-ME % der Struktur
+        seiner Stufe} fuer den invented-Pfad in industry (me_invented_pct) -
+        dort ersetzt die Invention-ME die me_map, der 1-%-Bonus des
+        Engineering Complexes fiel deshalb weg (Viator-Befund 19.09.2026)."""
         structs = self.settings.get("bau_structures", []) or []
         # s. _bau_category_me_map: der Scanner ruft mit use_dialog_me=False auf,
         # damit die ME-Eingabe des letzten Bauplan-Dialogs nicht durchschlaegt.
@@ -8706,11 +8772,13 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                      if v else 0.0)
                  for k, v in st_map.items()}
 
-        me_map = {}; me_map_reaction = {}; rig_me_map = {}
+        me_map = {}; me_map_reaction = {}; rig_me_map = {}; ec_me_map = {}
         for tid in ids:
             is_reac = tid in (reaction_products or set())
             stufe = self._bau_stufe_fuer_item(tid, reaction_products,
                                               stage_map, type_id)
+            if ec_me.get(stufe, 0.0):
+                ec_me_map[tid] = ec_me.get(stufe, 0.0)
             s_used = st_map.get(stufe)
             info = catmap.get(tid)
             doms = industry.item_domains(info[0] if info else None,
@@ -8732,7 +8800,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         used = dict(st_map)
         used["manufacturing"] = st_map.get("components")
         used["reaction"] = st_map.get("reaction_2") or st_map.get("reaction_1")
-        return me_map, me_map_reaction, rig_me_map, used
+        return me_map, me_map_reaction, rig_me_map, used, ec_me_map
 
     def _combo_select(self, combo, data):
         for i in range(combo.count()):
@@ -9193,9 +9261,13 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 # Ein GESPEICHERTER Plan bringt seine eigenen Werte mit
                 # (s. _open_saved_plan) und ueberschreibt diese Vorgaben
                 # danach wieder.
+                # Dazu seit 19.09.2026 die zwei Reprocessing-Haken (Nutzer:
+                # "bei einem neuen ungespeicherten Bauplan bitte beide
+                # immer OFF").
                 _std = config.DEFAULT_SETTINGS
                 for _sk in ("bau_blacklist_names", "bau_blacklist_gruppen",
-                            "bau_buy_datacores", "bau_buy_decryptors"):
+                            "bau_buy_datacores", "bau_buy_decryptors",
+                            "bau_reprocess_on", "bau_unrefined_on"):
                     _v = _std.get(_sk)
                     self.settings[_sk] = (list(_v) if isinstance(_v, list)
                                           else _v)
@@ -9390,6 +9462,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             opts["adjusted_prices"] = adj
             opts["average_prices"] = dict(getattr(self, "_avg_prices", None)
                                           or {})
+            # REPROCESSING (1.0.9, Weg B): nur mit Schalter - sonst fehlt der
+            # Schluessel und der Plan rechnet exakt wie bisher.
+            _ro = self._reprocess_opts()
+            if _ro:
+                opts["reprocess"] = _ro
             # Schritt 3: Struktur-Boni. Nur wenn Strukturen angelegt sind; sonst
             # bleibt das alte Setup-Verhalten. Die Auswahl der besten Struktur je
             # Aktivität ist item-abhängig → passiert unten (nach groups).
@@ -9486,13 +9563,39 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             # vorgaukelte (T1-Sachen sind i. d. R. voll ausgeforscht, T2 selten).
             cat_me_map = self._bau_category_me_map(list(ids), groups,
                                                     recipes.reaction_products, type_id)
+            # REPROCESSING WEG A (1.0.9): Unrefined-Reaktionen. Die Wahl
+            # faellt HIER, mit den Basis-Rezepten und vor den Rig-ME-Karten
+            # (die Reaktions-ME wirkt auf beide Wege gleich); danach laeuft
+            # alles Weitere - Rig-Karten, Stufen, Baum, Plan, Runplaner -
+            # ueber die Rezept-Kopie, in der X ueber seine Unrefined-Formel
+            # gebaut wird. Ohne Schalter: dieselben Rezepte wie bisher.
+            self._bd_recipes_basis = recipes
+            _uo_opts = dict(opts); _uo_opts.setdefault("me_map", cat_me_map)
+            _uo_fest = None
+            if _frozen:
+                _uo_fz = self._frozen_snapshot_plan()
+                if _uo_fz is not None:
+                    _uo_fest = (_uo_fz.get("unrefined") or {})
+            recipes, _u_wahl = self._unrefined_overlay(type_id, recipes, pm.get,
+                                                       _uo_opts, kredit_pfn=pm.get,
+                                                       fest=_uo_fest)
+            if _u_wahl:
+                _u_neu = set()
+                for _ux, _uk in _u_wahl.items():
+                    _u_neu.add(int(_uk["u"]))
+                    _u_neu |= {int(_m) for _m, _q in _uk["mats"]}
+                    _u_neu |= {int(_m) for _m in (_uk.get("zurueck_je_run") or {})}
+                _u_neu -= ids
+                if _u_neu:
+                    ids |= _u_neu
+                    groups.update(industry.group_names(list(_u_neu)))
             # Kategorie-spezifische Rig-ME pro Item + Auto-Strukturwahl (nur mit Strukturen)
             self._bd_rig_me_map = {}
             self._bd_struct_used = {}
             self._bd_mfg_struct = None
             self._bd_react_struct = None
             if struct_on:
-                me_map, me_map_reaction, rig_me_map, used = self._bau_me_maps(
+                me_map, me_map_reaction, rig_me_map, used, ec_me_map = self._bau_me_maps(
                     list(ids), groups, recipes.reaction_products, cat_me_map,
                     type_id, recipes=recipes)
                 opts["me_map"] = me_map
@@ -9501,6 +9604,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 opts["me_reaction"] = 0
                 self._bd_rig_me_map = rig_me_map
                 opts["rig_me_map"] = rig_me_map
+                opts["ec_me_map"] = ec_me_map          # EC-Rollenbonus fuer invented Items
                 # TE / System-Index / Cost-Rig aus den gewählten Strukturen
                 cidx = self._bau_cost_idx or {}
                 mfg_s = used.get("manufacturing"); rea_s = used.get("reaction")
@@ -9628,7 +9732,14 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 _d = plan.get(_k) or {}
                 if isinstance(_d, dict):
                     ids |= {int(x) for x in _d}
+            # Kandidaten-Erze VOR der Namensaufloesung dazu: `kandidaten()`
+            # erkennt komprimierte Erze am Namen.
+            if opts.get("reprocess"):
+                ids |= self._reprocess_erz_ids(pm.get)
             names = esi.resolve_names(list(ids))
+            if opts.get("reprocess") and _frozen_plan is None:
+                plan = self._reprocess_anwenden(plan, pm.get, names, opts["reprocess"],
+                                                kredit_pfn=pm.get)
             # GRUPPEN NACHZIEHEN - dieselbe Logik wie bei den Namen: `groups`
             # wurde oben auf dem FRUEHEN ids-Set berechnet, danach kamen
             # Plan-Schluessel und Baum-Ids dazu (drei Erweiterungen). Die
@@ -10544,6 +10655,16 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             self._plan_nach_fortschritt_sortieren)
         head_row.addWidget(self.bp_progress_btn)
         head_row.addStretch()
+        # DIE KOPFZEILE DARF DIE SEITE NICHT BREITER MACHEN (Nutzer-Befund
+        # 19.09.2026, pruefe.py auf Windows: b66 rot, Seite 1'191 px statt
+        # 717 - die drei Knoepfe massen dort 370/310/238 px statt 199/175/
+        # 137). Seit 15.09. stehen hier drei Knoepfe statt einem; ihre
+        # Mindestbreite setzte die Mindestbreite der ganzen Seite, und der
+        # Stapel nimmt die breiteste Seite fuer alle. Mit einer kleinen
+        # Untergrenze duerfen sie im Notfall schrumpfen (Text wird dann
+        # gekappt); im normalen Fenster bekommen sie weiter ihre Wunschbreite.
+        for _kb in (chk_btn, self.bp_order_btn, self.bp_progress_btn):
+            _kb.setMinimumWidth(40)
 
         # ZWEITEILUNG (Nutzer, Sitzung 9): links die Karten, rechts eine
         # Auflistung aller Plaene mit Gewinn und Gesamtsumme. Beides haengt in
@@ -10854,7 +10975,10 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         for p in plans:
             zeile = QHBoxLayout(); zeile.setContentsMargins(0, 0, 0, 0)
             zeile.setSpacing(8)
-            nm = QLabel(p.get("label") or p.get("item_name") or "?")
+            # GEKUERZT MIT "..." statt hart abgeschnitten (18.09.2026), voller
+            # Name im Tooltip; der Betrag in Festbreitenschrift, damit die
+            # Zahlen untereinander stehen.
+            nm = ElideLabel(p.get("label") or p.get("item_name") or "?")
             nm.setObjectName("Muted")
             nm.setToolTip(f"{p.get('item_name', '')} \u00d7{p.get('qty', '')}")
             # Der Name darf die Spalte nicht sprengen: er weicht, der Betrag
@@ -10865,6 +10989,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             wert = QLabel("\u2026")
             wert.setObjectName("Muted")
             wert.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            wert.setStyleSheet(f"font-family:{theme.MONO};")
             zeile.addWidget(wert, 0)
             pv.addLayout(zeile)
             self._plan_sum_labels[p["id"]] = wert
@@ -11100,11 +11225,15 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             # gespeichert), bleibt also für eine ganze Planliste schnell genug.
             _cat_me_map = self._bau_category_me_map(
                 list(ids), groups, recipes.reaction_products, type_id)
-            _me_map, _me_map_reaction, _rig_me_map, _used_struct = self._bau_me_maps(
+            _me_map, _me_map_reaction, _rig_me_map, _used_struct, _ec_me_map = self._bau_me_maps(
                 list(ids), groups, recipes.reaction_products, _cat_me_map,
                 type_id, recipes=recipes)
             opts["me_map"] = _me_map
             opts["me_map_reaction"] = _me_map_reaction
+            # Rig-ME und EC-Rollenbonus fuer den invented-Pfad - wie im
+            # Dialog (oben, opts["rig_me_map"]); hier fehlte der Rig bisher.
+            opts["rig_me_map"] = _rig_me_map
+            opts["ec_me_map"] = _ec_me_map
             plan = industry.production_plan(type_id, qty, _pm_mat.get, recipes, opts)
             # DERSELBE BESTANDS-DOPPELZAEHLER wie frueher in rebuild(): hier
             # wurde der Bestand zum MARKTPREIS auf total_cost draufgerechnet,
@@ -12791,7 +12920,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         for _pk, _sk in (("blacklist_names", "bau_blacklist_names"),
                          ("blacklist_gruppen", "bau_blacklist_gruppen"),
                          ("buy_datacores", "bau_buy_datacores"),
-                         ("buy_decryptors", "bau_buy_decryptors")):
+                         ("buy_decryptors", "bau_buy_decryptors"),
+                         ("reprocess_on", "bau_reprocess_on"),
+                         ("unrefined_on", "bau_unrefined_on")):
             if _pk in p:
                 self.settings[_sk] = p[_pk]
         # Kategorie-ME/TE wiederherstellen (Fallback 10 für alte, vor diesem Fix
@@ -14805,7 +14936,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                          # de_scan4: an
             have = owned.get(bp_id, 0) if owned is not None else None
             bpc_runs = owned_bpc.get(bp_id, 0)
-            rows.append({"name": j.get("name", f"#{j.get('tid')}"), "stage": stage,
+            rows.append({"name": self._bp_basisname(j.get("tid"),
+                                                    j.get("name", f"#{j.get('tid')}")),
+                         "stage": stage,
                         "runs": total_runs, "max_runs": max_runs, "copies": copies,
                         "waves": waves, "have": have, "bpc_runs": bpc_runs,
                         "bp_id": bp_id, "tid": j.get("tid")})
@@ -15052,7 +15185,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             st = a.get("stage", "component")
             cid = a.get("char_id")
             mfg_cap, react_cap = cap_by_char.get(cid, (1, 1))
-            cap = react_cap if st.startswith("reaction") else mfg_cap
+            cap = react_cap if (st.startswith("reaction") or st == "unrefined") else mfg_cap
             char_done = int(pcs.get(f"{cid}|{st}", 0) or 0)
             asg.append({
                 "char": a.get("char_name", "?"),
@@ -15065,7 +15198,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 "char_done": char_done})
         stg = res.get("stage_times") or {}
         stage_times = {k: int(stg.get(k, 0) or 0)
-                       for k in ("reaction_1", "reaction_2", "component", "end")}
+                       for k in ("fuel", "unrefined", "reaction_1", "reaction_2",
+                                 "component", "end")}
         return asg, waves_named, stage_times
 
     def _fill_schedule_manual(self, jobs, recipes, names, hdr, sub, tbl, plan=None):
@@ -15218,13 +15352,14 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             _mm_cat = self._bau_category_me_map(
                 list(_mm_ids), _mm_groups, recipes.reaction_products, None,
                 use_dialog_me=False)
-            _me_map, _me_map_rea, _rig_me_map, _mm_used = self._bau_me_maps(
+            _me_map, _me_map_rea, _rig_me_map, _mm_used, _ec_me_map = self._bau_me_maps(
                 list(_mm_ids), _mm_groups, recipes.reaction_products, _mm_cat,
                 None, use_dialog_me=False, recipes=recipes)
             if _rig_me_map or _me_map:
                 build_opts["me_map"] = _me_map
                 build_opts["me_map_reaction"] = _me_map_rea
                 build_opts["rig_me_map"] = _rig_me_map
+                build_opts["ec_me_map"] = _ec_me_map
             self._last_build_structs = _mm_used
         except Exception as _mm_err:
             # Nicht still schlucken: ohne die Maps rechnet der Scan weiter,
@@ -19119,6 +19254,21 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         def job(progress=None):
             added = []
             seen = set()
+            # CORP-HANGAR-ORTE DAZU (Tester-Befund 19.09.2026, Discord: "von der
+            # NPC-Station sieht er die Materialien, die Citadel bekomme ich
+            # nicht hinzugefuegt"). Die Suche kannte nur Charakter-Assets und
+            # -Orders; liegt das Material im CORP-Hangar der Citadel, tauchte
+            # sie nie auf und liess sich nicht verknuepfen. Jetzt zaehlen auch
+            # die Orte der Corp-Assets (je Corp ein Abruf, s. _corp_bau_daten),
+            # aufgeloest ueber den Charakter, der die Corp lesen darf.
+            _corp_orte = {}
+            if self.settings.get("use_corp"):
+                try:
+                    _corp_orte = dict((self._corp_bau_daten(client_id, chars, None)
+                                       or {}).get("orte") or {})
+                except Exception as _co_err:
+                    self._log_exception("Orte suchen: Corp-Hangar", str(_co_err))
+                    _corp_orte = {}
             for c in chars:
                 cid = c["character_id"]
                 # ERTEILTE BERECHTIGUNG JE CHARAKTER MERKEN (Sitzung 19).
@@ -19141,6 +19291,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     sids = esi.structure_location_ids(client_id, cid)
                 except Exception:
                     sids = set()
+                sids = set(sids) | {_o for _o, _c in _corp_orte.items()
+                                    if _c == cid and _o >= 1_000_000_000_000}
                 for sid in sids:
                     if sid in seen or sid in existing:
                         continue
@@ -19175,6 +19327,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     stids = esi.station_location_ids(client_id, cid)
                 except Exception:
                     stids = set()
+                stids = set(stids) | {_o for _o, _c in _corp_orte.items()
+                                      if _c == cid and 60_000_000 <= _o < 64_000_000}
                 for stid in stids:
                     if stid in seen or stid in existing:
                         continue
@@ -23036,6 +23190,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         if (cur is getattr(self, "market_tab", None) and prev is not None
                 and prev is not cur):
             self._market_return = prev
+        if cur is getattr(self, "market_tab", None):
+            self._mk_auto_start()
         if cur is not None and hasattr(self, "_tab_widget"):
             for k, wdg in self._tab_widget.items():
                 if wdg is cur:
@@ -23480,10 +23636,23 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         self.mk_item.setMinimumWidth(260)
         self.mk_item.setEditable(True)
         self.mk_item.setInsertPolicy(QComboBox.NoInsert)
-        comp = self.mk_item.completer()
+        # VERVOLLSTAENDIGUNG UEBER ALLE BEKANNTEN NAMEN (Nutzer 18.09.2026:
+        # "zeigt nicht alle Items wenn ich anfange zu tippen"). Die Liste
+        # der Combo bleibt der Bestand (eine Handvoll); der Completer haengt
+        # an einem EIGENEN Modell mit dem ganzen Namens-Cache (~13k nach
+        # einem Market scan) - ein QStringListModel dieser Groesse kostet
+        # nichts, nur das Einfuegen von 13k Combo-Eintraegen fror die
+        # Oberflaeche ein (alter Befund).
+        from PySide6.QtCore import QStringListModel as _QSLM
+        self._mk_namen_modell = _QSLM()
+        self._mk_namen_ids = {}
+        comp = QCompleter(self._mk_namen_modell, self.mk_item)
         comp.setCompletionMode(QCompleter.PopupCompletion)
         comp.setFilterMode(Qt.MatchContains)
         comp.setCaseSensitivity(Qt.CaseInsensitive)
+        comp.setMaxVisibleItems(14)
+        self.mk_item.setCompleter(comp)
+        comp.activated[str].connect(self._mk_name_gewaehlt)
         head.addWidget(QLabel(t("Item:")))
         head.addWidget(self.mk_item)
         self.mk_window = QComboBox()
@@ -23606,6 +23775,18 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         if (tid is None or (text and text != self.mk_item.itemText(self.mk_item.currentIndex()))):
             if not text:
                 return
+            # Erst lokal (Namens-Cache, ohne Netz), dann ESI.
+            _lok = {k.lower(): v for k, v in
+                    (getattr(self, "_mk_namen_ids", None) or {}).items()}
+            _tid_lok = _lok.get(text.lower())
+            if _tid_lok is not None:
+                _name = next((k for k in self._mk_namen_ids
+                              if k.lower() == text.lower()), text)
+                if self.mk_item.findData(_tid_lok) < 0:
+                    self.mk_item.addItem(_name, _tid_lok)
+                self.mk_item.setCurrentIndex(self.mk_item.findData(_tid_lok))
+                self._do_plot(_tid_lok)
+                return
 
             def done(res):
                 if self.mk_item.findData(res["id"]) < 0:
@@ -23621,6 +23802,12 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
     def _do_plot(self, tid):
         self.statusBar().showMessage(t("Loading price history \u2026"))
         region = store.get_scan_region()
+        # Zuletzt angesehenes Item merken - beim naechsten Oeffnen des Tabs
+        # steht sofort ein Graph da (Nutzer 18.09.2026).
+        try:
+            self.settings["mk_last_item"] = [int(tid), self.mk_item.currentText()]
+        except Exception:
+            pass
 
         def done(data):
             self._mk_full = data or []          # keep the FULL history in memory
@@ -24101,9 +24288,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         self.s_corp.setCurrentIndex(1 if self.settings.get("use_corp") else 0)
         # DIE SIEBEN DIVISIONS EINZELN (Entscheid 14.09.2026): nicht
         # pauschal alle - Material einer Division, die der Corp-Verkauf
-        # nutzt, darf nicht ungefragt in die Bauplanung wandern. Namen
-        # kommen per Knopf aus ESI (braucht Director + Corp-Scope); bis
-        # dahin heissen sie "Division N".
+        # nutzt, darf nicht ungefragt in die Bauplanung wandern. STANDARD
+        # seit 19.09.2026 trotzdem ALLE angehakt (Nutzer-Entscheid), abwaehlen
+        # bleibt moeglich. Namen kommen per Knopf aus ESI (braucht Director
+        # + Corp-Scope); bis dahin heissen sie "Corp-Hangar N" (Nutzer
+        # 19.09.2026: "aendere Name von Division auf Corp-Hangar 1-7").
         self._corp_div_row = QWidget()
         _dl = QHBoxLayout(self._corp_div_row)
         _dl.setContentsMargins(0, 0, 0, 0); _dl.setSpacing(6)
@@ -24112,7 +24301,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         _gewaehlt = set(_corp_mod.divisions_bereinigt(
             self.settings.get("corp_divisions")))
         for _n in _corp_mod.ALLE_DIVISIONS:
-            _cb = QCheckBox(t("Division {n}").format(n=_n))
+            _cb = QCheckBox(t("Corp-Hangar {n}").format(n=_n))
             _cb.setIcon(icons.icon("package"))
             _cb.setChecked(_n in _gewaehlt)
             _cb.toggled.connect(lambda _on, n=_n: self._corp_division_sofort())
@@ -24907,8 +25096,13 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         live = ((getattr(self, "_bd_opts", None) or {}).get("stock")
                 or getattr(self, "_bd_live_stock", None) or {})
         geliefert = getattr(self, "_bd_runplan_delivered", None) or {}
-        return fehlbedarf_vorschau(build_runs, build_mats, out_qty,
-                                   geliefert, live)
+        _fehl = fehlbedarf_vorschau(build_runs, build_mats, out_qty,
+                                    geliefert, live)
+        # REPROCESSING (1.0.9, Weg B): solange Stufe 0 nicht abgehakt ist,
+        # deckt das Erz die Minerale - und das Erz selbst muss da sein.
+        return reprocess.fehl_anpassen(
+            _fehl, ((plan.get("reprocess") or {}).get("schritte") or []),
+            getattr(self, "_bd_runplan_checked", None) or set(), live)
 
     def _restbedarf_jetzt(self):
         """{type_id: Menge}, die die NOCH OFFENEN Runs brauchen.
@@ -24943,7 +25137,10 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         for _t, _n in _hand.items():
             geliefert[_t] = max(int(geliefert.get(_t, 0) or 0), int(_n))
         _rem, need = restbedarf_map(build_runs, build_mats, geliefert)
-        return need
+        # REPROCESSING (1.0.9, Weg B): nicht abgehakte Schritte - Erz statt
+        # der gedeckten Minerale (s. reprocess.rest_anpassen).
+        return reprocess.rest_anpassen(
+            need, ((plan.get("reprocess") or {}).get("schritte") or []), _checked)
 
     def _check_shortfall(self):
         from ..sprache import t as _txt   # `t` ist hier lokal belegt
@@ -25401,7 +25598,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 for n, cb in self.s_corp_divs.items():
                     _teile = [v.get(n) for v in namen.values() if v.get(n)]
                     cb.setText(" / ".join(_teile) if _teile
-                               else t("Division {n}").format(n=n))
+                               else t("Corp-Hangar {n}").format(n=n))
                 self.statusBar().showMessage(t("Division names loaded."))
             elif res.get("relink"):
                 self.statusBar().showMessage(t(
@@ -25877,6 +26074,59 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         if idx >= 0:
             self.mk_item.setCurrentIndex(idx)
         self.mk_item.blockSignals(False)
+        self._mk_namen_laden()
+
+    _MK_STARTITEM = "Acolyte II"
+
+    def _mk_auto_start(self):
+        """Beim Oeffnen des Preisverlaufs ohne Graph: zuletzt angesehenes
+        Item, sonst das erste aus dem Bestand - statt einer leeren Flaeche
+        (Nutzer 18.09.2026: "standardmaessig sollte ein Item aufgehen")."""
+        if getattr(self, "_mk_full", None) or getattr(self, "_mk_auto_lief", False):
+            return
+        self._mk_auto_lief = True
+        _letzt = self.settings.get("mk_last_item") or None
+        tid = None
+        if isinstance(_letzt, (list, tuple)) and len(_letzt) == 2:
+            try:
+                tid = int(_letzt[0])
+                if self.mk_item.findData(tid) < 0:
+                    self.mk_item.addItem(str(_letzt[1]), tid)
+            except (TypeError, ValueError):
+                tid = None
+        if tid is None:
+            # KEIN gemerktes Item: "Acolyte II" - das Item, zu dem auch das
+            # Tutorial fuehrt (Nutzer 18.09.2026: "sonst hat man ein leeres
+            # Fenster vor sich und ist schnell frustriert"). Ueber den NAMEN
+            # aufgeloest (Namens-Cache, sonst ESI), keine Type-ID im Code.
+            self.mk_item.setEditText(self._MK_STARTITEM)
+            self._plot_history()
+            return
+        self.mk_item.blockSignals(True)
+        self.mk_item.setCurrentIndex(self.mk_item.findData(tid))
+        self.mk_item.blockSignals(False)
+        self._do_plot(tid)
+
+    def _mk_namen_laden(self):
+        """Namens-Cache in das Completer-Modell des Preisverlaufs laden."""
+        try:
+            _echt = {str(n): int(i) for i, n in store.all_names().items() if n}
+        except Exception:
+            _echt = {}
+        for h in getattr(self, "_holdings", []) or []:
+            _echt.setdefault(h.name, h.type_id)
+        self._mk_namen_ids = _echt
+        self._mk_namen_modell.setStringList(sorted(_echt, key=str.lower))
+
+    def _mk_name_gewaehlt(self, text):
+        """Eintrag aus der Vervollstaendigung: Item in die Combo, dann zeichnen."""
+        tid = self._mk_namen_ids.get(text)
+        if tid is None:
+            return
+        if self.mk_item.findData(tid) < 0:
+            self.mk_item.addItem(text, tid)
+        self.mk_item.setCurrentIndex(self.mk_item.findData(tid))
+        self._do_plot(tid)
 
     def _pick_global_char(self, *_):
         """Global dropdown changed → apply to every per-tab dropdown, which makes
@@ -26081,6 +26331,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             self._overlay_progress.setText(
                 f"{bar}  {done:,}".replace(",", "'") +
                 f" / {total:,}".replace(",", "'") + f"  ({pct} %)")
+        elif done < 0:
+            # Phase ohne Zahl (download_sde meldet -1 fuer "Entpacken +
+            # Einlesen"): Text statt "-1 ..." (Nutzer 18.09.2026, zweiter
+            # Fundort nach der Statuszeile - hier der grosse Ladeschirm).
+            self._overlay_progress.setText(t("Unpacking and importing …"))
         else:
             self._overlay_progress.setText(f"{done:,}".replace(",", "'") + " …")
 

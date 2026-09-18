@@ -33,9 +33,20 @@ for _k in ("HOME", "APPDATA", "USERPROFILE"):
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QTabWidget, QApplication, QComboBox, QPushButton, QLabel,
                                QTableWidget, QTreeWidget, QCheckBox,
-                               QPlainTextEdit)
+                               QPlainTextEdit, QWidget)
 
 _app = QApplication.instance() or QApplication([])
+
+# (b79) FEHLER.LOG-NETZ: _log_exception schreibt abgefangene Ausnahmen neben
+# das Startskript (argv[0] = diese Datei). Was der Lauf dort anhaengt, wird
+# am Ende gelesen - ein AttributeError in einem try/except ist sonst unsichtbar
+# (18.09.2026: "'MainWindow' object has no attribute '_bd_groups'" sechsmal je
+# Prueflauf, nur in fehler.log des Nutzers zu sehen).
+_FLOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fehler.log")
+try:
+    _FLOG_START = os.path.getsize(_FLOG)
+except OSError:
+    _FLOG_START = 0
 
 from eve_trader.ui.main_window import MainWindow          # noqa: E402
 from eve_trader import industry as I                      # noqa: E402
@@ -213,6 +224,24 @@ class _Recipes:
 
     def is_manufactured(self, t):
         return t in self.product_to_bp
+
+
+# GEMERKTE ANSICHTS-FILTER VOR DEM START LOESCHEN (18.09.2026). b46 prueft
+# die VORGABEN der Blueprints-Haken; ein vorheriger Lauf kann aber ueber
+# closeEvent -> _filter_merken andere Haken in die Test-Settings geschrieben
+# haben (so geschehen: b76 liess "profitable only" AUS zurueck, weil die
+# Settings vorher gar kein ui_filter kannten - Lauf 1 gruen, Lauf 2 b46
+# rot, nur beim Nutzer, weil seine .smoke_home aelter war als b76). Das
+# Merken selbst prueft b76 ueber die beiden Methoden, nicht ueber den
+# Neustart - hier darf es also weg.
+try:
+    from eve_trader import config as _cfg0
+    _s0 = _cfg0.load_settings()
+    if "ui_filter" in _s0:
+        _s0.pop("ui_filter", None)
+        _cfg0.save_settings(_s0)
+except Exception as _e0:                                 # pragma: no cover
+    print(f"(Hinweis) ui_filter nicht geloescht: {type(_e0).__name__}: {_e0}")
 
 
 # ---------------------------------------------------------------- (b1)
@@ -2063,7 +2092,9 @@ _src7f = open("eve_trader/ui/mw_bauplan_tabs.py", encoding="utf-8").read()
 check("b7f der Formel-Name wird an der Zeile hinterlegt",
       "iit.setData(0, ROLLE_KOPIERNAME," in _src7f)
 check("b7f und er kommt aus _bp_name_fuer (EINE Regel)",
-      "self._bp_name_fuer(a.get(\"name\")," in _src7f)
+      "self._bp_name_fuer(\n"
+      "                                    self._bp_basisname(a.get(\"tid\"), a.get(\"name\")),"
+      in _src7f)
 check("b7f die Run-Zahl steht fett", "_fr.setBold(True)" in _src7f
       and "iit.setFont(1, _fr)" in _src7f)
 # GAR KEIN ZEICHNEN MEHR IN mw_basis: weder Rahmen noch Chip. Waere eines
@@ -3618,6 +3649,57 @@ finally:
     win._char_roles_dirty = False
 
 
+# ---------------------------------------------------------------- (b14r)
+# REPROCESSING-SKILLS NUR IM TOOLTIP DES CHARAKTERNAMENS (1.0.9, Nutzer
+# 17.09.2026: kein Haken, keine Spalte - "den besten reprocess Charakter
+# waehlen" macht spaeter der Runplaner selbst). Die Zeile erscheint NUR,
+# wenn Skills geladen sind UND die SDE die Skill-IDs kennt - sonst nichts,
+# und vor allem keine geratene ID.
+_chars14r = [{"character_id": 1, "character_name": "Peanut Motor"},
+             {"character_id": 2, "character_name": "Berry Motor"}]
+_orig_lc14r = store.list_characters
+_orig_save14r = config.save_settings
+_orig_ids14r = I.reprocess_skill_ids
+_orig_sk14r = win.settings.get("bau_char_skills")
+store.list_characters = lambda: list(_chars14r)
+config.save_settings = lambda s: None
+try:
+    def _namen14r(panel):
+        return {lb.text(): lb for lb in panel.findChildren(QLabel)
+                if lb.text() in ("Peanut Motor", "Berry Motor")}
+    # Schluessel str wie nach JSON; Charakter 2 hat nie Skills geladen.
+    win.settings["bau_char_skills"] = {"1": {"3385": 4, "3389": 3, "3380": 5}}
+    I.reprocess_skill_ids = lambda: {"Reprocessing": 3385, "Reprocessing Efficiency": 3389}
+    _p14r = win._build_char_roles_widget()
+    _lbs = _namen14r(_p14r)
+    check("b14r mit Skills und IDs steht die Zeile im Tooltip",
+          _t4("Reprocessing skills: {r} / Efficiency {e}").format(r=4, e=3)
+          in _lbs["Peanut Motor"].toolTip())
+    check("b14r ohne geladene Skills keine Zeile",
+          "Reprocessing" not in _lbs["Berry Motor"].toolTip().split("\n")[-1]
+          and _lbs["Berry Motor"].toolTip().count("\n")
+          == _lbs["Peanut Motor"].toolTip().count("\n") - 1)
+    check("b14r eine Zeile pro Charakter, nicht doppelt",
+          _lbs["Peanut Motor"].toolTip().count("Efficiency") == 1)
+    I.reprocess_skill_ids = lambda: {}
+    _p14r2 = win._build_char_roles_widget()
+    check("b14r ohne Skill-IDs aus der SDE keine Zeile (kein Raten)",
+          "Efficiency" not in _namen14r(_p14r2)["Peanut Motor"].toolTip())
+    # Die Zeile ist zweisprachig hinterlegt.
+    from eve_trader import sprache as _sp14r
+    check("b14r die Zeile hat eine deutsche Fassung",
+          "Reprocessing skills: {r} / Efficiency {e}" in _sp14r.KATALOG["de"])
+finally:
+    store.list_characters = _orig_lc14r
+    config.save_settings = _orig_save14r
+    I.reprocess_skill_ids = _orig_ids14r
+    if _orig_sk14r is None:
+        win.settings.pop("bau_char_skills", None)
+    else:
+        win.settings["bau_char_skills"] = _orig_sk14r
+    win._reload_char_roles()
+
+
 # ---------------------------------------------------------------- (b15)
 # KLICK AUF DEN CHARAKTERNAMEN SETZT/ENTFERNT ALLE ROLLEN (Nutzer-Wunsch
 # Sitzung 11: "fuege ein, wenn man auf den charakter namen klickt, dass sich
@@ -3917,6 +3999,26 @@ try:
           bool(_lbls2t) and _lbls2t[0].wordWrap())
     check("b2t der volle Name steht zusaetzlich im Tooltip",
           bool(_lbls2t) and "Projectile Collision" in (_lbls2t[0].toolTip() or ""))
+    # GEWINN-UEBERSICHT (18.09.2026): der Name wird mit "..." gekuerzt statt
+    # hart abgeschnitten, der Betrag steht in Festbreitenschrift.
+    from eve_trader.ui.main_window import ElideLabel as _EL2t
+    _el2t = [l for l in (_hold2t.findChildren(_EL2t) if _hold2t else [])
+             if "Projectile Collision" in (l.text() or "")]
+    check("b2t in der Gewinn-Uebersicht ist der lange Name ein ElideLabel",
+          bool(_el2t) and "Projectile Collision" in (_el2t[0].toolTip() or "")
+          and _el2t[0].minimumSizeHint().width() == 0)
+    _probe2t = _EL2t("Medium Projectile Collision Accelerator II \u00d7200")
+    _probe2t.resize(120, 20)
+    _fm2t = _probe2t.fontMetrics()
+    check("b2t ElideLabel kuerzt mit \u2026 auf die verfuegbare Breite",
+          _fm2t.elidedText(_probe2t.text(), Qt.ElideRight, 120).endswith("\u2026")
+          and "drawText(r, int(self.alignment()) | Qt.TextSingleLine, txt)" in
+          __import__("inspect").getsource(_EL2t.paintEvent)
+          and "elidedText(self.text(), Qt.ElideRight, r.width())" in
+          __import__("inspect").getsource(_EL2t.paintEvent))
+    check("b2t die Betraege stehen in Festbreitenschrift",
+          any("font-family" in (l.styleSheet() or "")
+              for l in getattr(win, "_plan_sum_labels", {}).values()))
     # GEISTER-KOPFZEILEN: das alte Aufraeumen sammelte nur Widgets ein, die
     # per addLayout() eingehaengte Kopfzeile blieb stehen und stapelte sich.
     for _ in range(3):
@@ -6993,6 +7095,7 @@ except Exception as _e75:                                # pragma: no cover
 try:
     from PySide6.QtCore import Qt as _Qt76
     _ges76 = dict(win.settings)
+    _alt76 = _bpc76 = None
     try:
         # --- Sortierung
         win.settings["ui_sort"] = {}
@@ -7008,6 +7111,7 @@ try:
         # --- Filter
         win.settings["ui_filter"] = {}
         _alt76 = win.bp_cb_profit.isChecked()
+        _bpc76 = win.bp_cb_bpc.isChecked()
         win.bp_cb_profit.setChecked(not _alt76)
         win.bp_cb_bpc.setChecked(False)
         win._filter_merken()
@@ -7043,6 +7147,21 @@ try:
     finally:
         win.settings.clear(); win.settings.update(_ges76)
         win._filter_wiederherstellen()
+        # DIE HAKEN AUSDRUECKLICH ZURUECKSETZEN (18.09.2026): kannten die
+        # Settings vorher kein ui_filter, stellt _filter_wiederherstellen
+        # NICHTS zurueck - "profitable only" blieb AUS, closeEvent schrieb
+        # das in die Test-Settings, und der naechste Lauf fiel bei b46.
+        for _w76, _v76 in ((win.bp_cb_profit, _alt76), (win.bp_cb_bpc, _bpc76)):
+            if _v76 is None:
+                continue
+            try:
+                _w76.blockSignals(True)
+                _w76.setChecked(_v76)
+            finally:
+                _w76.blockSignals(False)
+        check("b76 Aufraeumen: die Haken stehen wieder wie vorher",
+              _alt76 is not None and win.bp_cb_profit.isChecked() is _alt76
+              and win.bp_cb_bpc.isChecked() is _bpc76)
 except Exception as _e76:                                # pragma: no cover
     _fail.append(f"b76 Sortierung/Filter merken: {type(_e76).__name__}: {_e76}")
 
@@ -7401,6 +7520,7 @@ try:
                     # es erst mit offenem Auswahlfenster, die bd:-Anker nur
                     # mit offenem Bauplan. `_nachfuehren` holt beides nach.
                     if _one78 in ("_picker_open_btn", "_bd_karte_bauenkaufen",
+                                  "_bd_karte_tiefe",
                                   "_bd_save_btn", "_bd_frozen_btn") \
                             or str(_one78).startswith("bd:"):
                         continue
@@ -7481,6 +7601,14 @@ try:
     check("b78 'Build or buy' zeigt auf seine Karte",
           any(isinstance(n, tuple) and "_bd_karte_bauenkaufen" in n
               for n in _names78))
+    # BEIDE KARTEN (Nutzer 18.09.2026): der Text nennt "Production depth",
+    # also blinkt die Karte mit - und sie existiert im Bauplan-Fenster.
+    check("b78 'Build or buy' laesst auch 'Production depth' blinken",
+          any(isinstance(n, tuple) and "_bd_karte_bauenkaufen" in n
+              and "_bd_karte_tiefe" in n for n in _names78))
+    check("b78 die Karte 'Production depth' ist am Fenster gemerkt",
+          "self._bd_karte_tiefe = self._collapsible(" in open(
+              "eve_trader/ui/mw_bauplan_fenster.py", encoding="utf-8").read())
     check("b78 und stellt dabei den Rezeptstruktur-Reiter selbst her",
           any(isinstance(n, tuple) and "_bd_karte_bauenkaufen" in n
               and any(str(x).startswith("bd:tab:") for x in n)
@@ -7885,12 +8013,27 @@ finally:
 # alle, und das war die 16-spaltige Blueprints-Tabelle.
 _st66 = getattr(win, "b_stack", None)
 check("b66 der Bau-Stapel ist da", _st66 is not None)
+
+
+def _breiteste66(pg, n=4):
+    """Die n breitesten Blaetter der Seite - damit ein roter b66 SAGT, wer
+    schuld ist (Windows-Befund 19.09.2026: nur die Zahl 1'527 stand da)."""
+    out = []
+    for w in pg.findChildren(QWidget):
+        if w.layout() is not None:
+            continue
+        txt = (w.text() if hasattr(w, "text") else "")
+        out.append((w.minimumSizeHint().width(), type(w).__name__, str(txt)[:40]))
+    return sorted(out, reverse=True)[:n]
+
+
 if _st66 is not None:
     _breiten66 = [_st66.widget(i).minimumSizeHint().width()
                   for i in range(_st66.count())]
     check(f"b66 keine Seite sprengt 1366 px mit Seitenleiste ({_breiten66})",
           all(b + 230 <= 1366 for b in _breiten66))
-    check(f"b66 der Stapel selbst passt auf 1366 px ({_st66.minimumSizeHint().width()})",
+    check(f"b66 der Stapel selbst passt auf 1366 px ({_st66.minimumSizeHint().width()}; "
+          f"breiteste: {_breiteste66(_st66)})",
           _st66.minimumSizeHint().width() + 230 <= 1366)
     # GEGENPROBE: die Bauplan-Seite ist wirklich die schmale von beiden -
     # sonst haette die Pruefung oben auch bei vertauschten Seiten gehalten.
@@ -7899,8 +8042,13 @@ if _st66 is not None:
     # dass sie mit der Seitenleiste in 1366 px passt - das wird gerechnet
     # statt geraten.
     check(f"b66 Bauplan-Seite plus Seitenleiste passen in 1366 px "
-          f"({_st66.widget(2).minimumSizeHint().width()})",
+          f"({_st66.widget(2).minimumSizeHint().width()}; "
+          f"breiteste: {_breiteste66(_st66.widget(2))})",
           _st66.widget(2).minimumSizeHint().width() + 230 <= 1366)
+    # KOPFZEILEN-KNOEPFE DUERFEN SCHRUMPFEN (Windows-Befund 19.09.2026).
+    check("b66 die drei Kopfzeilen-Knoepfe haben eine kleine Untergrenze (40 px)",
+          all(getattr(win, _n).minimumWidth() == 40
+              for _n in ("bp_order_btn", "bp_progress_btn")))
 
 # ---------------------------------------------------------------- (b67)
 # WARNER FUER EINEN ALTEN ODER FALSCHEN MARKT (Nutzer, Sitzung 20).
@@ -8039,6 +8187,1028 @@ finally:
     win.settings["kpi_zensiert"] = _alt68
     win._kpi_zensur_anwenden()
 
+
+# ---------------------------------------------------------------- (b7u)
+# REPROCESSING IM BAUPLAN, WEG B (1.0.9, Nutzer 18.09.2026 "also los"):
+# Karte "Reprocessing" in der Rezeptstruktur, Schalter an -> die
+# Einkaufsliste kauft komprimiertes Erz statt des Minerals, wo es
+# guenstiger ist; Schalter aus -> exakt der alte Plan. Alles ohne ESI und
+# ohne SDE: Karte, Struktur-Werte, Skills und Preise sind hier vorgegeben.
+# Rechnung: 10 Testship brauchen 100 Testmat, 40 aus Bestand -> 60 kaufen zu
+# 100 ISK = 6'000. Compressed Testore (1 ISK) ergibt je Portion 100
+# floor(400 x 0.83854) = 335 Testmat -> 1 Portion = 100 ISK. Ersparnis 5'900,
+# Ueberschuss 275.
+import eve_trader.reprocess as _R7u                                  # noqa: E402
+from eve_trader import config, esi, store                            # noqa: E402
+_alt7u = {
+    "map": I.reprocess_map, "cats": I.item_category_map, "sde": I.reprocess_struktur_sde,
+    "ids": I.reprocess_skill_ids, "erz": I.reprocess_erz_skill,
+    "chars": store.list_characters, "save": config.save_settings,
+    "names": esi.resolve_names,
+}
+_alt_set7u = {k: win.settings.get(k) for k in
+              ("bau_reprocess_on", "bau_reprocess_struct", "bau_structures",
+               "bau_char_skills", "bau_build_chars")}
+I.reprocess_map = lambda: {62516: {"portion": 100, "out": {200: 400}}}
+I.item_category_map = lambda: {62516: (25, 462, 0), 200: (4, 18, 0), 100: (6, 25, 0)}
+I.reprocess_struktur_sde = lambda: {
+    "bonus": {"Tatara": 5.5},
+    "rig": {46639: {"name": "Standup L-Set Reprocessing Monitor I", "mult": 0.51,
+                    "hi": 1.0, "low": 1.06, "null": 1.12}}}
+I.reprocess_skill_ids = lambda: {"Reprocessing": 3385, "Reprocessing Efficiency": 3389}
+I.reprocess_erz_skill = lambda: {62516: 60377}
+store.list_characters = lambda: [{"character_id": 1, "character_name": "Peanut Motor"}]
+config.save_settings = lambda s: None
+esi.resolve_names = lambda ids: {int(i): {62516: "Compressed Testore", 200: "Testmat",
+                                          100: "Testship"}.get(int(i), f"#{i}")
+                                 for i in ids}
+_dlg7u = None
+try:
+    win.settings["bau_structures"] = [{"id": "s7u", "name": "R&R Yard", "type": "tatara",
+                                       "rigs": ["sde:46639", "", ""], "security": 2.1}]
+    win.settings["bau_reprocess_struct"] = "s7u"
+    win.settings["bau_reprocess_on"] = True
+    win.settings["bau_char_skills"] = {"1": {"3385": 5, "3389": 5, "60377": 5}}
+    # Ohne Bau-Charakter bleibt der Runplaner leer - Stufe 0 haengt an ihm.
+    win.settings["bau_build_chars"] = [1]
+    _pr7u = dict(PRICES); _pr7u[62516] = 1.0
+    win._bd_pricemap = dict(_pr7u)
+    win._bd_recipes = _Recipes()
+    win._bd_opts = {"me": 0, "te": 0, "job_pct": 0, "build_reactions": False,
+                    "tree_depth": 4, "stock": {200: 40}}
+    _ro7u = win._reprocess_opts()
+    eq("b7u die Struktur-Basis der Tatara ist die gemessene",
+       round(_ro7u["basis"], 6), 0.602616)
+    win._bd_opts["reprocess"] = _ro7u
+    win._bd_type = 100
+    win._bd_qty = 10
+    _plan7u = I.production_plan(100, 10, _pr7u.get, _Recipes(), dict(win._bd_opts))
+    _tree7u = I.build_tree(100, _pr7u.get, _Recipes(), dict(win._bd_opts))
+    _res7u = {"tree": _tree7u,
+              "names": {100: "Testship", 200: "Testmat", 62516: "Compressed Testore"},
+              "sell": 6000.0, "sell_is_contract": False, "plan": _plan7u}
+    _sbd_frisch(100, "Testship", _res7u)
+    _dlg7u = getattr(win, "_bd_dialog", None)
+    _app.processEvents()
+
+    def _mat_zeilen7u():
+        _tbl = getattr(win, "_bd_mat_tab_tbl", None)
+        out = []
+        if _tbl is None:
+            return out
+        _root = _tbl.invisibleRootItem()
+        _st = [_root.child(i) for i in range(_root.childCount())]
+        while _st:
+            _x = _st.pop()
+            out.append(_x.text(0))
+            _st += [_x.child(i) for i in range(_x.childCount())]
+        return out
+
+    def _mat_zeilen7u_alle():
+        _tbl = getattr(win, "_bd_mat_tab_tbl", None)
+        out = []
+        if _tbl is None:
+            return out
+        _root = _tbl.invisibleRootItem()
+        _st = [_root.child(i) for i in range(_root.childCount())]
+        while _st:
+            _x = _st.pop()
+            # Der Status steht als Daten (UserRole), nicht als Text.
+            out += [_x.text(c) for c in range(_tbl.columnCount())]
+            out += [str(_x.data(c, Qt.UserRole) or "") for c in range(_tbl.columnCount())]
+            _st += [_x.child(i) for i in range(_x.childCount())]
+        return out
+
+    def _info7u():
+        _l = getattr(win, "_bd_mat_tab_info", None)
+        return _l.text() if _l is not None else ""
+    _cb7u = getattr(win, "_bd_reprocess_cb", None)
+    check("b7u die Karte hat den Schalter, und er ist an", _cb7u is not None and _cb7u.isChecked())
+    # LAGE (Nutzer 18.09.2026: "schieb das bitte hoeher, da wo man es sieht.
+    # Direkt unter Production depth, lass zugeklappt"): Reihenfolge der
+    # Klappkarten und Zustand der Reprocessing-Karte.
+    _karten7u = []
+    _zu7u = {}
+    for _b7 in _dlg7u.findChildren(QPushButton):
+        for _ti in ("Build or buy?", "Production depth", "Reprocessing", "Blacklist",
+                    "Do I have the blueprints?"):
+            if (_b7.text() or "").endswith(_t4(_ti)) and _b7.isCheckable():
+                _karten7u.append(_ti)
+                _zu7u[_ti] = _b7.isChecked()
+    eq("b7u die Karte steht direkt unter Production depth",
+       _karten7u, ["Build or buy?", "Production depth", "Reprocessing", "Blacklist",
+                   "Do I have the blueprints?"])
+    eq("b7u ... und ist zugeklappt, auch mit Schalter an", _zu7u.get("Reprocessing"), False)
+    _sc7u = getattr(win, "_bd_reprocess_struct_cb", None)
+    check("b7u die Struktur-Auswahl steht auf der Tatara",
+          _sc7u is not None and _sc7u.currentData() == "s7u")
+    _plan_a = (getattr(win, "_bd_plan_cache", None) or (None, None))[1] or {}
+    eq("b7u der Plan kauft 100 Compressed Testore statt 60 Testmat",
+       dict(_plan_a.get("buy") or {}), {62516: 100})
+    eq("b7u ... Ersparnis 5'900 ISK, Ueberschuss 275 Testmat",
+       (round(_plan_a.get("reprocess", {}).get("ersparnis") or 0), dict(_plan_a.get("surplus") or {})),
+       (5900, {200: 275}))
+    eq("b7u ... und total_cost ist um die Ersparnis gesunken",
+       round(float(_plan7u["total_cost"]) - float(_plan_a["total_cost"])), 5900)
+    check("b7u der Materialien-Tab zeigt das Erz",
+          any("Compressed Testore" in z for z in _mat_zeilen7u()))
+    # REZEPT-BAUM (Nutzer 18.09.2026: "im Rezeptbaum noch keine Beschreibung
+    # fuer compressed Ores"): die Mineral-Zeile nennt das Erz.
+    from PySide6.QtWidgets import QTreeWidget as _QTW7u
+
+    def _baum_aktion7u(name):
+        for _tw in _dlg7u.findChildren(_QTW7u):
+            _hi = _tw.headerItem()
+            if _hi is None or _tw.columnCount() < 3 or _hi.text(2) != _t4("Action"):
+                continue                      # nur der Rezept-Baum
+            _root = _tw.invisibleRootItem()
+            _st = [_root.child(i) for i in range(_root.childCount())]
+            while _st:
+                _x = _st.pop()
+                if _x.text(0) == name:
+                    return _x.text(2)
+                _st += [_x.child(i) for i in range(_x.childCount())]
+        return None
+    eq("b7u der Rezept-Baum sagt bei Testmat 'aus komprimiertem Erz'",
+       _baum_aktion7u("Testmat"),
+       _t4("from compressed ore \u267b \u00b7 {ore}").format(ore="Compressed Testore"))
+    # DIE ROHZEILEN, aus denen Einkaufsfenster und Kopier-Knoepfe lesen
+    # (Nutzer-Befund 18.09.2026: Einkaufsliste ohne Tritanium UND ohne Erz).
+    _mr7u = [r for r in (getattr(win, "_bd_mat_rows", None) or []) if r.get("tid") == 62516]
+    eq("b7u die Rohzeile des Erzes traegt missing=100, total=100, built=0",
+       [(r["missing"], r["total"], r["built"], r["category"]) for r in _mr7u][:1],
+       [(100, 100, 0, _mr7u[0]["category"] if _mr7u else None)])
+    # GEDECKTE MINERALE BLEIBEN SICHTBAR (Nutzer-Befund): Testmat steht mit
+    # 60 "aus Reprocessing", nichts zu kaufen.
+    _tm7u = [r for r in (getattr(win, "_bd_mat_rows", None) or []) if r.get("tid") == 200]
+    eq("b7u Testmat-Zeile: 60 aus Reprocessing, 0 zu kaufen, 100 Bedarf",
+       [(r.get("reprocessed"), r["missing"], r["total"]) for r in _tm7u], [(60, 0, 100)])
+    # Der Status steht im Deckungs-Balken (Widget) - pruefbar ist der
+    # Grund, den die Zeile dabei bekommt.
+    check("b7u ... und die Zeile sagt 'gedeckt durch Reprocessing'",
+          bool(_tm7u) and "reprocessing" in (_tm7u[0].get("reason") or "").lower()
+          and "stage 0" in (_tm7u[0].get("reason") or "").lower())
+    # EINKAUFSLISTE (Restbedarf): Erz statt Mineral, solange nicht abgehakt.
+    eq("b7u Restbedarf: 100 Erz + 40 Testmat (100 Bedarf - 60 gedeckt), kein Kauf",
+       win._restbedarf_jetzt(), {200: 40, 62516: 100})
+    eq("b7u Fehlbedarf jetzt: nur das Erz fehlt (100), Testmat ist gedeckt",
+       [(r[0], r[1]) for r in win._fehlbedarf_jetzt()], [(62516, 100)])
+    # HAKEN IN STUFE 0 = reprocesst: jetzt fehlt Testmat (60), das Erz nicht.
+    _tr0 = getattr(win, "_sched_tree_ref", None)
+    _row0 = None
+    if _tr0 is not None and _tr0.topLevelItemCount() > 0:
+        _s0 = _tr0.topLevelItem(0)
+        for _i in range(_s0.childCount()):
+            for _j in range(_s0.child(_i).childCount()):
+                _row0 = _s0.child(_i).child(_j)
+    check("b7u die Stufe-0-Zeile ist abhakbar",
+          _row0 is not None and bool(_row0.flags() & Qt.ItemIsUserCheckable))
+    if _row0 is not None:
+        _row0.setCheckState(0, Qt.Checked)
+        _app.processEvents()
+    check("b7u der Haken landet als repro|62516 im Plan",
+          "repro|62516" in (getattr(win, "_bd_runplan_checked", None) or set()))
+    eq("b7u abgehakt: Testmat fehlt wieder (60), Erz nicht mehr",
+       [(r[0], r[1]) for r in win._fehlbedarf_jetzt()], [(200, 60)])
+    eq("b7u abgehakt: Restbedarf ohne Erz", win._restbedarf_jetzt(), {200: 100})
+    if _row0 is not None:
+        _row0.setCheckState(0, Qt.Unchecked)
+        _app.processEvents()
+    # CHARAKTERZEILE (Nutzer 19.09.2026): Haken am Charakter (zieht die Erz-
+    # Zeilen mit, Schluessel char|repro|<cid>), und standardmaessig ZU wie
+    # bei den anderen Stufen - die Stufe selbst offen.
+    _cz0 = _row0.parent() if _row0 is not None else None
+    check("b7u die Charakterzeile in Stufe 0 hat ein Kaestchen (char|repro|1) und ist zu",
+          _cz0 is not None and _cz0.data(0, Qt.CheckStateRole) is not None
+          and _cz0.data(0, Qt.UserRole + 6) == "char|repro|1"
+          and not _cz0.isExpanded() and _tr0.topLevelItem(0).isExpanded())
+    if _cz0 is not None:
+        _cz0.setCheckState(0, Qt.Checked); _app.processEvents()
+    check("b7u Haken am Charakter hakt die Erz-Zeile mit ab (repro|62516 + char|repro|1)",
+          _row0 is not None and _row0.checkState(0) == Qt.Checked
+          and {"repro|62516", "char|repro|1"} <= (
+              getattr(win, "_bd_runplan_checked", None) or set()))
+    if _cz0 is not None:
+        _cz0.setCheckState(0, Qt.Unchecked); _app.processEvents()
+    check("b7u ... und wieder loesen loest beides",
+          _row0 is not None and _row0.checkState(0) == Qt.Unchecked
+          and not ({"repro|62516", "char|repro|1"} & (
+              getattr(win, "_bd_runplan_checked", None) or set())))
+
+    def _sched_zeilen7u():
+        _tr = getattr(win, "_sched_tree_ref", None)
+        out = []
+        if _tr is None:
+            return out
+        _root = _tr.invisibleRootItem()
+        _st = [_root.child(i) for i in range(_root.childCount())]
+        while _st:
+            _x = _st.pop()
+            out.append(tuple(_x.text(c) for c in range(_tr.columnCount())))
+            _st += [_x.child(i) for i in range(_x.childCount())]
+        return out
+    _sz7u = _sched_zeilen7u()
+    _stufe0 = [z for z in _sz7u if z[0].startswith("0. ")]
+    check("b7u der Runplaner hat Stufe 0 Reprocessing mit der Struktur",
+          len(_stufe0) == 1 and "R&R Yard" in _stufe0[0][0]
+          and _t4("Reprocessing") in _stufe0[0][0])
+    _tr7u = getattr(win, "_sched_tree_ref", None)
+    check("b7u ... und sie steht ganz oben",
+          _tr7u is not None and _tr7u.topLevelItemCount() > 0
+          and _tr7u.topLevelItem(0).text(0).startswith("0. "))
+    # SPALTEN WIE BEI DEN ANDEREN STUFEN (Nutzer 18.09.2026): Erz-Name in
+    # Spalte 0, Menge in "Runs", Ergebnis + Ausbeute in "Stage", Charakter-
+    # zeile nennt die Bloecke in "Blueprints".
+    check("b7u ... Charakter und Zeile: 100 x Erz -> 60 Testmat (+275), 1 Block, 83.9 %",
+          any(z[0] == "Peanut Motor" and z[2] == _t4("{n} batches").format(n=1)
+              for z in _sz7u)
+          and any(z[0] == "Compressed Testore" and z[1] == "100"
+                  and z[4] == "\u2192 60 Testmat  \u00b7  83.9 %" and z[5] == "+275 Testmat"
+                  for z in _sz7u))
+    check("b7u ... Klick auf das Erz kopiert den Erz-Namen (ROLLE_KOPIERNAME)",
+          _row0 is not None and _row0.data(0, _RKN7f) == "Compressed Testore")
+    _cw7u = _tr7u.itemWidget(_row0, 2) if (_tr7u is not None and _row0 is not None) else None
+    _btn7u = [w for w in (_cw7u.findChildren(QPushButton) if _cw7u is not None else [])]
+    check("b7u ... und die Menge ist ein Kopier-Knopf '100'",
+          len(_btn7u) == 1 and _btn7u[0].text() == "100")
+    if _btn7u:
+        _btn7u[0].click(); _app.processEvents()
+        eq("b7u ... Klick auf den Knopf legt 100 in die Zwischenablage",
+           QApplication.clipboard().text(), "100")
+    # KEIN TEXTBLOCK MEHR UEBER DER LISTE (Nutzer 19.09.2026): das Erz ist
+    # eine eigene Gruppe, die Zeile nennt Ausgang/Ausbeute/Charakter, die
+    # Ersparnis steht in der Reprocessing-Karte, der Baum hat einen Erz-Kopf.
+    check("b7u die Info-Zeile schweigt ueber Schritte und Ersparnis",
+          "83.9" not in _info7u() and "5'900" not in _info7u())
+    _alle7u = _mat_zeilen7u_alle()
+
+    def _balken7u():
+        # Der Status steht im Deckungs-Balken (QProgressBar.format), nicht im Item.
+        _tbl = getattr(win, "_bd_mat_tab_tbl", None)
+        out = []
+        _root = _tbl.invisibleRootItem()
+        _st = [_root.child(i) for i in range(_root.childCount())]
+        while _st:
+            _x = _st.pop()
+            _w = _tbl.itemWidget(_x, 6)
+            if _w is not None and hasattr(_w, "format"):
+                out.append((_x.text(0), _w.format()))
+            _st += [_x.child(i) for i in range(_x.childCount())]
+        return out
+    check("b7u die Erz-Zeile steht unter 'Compressed ore' und nennt 60 Testmat, 83.9 %, Peanut Motor",
+          _t4("Compressed ore ♻") in _alle7u
+          and any(n == "Compressed Testore" and "60 Testmat" in f and "83.9 %" in f
+                  and "Peanut Motor" in f for n, f in _balken7u()))
+    _rpl7u = getattr(win, "_bd_reprocess_lbl", None)
+    check("b7u die Karte nennt die Ersparnis 5'900 und 1 Erz",
+          _rpl7u is not None and "5'900" in _rpl7u.text()
+          and _t4("saves {isk} · {n} ores").format(isk="", n=1).split("·")[1].strip()
+          in _rpl7u.text())
+    _tw7u = [w for w in _dlg7u.findChildren(QTreeWidget)]
+    _baum7u = []
+    for _w in _tw7u:
+        _r = _w.invisibleRootItem(); _st = [_r.child(i) for i in range(_r.childCount())]
+        while _st:
+            _x = _st.pop(); _baum7u.append(tuple(_x.text(c) for c in range(3)))
+            _st += [_x.child(i) for i in range(_x.childCount())]
+    check("b7u der Rezept-Baum hat den Kopf 'Compressed ore (1)' mit der Erz-Zeile",
+          any(z[0].startswith(_t4("Compressed ore ♻")) and "(1)" in z[0] for z in _baum7u)
+          and any(z[0] == "Compressed Testore" and z[1] == "100"
+                  and _t4("reprocess → {out} · {pct} %").format(out="60 Testmat", pct="83.9") in z[2]
+                  for z in _baum7u))
+    # BLACKLIST GILT AUCH FUER ERZ (Nutzer 19.09.2026: "wir rechnen damit,
+    # es zu reprocessen, ABER es kommt weder in die Einkaufsliste noch in
+    # den Runplaner - man bekommt es z. B. von einem Kollegen"): Gruppe
+    # "Erz" -> das Erz ist gratis, deckt Testmat, steht nirgends zum Kauf.
+    _bl_alt7u = win.settings.get("bau_blacklist_gruppen")
+    win.settings["bau_blacklist_gruppen"] = ["Erz"]
+    _cb7u.click(); _app.processEvents(); _cb7u.click(); _app.processEvents()
+    _plan_bl = (getattr(win, "_bd_plan_cache", None) or (None, None))[1] or {}
+    _st_bl = (_plan_bl.get("reprocess") or {}).get("schritte") or []
+    eq("b7u Erz auf der Blacklist: Einkaufsliste leer, Schritt gratis, deckt 60 Testmat, Ersparnis 6'000",
+       (dict(_plan_bl.get("buy") or {}),
+        [(s.get("erz"), s.get("gratis"), s.get("deckt")) for s in _st_bl],
+        (_plan_bl.get("reprocess") or {}).get("ersparnis")),
+       ({}, [(62516, True, {200: 60})], 6000.0))
+    eq("b7u ... Restbedarf ohne Erz, Testmat gedeckt", win._restbedarf_jetzt(), {200: 40})
+    _tr_bl = getattr(win, "_sched_tree_ref", None)
+    check("b7u ... und der Runplaner hat KEINE Stufe 0",
+          _tr_bl is not None and not any(
+              _tr_bl.topLevelItem(i).text(0).startswith("0. ")
+              for i in range(_tr_bl.topLevelItemCount())))
+    _baum_bl = []
+    for _w in _dlg7u.findChildren(QTreeWidget):
+        _r = _w.invisibleRootItem(); _st = [_r.child(i) for i in range(_r.childCount())]
+        while _st:
+            _x = _st.pop(); _baum_bl.append(tuple(_x.text(c) for c in range(3)))
+            _st += [_x.child(i) for i in range(_x.childCount())]
+    check("b7u ... der Materials-Tab zeigt das Erz trotzdem: 100 gestellt, nichts fehlt",
+          any(n == "Compressed Testore" and _t4("on blacklist \u2013 provided, not bought") in f
+              and "60 Testmat" in f for n, f in _balken7u())
+          and any(r.get("tid") == 62516 and int(r.get("total") or 0) == 100
+                  and int(r.get("missing") or 0) == 0 for r in (win._bd_mat_rows or [])))
+    check("b7u ... der Rezept-Baum sagt beim Erz 'on blacklist - provided'",
+          any(z[0] == "Compressed Testore"
+              and _t4("on blacklist \u2013 provided, not bought") in z[2] for z in _baum_bl))
+    check("b7u ... und die Blacklist-Karte hat das Haekchen 'Compressed ore'",
+          "Erz" in (getattr(win, "_bl_gruppen_boxes", None) or {}))
+    if _bl_alt7u is None:
+        win.settings.pop("bau_blacklist_gruppen", None)
+    else:
+        win.settings["bau_blacklist_gruppen"] = _bl_alt7u
+    _cb7u.click(); _app.processEvents(); _cb7u.click(); _app.processEvents()
+    # WARUM NICHT: Testmat ist getauscht, also KEINE "nicht guenstiger"-Zeile;
+    # der Zweig darf nicht abstuerzen, wenn abgelehnt leer ist.
+    check("b7u keine 'Ore not cheaper'-Zeile, wenn alles getauscht ist",
+          _t4("Ore not cheaper for: {liste}").format(liste="")[:10] not in _info7u())
+    # SCHALTER AUS: exakt der alte Plan, kein Schluessel mehr in den opts.
+    _cb7u.click()
+    _app.processEvents()
+    _plan_b = (getattr(win, "_bd_plan_cache", None) or (None, None))[1] or {}
+    eq("b7u Schalter aus: der Plan kauft wieder 60 Testmat",
+       dict(_plan_b.get("buy") or {}), {200: 60})
+    check("b7u ... ohne 'reprocess' in den opts und ohne Erz im Tab",
+          "reprocess" not in win._bd_opts
+          and not any("Compressed Testore" in z for z in _mat_zeilen7u())
+          and "Compressed" not in _info7u())
+    check("b7u ... und Stufe 0 ist aus dem Runplaner verschwunden",
+          not any(z[0].startswith("0. ") for z in _sched_zeilen7u()))
+    check("b7u ... und der Rezept-Baum sagt wieder 'kaufen'",
+          (_baum_aktion7u("Testmat") or "").startswith(_t4("buy")))
+    eq("b7u ... und die Einstellung ist gespeichert", win.settings.get("bau_reprocess_on"), False)
+    # WIEDER AN: derselbe Weg wie beim Nutzer, der es im offenen Dialog setzt.
+    _cb7u.click()
+    _app.processEvents()
+    _plan_c = (getattr(win, "_bd_plan_cache", None) or (None, None))[1] or {}
+    eq("b7u wieder an: Erz statt Mineral", dict(_plan_c.get("buy") or {}), {62516: 100})
+    # NPC-STATION gewaehlt: Basis 0.50 -> 0.50 x 1.3915 = 0.69575 -> 278 je
+    # Portion, immer noch 1 Portion, Ueberschuss 218.
+    _ix_npc = _sc7u.findData("npc")
+    _sc7u.setCurrentIndex(_ix_npc)
+    _app.processEvents()
+    _plan_d = (getattr(win, "_bd_plan_cache", None) or (None, None))[1] or {}
+    eq("b7u NPC-Station: 278 je Portion -> Ueberschuss 218",
+       dict(_plan_d.get("surplus") or {}), {200: 218})
+    check("b7u ... und die Karte nennt die Basis 50.0 %",
+          any("50.0" in (lb.text() or "") for lb in _dlg7u.findChildren(QLabel)))
+    # IMPLANTAT (Nutzer 18.09.2026: "Implantate muessen erkannt werden ...
+    # Button implants laden"): Knopf in der Karte, ESI-Abruf gegen die SDE-
+    # Tabelle, Ergebnis in Ausbeute und Zeile. 0.83854 x 1.04 = 0.87208 ->
+    # floor(400 x 0.87208) = 348 je Portion -> Ueberschuss 288.
+    _sc7u.setCurrentIndex(_sc7u.findData("s7u"))
+    _app.processEvents()
+    _alt_run7u = win._run
+    _alt_imp7u = esi.fetch_character_implants
+    _alt_repimp7u = I.reprocess_implants
+    _alt_set_imp7u = win.settings.get("bau_char_reproc_implant")
+    _alt_cid7u = win.settings.get("client_id")
+    try:
+        win.settings["client_id"] = win.settings.get("client_id") or "test-client-7u"
+        win._run = lambda worker, done_cb, fail_cb=None, **kw: done_cb(
+            worker._fn(*worker._args, **worker._kwargs))
+        esi.fetch_character_implants = lambda c, cid: [27174, 99999]
+        I.reprocess_implants = lambda: {27174: {"name": "Zainou 'Beancounter' Reprocessing RX-804",
+                                                "attr": "refiningYieldMutator", "value": 4.0}}
+        _btn_imp = getattr(win, "_bd_reprocess_imp_btn", None)
+        check("b7u die Karte hat den Knopf 'Load implants'",
+              _btn_imp is not None and _btn_imp.text().strip() == _t4("Load implants"))
+        _btn_imp.click()
+        _app.processEvents()
+        eq("b7u das Implantat ist gespeichert (RX-804, 4 %)",
+           (win.settings.get("bau_char_reproc_implant") or {}).get("1", {}).get("pct"), 4.0)
+        check("b7u ... und die Zeile nennt Charakter und Implantat",
+              "Peanut Motor" in win._bd_reprocess_imp_lbl.text()
+              and "RX-804" in win._bd_reprocess_imp_lbl.text()
+              and "+4" in win._bd_reprocess_imp_lbl.text())
+        _plan_i = (getattr(win, "_bd_plan_cache", None) or (None, None))[1] or {}
+        eq("b7u ... und die Ausbeute steigt: 348 je Portion -> Ueberschuss 288",
+           (dict(_plan_i.get("surplus") or {}), round(_plan_i["reprocess"]["schritte"][0]["ausbeute"], 5)),
+           ({200: 288}, 0.87208))
+    finally:
+        win._run = _alt_run7u
+        if _alt_cid7u is None:
+            win.settings.pop("client_id", None)
+        else:
+            win.settings["client_id"] = _alt_cid7u
+        esi.fetch_character_implants = _alt_imp7u
+        I.reprocess_implants = _alt_repimp7u
+        if _alt_set_imp7u is None:
+            win.settings.pop("bau_char_reproc_implant", None)
+        else:
+            win.settings["bau_char_reproc_implant"] = _alt_set_imp7u
+    # OHNE SDE-DATEN: keine geratene Basis, Warnung statt Rechnung.
+    _sc7u.setCurrentIndex(_sc7u.findData("s7u"))
+    I.reprocess_struktur_sde = lambda: {"bonus": {}, "rig": {}}
+    _cb7u.click(); _app.processEvents()          # aus
+    _cb7u.click(); _app.processEvents()          # an, jetzt ohne SDE
+    _plan_e = (getattr(win, "_bd_plan_cache", None) or (None, None))[1] or {}
+    eq("b7u ohne SDE-Daten: kein Tausch, Grund 'sde'",
+       (dict(_plan_e.get("buy") or {}), (_plan_e.get("reprocess") or {}).get("grund")),
+       ({200: 60}, "sde"))
+    check("b7u ... und der Tab warnt statt zu schweigen",
+          "Load recipes" in _info7u())
+    # Die Texte sind zweisprachig hinterlegt.
+    from eve_trader import sprache as _sp7u
+    for _k7u in ("Buy compressed ore instead of minerals", "Reprocess at",
+                 "Structure base {pct} %", "saves {isk} \u00b7 {n} ores",
+                 "reprocess \u2192 {out} \u00b7 {pct} %", "Compressed ore \u267b"):
+        check(f"b7u deutsche Fassung: {_k7u[:30]}", _k7u in _sp7u.KATALOG["de"])
+except Exception as _e7u:                                # pragma: no cover
+    _fail.append(f"b7u Reprocessing im Bauplan: {type(_e7u).__name__}: {_e7u}")
+finally:
+    I.reprocess_map = _alt7u["map"]; I.item_category_map = _alt7u["cats"]
+    I.reprocess_struktur_sde = _alt7u["sde"]; I.reprocess_skill_ids = _alt7u["ids"]
+    I.reprocess_erz_skill = _alt7u["erz"]; store.list_characters = _alt7u["chars"]
+    config.save_settings = _alt7u["save"]; esi.resolve_names = _alt7u["names"]
+    for _k, _v in _alt_set7u.items():
+        if _v is None:
+            win.settings.pop(_k, None)
+        else:
+            win.settings[_k] = _v
+    try:
+        if _dlg7u is not None:
+            _dlg7u.close()
+            _app.processEvents()
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------- (b7w)
+# REPROCESSING IM BAUPLAN, WEG A (1.0.9, Nutzer 19.09.2026 "erraten und
+# einfuegen" -> "ja"): Schalter "Unrefined-Reaktionen nutzen" in der Karte,
+# Rezept-Kopie im Dialog (X ueber die Unrefined-Formel), Block im Runplaner
+# NACH der Reaktionsstufe, Rezeptbaum "ueber ...", Blueprint-Name der
+# Unrefined-Formel, Ruecklaeufer-Gutschrift als eigene Kostenzeile.
+# Rechnung: 10 Testship <- 100 Testmat (X). Normal: 5 Fuel + 100 A + 100 B
+# -> 200 X = 10'502.5 je X. Unrefined Testmat (U): 5 Fuel + 100 A + 100 C
+# -> 1 U -> Reprocessing 36 X + 100 A je Stueck. SCRAPMETAL-PFAD (gemessen
+# 19.09.2026): 0.50 x (1 + 0.02 x 3) = 0.53 -> 19 X + 53 A je Run; die
+# Struktur-Basis der Tatara zaehlt NICHT. Je X: (500 + 100'000 + 5'000 -
+# 53'000) / 19 = 2'763.16 -> Unrefined gewinnt. 100 X -> 6 Runs (114 X,
+# 14 Ueberschuss), Ruecklaeufer 318 A = 318'000 ISK Gutschrift.
+_alt7w = {
+    "map": I.reprocess_map, "cats": I.item_category_map, "sde": I.reprocess_struktur_sde,
+    "ids": I.reprocess_skill_ids, "erz": I.reprocess_erz_skill,
+    "chars": store.list_characters, "save": config.save_settings,
+    "names": esi.resolve_names, "groups": I.group_names,
+}
+_alt_set7w = {k: win.settings.get(k) for k in
+              ("bau_reprocess_on", "bau_unrefined_on", "bau_reprocess_struct",
+               "bau_structures", "bau_char_skills", "bau_build_chars",
+               "bau_reaction_chars")}
+_FU7, _A7, _B7, _C7, _X7, _U7 = 4051, 301, 302, 303, 200, 32999
+
+
+class _RecipesU7w:
+    """1 Testship <- 10 X; X normal aus A+B (200 je Run); U aus A+C (1 je Run)."""
+    product_to_bp = {100: (900, I.MANUFACTURING, 1), _X7: (5000, I.REACTION, 200),
+                     _U7: (5001, I.REACTION, 1)}
+    bp_materials = {(900, I.MANUFACTURING): [(_X7, 10)],
+                    (5000, I.REACTION): [(_FU7, 5), (_A7, 100), (_B7, 100)],
+                    (5001, I.REACTION): [(_FU7, 5), (_A7, 100), (_C7, 100)]}
+    activity_time = {(900, I.MANUFACTURING): 60, (5000, I.REACTION): 10800,
+                     (5001, I.REACTION): 21600}
+    activity_max_runs = {}
+    reaction_products = {_X7, _U7}
+    invention_for_bpc = {}
+    bp_products = {}
+    item_cat = {}
+
+    def is_manufactured(self, t):
+        return t == 100
+
+
+_namen7w = {100: "Testship", _X7: "Testmat", _U7: "Unrefined Testmat", _FU7: "Fuel",
+            _A7: "Alpha", _B7: "Beta", _C7: "Gamma"}
+I.reprocess_map = lambda: {_U7: {"portion": 1, "out": {_X7: 36, _A7: 100}}}
+I.item_category_map = lambda: {_X7: (4, 428, 0), _U7: (4, 428, 0), 100: (6, 25, 0),
+                               _A7: (4, 427, 0), _B7: (4, 427, 0), _C7: (4, 427, 0),
+                               _FU7: (4, 1136, 0)}
+I.reprocess_struktur_sde = lambda: {
+    "bonus": {"Tatara": 5.5},
+    "rig": {46639: {"name": "Standup L-Set Reprocessing Monitor I", "mult": 0.51,
+                    "hi": 1.0, "low": 1.06, "null": 1.12}}}
+I.reprocess_skill_ids = lambda: {"Reprocessing": 3385, "Reprocessing Efficiency": 3389,
+                                 "Scrapmetal Processing": 12196}
+I.reprocess_erz_skill = lambda: {}
+I.group_names = lambda ids: {int(i): "Intermediate Materials" for i in ids}
+store.list_characters = lambda: [{"character_id": 1, "character_name": "Peanut Motor"}]
+config.save_settings = lambda s: None
+esi.resolve_names = lambda ids: {int(i): _namen7w.get(int(i), f"#{i}") for i in ids}
+_dlg7w = None
+try:
+    win.settings["bau_structures"] = [{"id": "s7w", "name": "R&R Yard", "type": "tatara",
+                                       "rigs": ["sde:46639", "", ""], "security": 2.1}]
+    win.settings["bau_reprocess_struct"] = "s7w"
+    win.settings["bau_reprocess_on"] = False
+    win.settings["bau_unrefined_on"] = True
+    win.settings["bau_char_skills"] = {"1": {"3385": 5, "3389": 5, "12196": 3}}
+    win.settings["bau_build_chars"] = [1]
+    win.settings["bau_reaction_chars"] = [1]
+    _pr7w = {_FU7: 100.0, _A7: 1000.0, _B7: 20000.0, _C7: 50.0, _X7: 12000.0,
+             100: 999999.0}
+    win._bd_pricemap = dict(_pr7w)
+    win._bd_recipes = _RecipesU7w()
+    win._bd_recipes_basis = _RecipesU7w()
+    win._bd_opts = {"me": 0, "te": 0, "job_pct": 0, "build_reactions": True,
+                    "tree_depth": 4}
+    _ro7w = win._reprocess_opts() or {}
+    eq("b7w opts: Weg A an, Weg B aus, gemessene Basis",
+       (_ro7w.get("unrefined"), _ro7w.get("on"), round(_ro7w.get("basis") or 0, 6)),
+       (True, False, 0.602616))
+    win._bd_opts["reprocess"] = _ro7w
+    win._bd_type = 100
+    win._bd_qty = 10
+    _plan7w0 = I.production_plan(100, 10, _pr7w.get, _RecipesU7w(), dict(win._bd_opts))
+    _tree7w0 = I.build_tree(100, _pr7w.get, _RecipesU7w(), dict(win._bd_opts))
+    _res7w = {"tree": _tree7w0, "names": dict(_namen7w),
+              "sell": 999999.0, "sell_is_contract": False, "plan": _plan7w0}
+    _sbd_frisch(100, "Testship", _res7w)
+    _dlg7w = getattr(win, "_bd_dialog", None)
+    _app.processEvents()
+    _ucb7w = getattr(win, "_bd_unrefined_cb", None)
+    check("b7w die Karte hat den Weg-A-Schalter, und er ist an",
+          _ucb7w is not None and _ucb7w.isChecked())
+    _ulbl7w = getattr(win, "_bd_unrefined_lbl", None)
+    eq("b7w ... und die Zeile nennt 53.0 %, den Charakter und '1 intermediates'",
+       _ulbl7w.text() if _ulbl7w is not None else None,
+       _t4("Unrefined: {pct} % · {char} (50 % × Scrapmetal Processing, "
+           "structure does not apply)").format(pct="53.0", char="Peanut Motor")
+       + "\n♻ " + _t4("{n} intermediates via unrefined reaction").format(n=1))
+    _sc7w = getattr(win, "_bd_reprocess_struct_cb", None)
+    check("b7w die Struktur-Auswahl ist auch ohne Weg B aktiv",
+          _sc7w is not None and _sc7w.isEnabled())
+    # DIE REZEPT-KOPIE: X laeuft ueber die Unrefined-Formel mit 27 je Run.
+    eq("b7w die Wahl faellt auf X (19 X + 53 A je Run, Charakter 1)",
+       {k: (v["out_je_run"], v["zurueck_je_run"], v["char"])
+        for k, v in (getattr(win, "_bd_unrefined", None) or {}).items()},
+       {_X7: (19, {_A7: 53}, 1)})
+    eq("b7w ... und die Dialog-Rezepte bauen X ueber 5001",
+       win._bd_recipes.product_to_bp.get(_X7), (5001, I.REACTION, 19))
+    eq("b7w ... die Basis-Rezepte bleiben, wie sie sind",
+       win._bd_recipes_basis.product_to_bp.get(_X7), (5000, I.REACTION, 200))
+    _plan7w = (getattr(win, "_bd_plan_cache", None) or (None, None))[1] or {}
+    eq("b7w der Plan: 6 Runs X, Einkauf Fuel/A/C der Unrefined-Formel (kein B)",
+       (_plan7w.get("build_runs", {}).get(_X7),
+        {k: int(v) for k, v in (_plan7w.get("buy") or {}).items()}),
+       (6, {_FU7: 30, _A7: 600, _C7: 600}))
+    _st7w = [s for s in ((_plan7w.get("reprocess") or {}).get("schritte") or [])]
+    eq("b7w ... ein Unrefined-Schritt: 6 x U -> 100 X, 318 A zurueck, 318'000 Gutschrift, 53 %",
+       [(s.get("art"), s.get("erz"), s.get("menge"), s.get("deckt"), s.get("ueberschuss"),
+         s.get("kredit"), round(float(s.get("ausbeute") or 0), 6)) for s in _st7w],
+       [("unrefined", _U7, 6, {_X7: 100}, {_A7: 318}, 318000.0, 0.53)])
+    eq("b7w ... total_cost = Einkauf (3'000 + 600'000 + 30'000) minus 318'000",
+       round(float(_plan7w.get("total_cost") or 0)), 315000)
+    eq("b7w ... mat_cost bleibt die volle Einkaufsliste",
+       round(float(_plan7w.get("mat_cost") or 0)), 633000)
+    eq("b7w ... die Wahl reist im Plan mit (Einfrieren)",
+       sorted(_plan7w.get("unrefined") or {}), [_X7])
+    # RUNPLANER: Reaktionsstufe mit X (4 Runs), DANACH der Block mit U.
+    _tr7w = getattr(win, "_sched_tree_ref", None)
+    _tops7w = [_tr7w.topLevelItem(i).text(0) for i in range(_tr7w.topLevelItemCount())] \
+        if _tr7w is not None else []
+    # EIGENE STUFE "2. Unrefined reactions" (Nutzer 19.09.2026: "an erster
+    # Stelle ueber den Intermediate Reactions"), der Job heisst nach dem
+    # Unrefined-Produkt, der Reprocessing-Block folgt direkt danach.
+    _ix_re7w = next((i for i, x in enumerate(_tops7w)
+                     if x.startswith("2. " + _t4("Unrefined reactions"))), None)
+    _ix_ub7w = next((i for i, x in enumerate(_tops7w)
+                     if _t4("Reprocessing of unrefined products") in x), None)
+    check("b7w der Runplaner hat die Stufe '2. Unrefined reactions' und den Block direkt danach",
+          _ix_re7w is not None and _ix_ub7w == _ix_re7w + 1
+          and "R&R Yard" not in _tops7w[_ix_ub7w])
+    check("b7w ... und keine Stufe 'Reactions - Intermediate' (X laeuft nur unrefined)",
+          not any(_t4("Reactions \u2013 Intermediate") in x for x in _tops7w))
+    _st7w_times = getattr(win, "_bd_last_stage_times", None) or {}
+    check("b7w ... die Stufenzeit 'unrefined' ist gesetzt (6 Runs a 6 h auf 1 Slot = 36 h)",
+          float(_st7w_times.get("unrefined", 0) or 0) > 0)
+    check("b7w ... mit 'Base 50 % x Scrapmetal Processing' statt der Struktur-Basis",
+          _ix_ub7w is not None
+          and _tr7w.topLevelItem(_ix_ub7w).text(4) == _t4("Base 50 % × Scrapmetal Processing"))
+    check("b7w ... und keine Stufe 0 (nichts wird als Erz gekauft)",
+          not any(x.startswith("0. ") for x in _tops7w))
+
+    def _zeilen7w():
+        out = []
+        if _tr7w is None:
+            return out
+        _root = _tr7w.invisibleRootItem()
+        _st = [_root.child(i) for i in range(_root.childCount())]
+        while _st:
+            _x = _st.pop()
+            out.append((tuple(_x.text(c) for c in range(_tr7w.columnCount())), _x))
+            _st += [_x.child(i) for i in range(_x.childCount())]
+        return out
+    _z7w = _zeilen7w()
+    check("b7w ... Charakterzeile '6 units', Zeile 'Unrefined Testmat' 6 -> 100 Testmat, 53.0 %, +318 Alpha",
+          any(z[0] == "Peanut Motor" and z[2] == _t4("{n} units").format(n=6) for z, _ in _z7w)
+          and any(z[0] == "Unrefined Testmat" and z[1] == "6"
+                  and z[4] == "→ 100 Testmat  ·  53.0 %" and z[5] == "+318 Alpha"
+                  for z, _ in _z7w))
+    _row_u7w = next((it for z, it in _z7w if z[0] == "Unrefined Testmat"), None)
+    check("b7w ... Klick auf die Zeile kopiert 'Unrefined Testmat'",
+          _row_u7w is not None and _row_u7w.data(0, _RKN7f) == "Unrefined Testmat")
+    # Der Reaktions-Job selbst: X mit 4 Runs, Blueprint-Name = Unrefined-Formel.
+    _row_x7w = next((it for z, it in _z7w if z[0] == "Unrefined Testmat" and z[1] == "6"
+                     and it is not _row_u7w), None)
+    check("b7w der Reaktions-Job heisst 'Unrefined Testmat' (das, was man baut)",
+          _row_x7w is not None)
+    eq("b7w der Reaktions-Job traegt den Namen der Unrefined-Formel zum Kopieren",
+       _row_x7w.data(0, _RKN7f) if _row_x7w is not None else None,
+       "Unrefined Testmat Reaction Formula")
+    # Blueprint-Tab: die Zeile heisst nach dem Unrefined-Produkt.
+    _bpt7w = getattr(win, "_bd_bp_tab_tbl", None)
+    _bp_namen7w = [_bpt7w.item(i, 0).text() for i in range(_bpt7w.rowCount())
+                   if _bpt7w.item(i, 0) is not None] if _bpt7w is not None else []
+    check("b7w der Blueprint-Tab nennt 'Unrefined Testmat' statt 'Testmat'",
+          any("Unrefined Testmat" in n for n in _bp_namen7w)
+          and not any(n.strip() == "Testmat" for n in _bp_namen7w))
+    # Rezeptbaum: X sagt "ueber Unrefined Testmat".
+    _tw7w = getattr(win, "_bd_tree_widget", None) or _dlg7w.findChild(QTreeWidget)
+
+    def _baum7w(w):
+        out = []
+        if w is None:
+            return out
+        _root = w.invisibleRootItem()
+        _st = [_root.child(i) for i in range(_root.childCount())]
+        while _st:
+            _x = _st.pop()
+            out.append(tuple(_x.text(c) for c in range(w.columnCount())))
+            _st += [_x.child(i) for i in range(_x.childCount())]
+        return out
+    _bz7w = []
+    for _w7 in _dlg7w.findChildren(QTreeWidget):
+        _bz7w += _baum7w(_w7)
+    check("b7w der Rezept-Baum sagt bei Testmat 'BUILD - 6 runs - via Unrefined Testmat'",
+          any(z[0] == "Testmat" and _t4("via {formula} ♻").format(
+              formula="Unrefined Testmat") in " ".join(z) and "6" in " ".join(z)
+              for z in _bz7w))
+    # Materials-Tab: Ruecklaeufer-Zeile mit Gutschrift, Annahme genannt.
+    _info7w = (getattr(win, "_bd_mat_tab_info", None).text()
+               if getattr(win, "_bd_mat_tab_info", None) is not None else "")
+    check("b7w der Materials-Tab traegt keinen Unrefined-Textblock mehr",
+          "Unrefined Testmat" not in _info7w and "318" not in _info7w)
+    # Kostenzeile: Ruecklaeufer sichtbar.
+    _rl7w = (getattr(win, "_bd_detail_val_lbls", None) or {}).get("− Rückläufer")
+    check("b7w die Kostenzeile 'Ruecklaeufer' ist sichtbar und nennt 318'000",
+          _rl7w is not None and not _rl7w.isHidden() and "318" in _rl7w.text())
+    # NACH "RECALCULATE" (Orderbuch-Ladder; Nutzer-Befund 19.09.2026: Plan mit
+    # Unrefined 139.8 statt 127.6 M je Stueck - die Gutschrift fehlte NUR in
+    # der Summe, die dieser Zweig neu aufbaut). Orderbuch = dieselben Preise;
+    # Gesamt muss Ladder + Job + Bestand - 318'000 sein.
+    win._bd_ladder_result = {"qty": 10, "_orderbooks": {_FU7: [(100.0, 100)],
+                                                        _A7: [(1000.0, 1000)],
+                                                        _C7: [(50.0, 1000)]},
+                             "mat_cost_ladder": 633000.0, "short_materials": []}
+    # DER SCHALTER HOLT DIE ORDERBUECHER SELBST NACH (Nutzer 19.09.2026: "ich
+    # moechte nicht Recalculate druecken"): je Klick ein Hintergrund-Job mit
+    # dem Ladder-Etikett. Attrappe zaehlt nur, laeuft nichts (kein Netz).
+    _laeufe7w = []
+    _alt_run7w = win._run
+    win._run = lambda _w, _done, fail_cb=None, **_k: _laeufe7w.append(_k.get("label"))
+    _ucb7w.click(); _app.processEvents(); _ucb7w.click(); _app.processEvents()
+    win._run = _alt_run7w
+    eq("b7w jeder Schalter-Klick holt die Orderbuch-Preise nach (2 Klicks = 2 Abrufe)",
+       [_l for _l in _laeufe7w if _l == _t4("Order book prices \u2026")],
+       [_t4("Order book prices \u2026")] * 2)
+    _plan7w_l = (getattr(win, "_bd_plan_cache", None) or (None, None))[1] or {}
+    from eve_trader.ui.mw_basis import isk as _isk7w
+    _lb7w = getattr(win, "_bd_detail_val_lbls", None) or {}
+    eq("b7w Ladder: Gesamt-Baukosten ziehen die Gutschrift ab",
+       _lb7w["= Baukosten gesamt"].text(),
+       _isk7w(633000.0 + float(_plan7w_l.get("job_cost") or 0)
+              + float(_plan7w_l.get("stock_cost") or 0)
+              + float(_plan7w_l.get("inv_cost") or 0) - 318000.0, suffix=False))
+    win._bd_ladder_result = None
+    # Restbedarf: U wird nie gekauft; die Einkaufsliste ist die der Formel.
+    eq("b7w Restbedarf ohne U (wird gebaut, nie gekauft; X braucht das Endprodukt)",
+       sorted(win._restbedarf_jetzt()), [_X7, _A7, _C7, _FU7])
+    # SCHALTER AUS: exakt der alte Plan (1 Run normal, B gekauft, kein Block).
+    _ucb7w.click(); _app.processEvents()
+    _plan7w_b = (getattr(win, "_bd_plan_cache", None) or (None, None))[1] or {}
+    # Ohne Weg A kauft der Plan X: ein Run der normalen Formel (200 Stueck,
+    # 2'100'500 ISK) ist teurer als 100 x 12'000 - Batch-Rundung, wie immer.
+    eq("b7w Schalter aus: X wird gekauft (normale Formel zu grob), kein Schritt",
+       (_plan7w_b.get("build_runs", {}).get(_X7),
+        {k: int(v) for k, v in (_plan7w_b.get("buy") or {}).items()},
+        (_plan7w_b.get("reprocess") or {}).get("schritte"),
+        win._bd_recipes.product_to_bp.get(_X7)),
+       (None, {_X7: 100}, None, (5000, I.REACTION, 200)))
+    eq("b7w ... Einstellung gespeichert", win.settings.get("bau_unrefined_on"), False)
+    _tops7w_b = [_tr7w.topLevelItem(i).text(0) for i in range(_tr7w.topLevelItemCount())]
+    check("b7w ... und der Unrefined-Block ist weg",
+          not any(_t4("Reprocessing of unrefined products") in x for x in _tops7w_b))
+    check("b7w ... Kostenzeile 'Ruecklaeufer' versteckt",
+          _rl7w is not None and _rl7w.isHidden())
+    # WIEDER AN: gleiche Wahl wie beim ersten Mal.
+    _ucb7w.click(); _app.processEvents()
+    _plan7w_c = (getattr(win, "_bd_plan_cache", None) or (None, None))[1] or {}
+    eq("b7w wieder an: 6 Runs ueber die Unrefined-Formel",
+       (_plan7w_c.get("build_runs", {}).get(_X7), win._bd_recipes.product_to_bp.get(_X7)),
+       (6, (5001, I.REACTION, 19)))
+    # RUNS JE JOB DECKELN (Nutzer 19.09.2026, Einherji II: "17 Stueck mit
+    # einem Blueprint ... gibts maximal 10 runs"): ohne Limit 1 Blueprint
+    # mit 6 Runs; mit Limit 4 je Job (SDE maxProductionLimit, dieselbe
+    # Quelle wie BPC-Runs) zwei Blaupausen 4 + 2 auf demselben Slot.
+    def _bp_knoepfe7w(zeilen, runs):
+        """Texte der Blaupausen-Knoepfe (Spalte 2) der Reaktions-Job-Zeile
+        mit `runs` Runs - dazu der Name der Charakterzeile darueber."""
+        from PySide6.QtWidgets import QPushButton as _PB7w, QLabel as _QL7w
+        for z, it in zeilen:
+            if z[0] != "Unrefined Testmat" or z[1] != runs or not z[4].startswith(
+                    _t4("Unrefined reaction")):
+                continue
+            _w = _tr7w.itemWidget(it, 2)
+            if _w is None:
+                return None
+            _lay = _w.layout()
+            out = []
+            for i in range(_lay.count()):
+                _c = _lay.itemAt(i).widget()
+                if isinstance(_c, (_PB7w, _QL7w)):
+                    out.append(_c.text())
+            return (it.parent().text(0) if it.parent() is not None else None, out)
+        return None
+    eq("b7w Runplaner ohne Limit: 1 Blueprint mit 6 Runs",
+       _bp_knoepfe7w(_zeilen7w(), "6"),
+       ("Peanut Motor", [_t4("{n} blueprints").format(n=1), "1\u00d7", "6"]))
+    win._bd_recipes.activity_max_runs[(5001, I.REACTION)] = 4
+    _ucb7w.click(); _app.processEvents(); _ucb7w.click(); _app.processEvents()
+    # GANZE KOPIEN + WELLEN (Nutzer 19.09.2026): 6 Runs mit Limit 4 auf EINEM
+    # Reaktions-Slot = Kopie 4 in Welle 1, Kopie 2 als zweite Auflistung
+    # "Peanut Motor · Welle 2".
+    eq("b7w Runplaner mit Limit 4 je Job, 1 Slot: Welle 1 = eine Kopie mit 4 Runs",
+       _bp_knoepfe7w(_zeilen7w(), "4"),
+       ("Peanut Motor", [_t4("{n} blueprints").format(n=1), "1\u00d7", "4"]))
+    eq("b7w ... Welle 2 = zweite Auflistung des Charakters mit der Kopie 2",
+       _bp_knoepfe7w(_zeilen7w(), "2"),
+       ("Peanut Motor  \u00b7  " + _t4("wave {n}").format(n=2),
+        [_t4("{n} blueprints").format(n=1), "1\u00d7", "2"]))
+    _w2_7w = next((it for z, it in _zeilen7w() if z[0] == "Unrefined Testmat" and z[1] == "2"
+                   and z[4].startswith(_t4("Unrefined reaction"))), None)
+    check("b7w ... die Welle-2-Zeile hat einen eigenen Haken-Schluessel (|w2)",
+          _w2_7w is not None and str(_w2_7w.data(0, Qt.UserRole + 6)).endswith("|w2")
+          and _w2_7w.parent() is not None
+          and str(_w2_7w.parent().data(0, Qt.UserRole + 6)).endswith("|w2"))
+    win._bd_recipes.activity_max_runs.pop((5001, I.REACTION), None)
+    # OHNE SCRAPMETAL-SKILL: 50 % flach -> 18 X + 50 A je Run (Stufe 0 zaehlt,
+    # nicht "fehlt"); OHNE STRUKTUR-DATEN laeuft Weg A trotzdem (Basis egal).
+    win.settings["bau_char_skills"] = {"1": {"3385": 5, "3389": 5}}
+    I.reprocess_struktur_sde = lambda: {"bonus": {}, "rig": {}}
+    _ucb7w.click(); _app.processEvents(); _ucb7w.click(); _app.processEvents()
+    eq("b7w ohne Scrapmetal-Skill und ohne Struktur-Daten: 18 X + 50 A je Run, 50 %",
+       ({k: (v["out_je_run"], v["zurueck_je_run"]) for k, v in win._bd_unrefined.items()},
+        win._bd_recipes.product_to_bp.get(_X7),
+        win._bd_opts.get("reprocess", {}).get("basis")),
+       ({_X7: (18, {_A7: 50})}, (5001, I.REACTION, 18), None))
+    check("b7w ... die Karte warnt NICHT vor fehlenden Struktur-Daten (Weg B ist aus)",
+          "Load recipes" not in (getattr(win, "_bd_mat_tab_info", None).text()
+                                 if getattr(win, "_bd_mat_tab_info", None) is not None else ""))
+    win.settings["bau_char_skills"] = {"1": {"3385": 5, "3389": 5, "12196": 3}}
+    I.reprocess_struktur_sde = lambda: {
+        "bonus": {"Tatara": 5.5},
+        "rig": {46639: {"name": "Standup L-Set Reprocessing Monitor I", "mult": 0.51,
+                        "hi": 1.0, "low": 1.06, "null": 1.12}}}
+    _ucb7w.click(); _app.processEvents(); _ucb7w.click(); _app.processEvents()
+    # TEURER INPUT (C = 5'000): Unrefined verliert, Zeile "nicht guenstiger".
+    win._bd_pricemap[_C7] = 5000.0
+    _ucb7w.click(); _app.processEvents(); _ucb7w.click(); _app.processEvents()
+    _plan7w_d = (getattr(win, "_bd_plan_cache", None) or (None, None))[1] or {}
+    _info7w_d = (getattr(win, "_bd_mat_tab_info", None).text()
+                 if getattr(win, "_bd_mat_tab_info", None) is not None else "")
+    check("b7w teurer Input: kein Unrefined-Weg, und die Karte sagt warum (Tooltip +% fuer Testmat)",
+          _plan7w_d.get("build_runs", {}).get(_X7) is None
+          and win._bd_recipes.product_to_bp.get(_X7) == (5000, I.REACTION, 200)
+          and "Testmat (+" in (_ulbl7w.toolTip() if _ulbl7w is not None else "")
+          and _t4("no unrefined reaction is cheaper") in (_ulbl7w.text() if _ulbl7w is not None else ""))
+    win._bd_pricemap[_C7] = 50.0
+    # Die Texte sind zweisprachig hinterlegt.
+    from eve_trader import sprache as _sp7w
+    for _k7w in ("Use unrefined reactions where cheaper",
+                 "Base 50 % × Scrapmetal Processing",
+                 "Reprocessing of unrefined products", "via {formula} ♻",
+                 "Unrefined reaction not cheaper for: {liste}",
+                 "− Returned (reprocessing)"):
+        check(f"b7w deutsche Fassung: {_k7w[:30]}", _k7w in _sp7w.KATALOG["de"])
+except Exception as _e7w:                                # pragma: no cover
+    import traceback as _tb7w
+    _tb7w.print_exc()
+    _fail.append(f"b7w Unrefined im Bauplan: {type(_e7w).__name__}: {_e7w}")
+finally:
+    I.reprocess_map = _alt7w["map"]; I.item_category_map = _alt7w["cats"]
+    I.reprocess_struktur_sde = _alt7w["sde"]; I.reprocess_skill_ids = _alt7w["ids"]
+    I.reprocess_erz_skill = _alt7w["erz"]; store.list_characters = _alt7w["chars"]
+    config.save_settings = _alt7w["save"]; esi.resolve_names = _alt7w["names"]
+    I.group_names = _alt7w["groups"]
+    for _k, _v in _alt_set7w.items():
+        if _v is None:
+            win.settings.pop(_k, None)
+        else:
+            win.settings[_k] = _v
+    win._bd_recipes_basis = None
+    win._bd_unrefined = {}
+    win._bd_ladder_result = None
+    try:
+        if _dlg7w is not None:
+            _dlg7w.close()
+            _app.processEvents()
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------- (b7v)
+# FRACHT + ORDERBUCH-LADDER (Befund 18.09.2026 am Compressed-Ore-Vergleich):
+# mit "Fracht entscheidet mit" UND aktiver Ladder fehlte der Frachtdienst in
+# Gesamtkosten und Gewinn - die Ladder rechnet reine Orderbuchpreise, der
+# Abzug in der Material-Zeile nahm aber an, die Fracht stecke drin. Beim
+# Nutzer: Gewinn ohne Erz -93 Mio, obwohl 372 Mio Frachtdienst anfallen.
+# Rechnung hier: 60 Testmat x 100 ISK (Orderbuch) = 6'000; Volumen 60 x
+# 0.01 m3 x 445 ISK/m3 = 267 Fracht. Gesamt muss die 267 enthalten, die
+# Material-Zeile zeigt die 6'000 OHNE Fracht.
+_alt_set7v = {k: win.settings.get(k) for k in
+              ("bau_transport_rate", "bau_freight_in_decision", "bau_reprocess_on")}
+_alt_vol7v = win._item_volumes_with_esi_fix
+_alt_save7v = config.save_settings
+config.save_settings = lambda s: None
+_dlg7v = None
+try:
+    win.settings["bau_transport_rate"] = 445.0
+    win.settings["bau_freight_in_decision"] = True
+    win.settings["bau_reprocess_on"] = False
+    win._item_volumes_with_esi_fix = lambda ids: ({200: 0.01, 100: 1.0}, [])
+    win._bd_pricemap = dict(PRICES)
+    win._bd_recipes = _Recipes()
+    win._bd_opts = {"me": 0, "te": 0, "job_pct": 0, "build_reactions": False,
+                    "tree_depth": 4, "stock": {200: 40}}
+    win._bd_type = 100
+    win._bd_qty = 10
+    _plan7v = I.production_plan(100, 10, PRICES.get, _Recipes(), dict(win._bd_opts))
+    _tree7v = I.build_tree(100, PRICES.get, _Recipes(), dict(win._bd_opts))
+    _res7v = {"tree": _tree7v, "names": {100: "Testship", 200: "Testmat"},
+              "sell": 6000.0, "sell_is_contract": False, "plan": _plan7v}
+    # Orderbuch-Ladder wie nach "Neu berechnen": 100 ISK je Testmat, aber
+    # nur 45 Stueck im Buch (60 gebraucht) - der Rest zum teuersten Angebot.
+    win._bd_ladder_result = {"qty": 10, "_orderbooks": {200: [(100.0, 45)]},
+                             "mat_cost_ladder": 6000.0, "short_materials": []}
+    _sbd_frisch(100, "Testship", _res7v)
+    _dlg7v = getattr(win, "_bd_dialog", None)
+    _app.processEvents()
+    _lb7v = getattr(win, "_bd_detail_val_lbls", None) or {}
+    _plan_v = (getattr(win, "_bd_plan_cache", None) or (None, None))[1] or _plan7v
+    _jc7v = float(_plan_v.get("job_cost") or 0.0)
+    _sc7v = float(_plan_v.get("stock_cost") or 0.0)
+    _iv7v = float(_plan_v.get("inv_cost") or 0.0)
+    from eve_trader.ui.mw_basis import isk as _isk7v
+    eq("b7v Material-Zeile = Orderbuch ohne Fracht (6'000)",
+       _lb7v["Material"].text(), _isk7v(6000.0, suffix=False))
+    eq("b7v Frachtdienst-Zeile = 267", _lb7v["Frachtdienst"].text(), _isk7v(267.0, suffix=False))
+    eq("b7v Gesamt-Baukosten ENTHALTEN die Fracht",
+       _lb7v["= Baukosten gesamt"].text(),
+       _isk7v(6000.0 + 267.0 + _jc7v + _sc7v + _iv7v, suffix=False))
+    # AUSVERKAUFT (Nutzer 18.09.2026: "was macht der Bauplan, wenn in Jita
+    # etwas nicht da ist?"): der Materialien-Tab nennt das Material mit
+    # "da / gebraucht" - nicht nur eine Zahl im Tooltip.
+    _il7v = getattr(win, "_bd_mat_tab_info", None)
+    _txt7v = _il7v.text() if _il7v is not None else ""
+    check("b7v der Materialien-Tab warnt: Testmat 45 / 60 am Hub",
+          "Testmat 45 / 60" in _txt7v and _il7v.isVisible() is not None)
+    eq("b7v ... und die Knappheit ist am Dialog gemerkt",
+       [(int(x["type_id"]), int(x["available"]), int(x["needed"]))
+        for x in (getattr(win, "_bd_ladder_shorts", None) or [])], [(200, 45, 60)])
+except Exception as _e7v:                                # pragma: no cover
+    _fail.append(f"b7v Fracht in der Ladder: {type(_e7v).__name__}: {_e7v}")
+finally:
+    win._item_volumes_with_esi_fix = _alt_vol7v
+    config.save_settings = _alt_save7v
+    win._bd_ladder_result = None
+    for _k, _v in _alt_set7v.items():
+        if _v is None:
+            win.settings.pop(_k, None)
+        else:
+            win.settings[_k] = _v
+    try:
+        if _dlg7v is not None:
+            _dlg7v.close()
+            _app.processEvents()
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------- (b80)
+# PREISVERLAUF: VERVOLLSTAENDIGUNG UEBER ALLE NAMEN + START MIT GRAPH
+# (Nutzer 18.09.2026: "zeigt nicht alle Items wenn ich anfange zu tippen"
+# und "standardmaessig sollte ein Item aufgehen"). Die Combo-Liste bleibt
+# der Bestand; der Completer hat ein eigenes Modell mit dem Namens-Cache.
+try:
+    from PySide6.QtWidgets import QCompleter as _QC80
+    from eve_trader import store as _st80
+    _geplottet80 = []
+    _alt_plot80 = win._do_plot
+    _alt_names80 = _st80.all_names
+    try:
+        win._do_plot = lambda tid: _geplottet80.append(int(tid))
+        _st80.all_names = lambda: {990001: "Acolyte II Probe", 990002: "Acolyte I Probe",
+                                   990003: "Warrior II Probe", 990004: "Acolyte II"}
+        win._mk_namen_laden()
+        _liste80 = win._mk_namen_modell.stringList()
+        check("b80 der Completer kennt Namen, die NICHT im Bestand sind",
+              "Acolyte II Probe" in _liste80 and "Warrior II Probe" in _liste80)
+        _c80 = win.mk_item.completer()
+        check("b80 der Completer haengt am Namens-Modell (nicht an der Combo)",
+              _c80 is not None and _c80.model() is win._mk_namen_modell)
+        check("b80 Teilwort reicht (MatchContains, Gross/Klein egal)",
+              _c80.filterMode() == Qt.MatchContains
+              and _c80.caseSensitivity() == Qt.CaseInsensitive)
+        _c80.setCompletionPrefix("acoly")
+        _treffer80 = [_c80.completionModel().index(i, 0).data()
+                      for i in range(_c80.completionModel().rowCount())]
+        check(f"b80 'acoly' findet beide Acolyte-Probe ({_treffer80})",
+              set(_treffer80) >= {"Acolyte II Probe", "Acolyte I Probe"})
+        # Auswahl aus der Vervollstaendigung -> Combo + Zeichnen
+        win._mk_name_gewaehlt("Warrior II Probe")
+        check("b80 Auswahl landet in der Combo und wird gezeichnet",
+              win.mk_item.currentData() == 990003 and _geplottet80[-1:] == [990003])
+        # Getippter Name + Enter: erst lokal, ohne Netz
+        win.mk_item.setEditText("acolyte ii probe")
+        _n80 = len(_geplottet80)
+        win._plot_history()
+        check("b80 getippter Name wird lokal aufgeloest (ohne ESI)",
+              _geplottet80[_n80:] == [990001])
+        # Auto-Start: zuletzt angesehenes Item
+        win._mk_full = []
+        win._mk_auto_lief = False
+        win.settings["mk_last_item"] = [990002, "Acolyte I Probe"]
+        _n80 = len(_geplottet80)
+        win._mk_auto_start()
+        check("b80 beim Oeffnen des Tabs wird das zuletzt angesehene Item gezeichnet",
+              _geplottet80[_n80:] == [990002] and win.mk_item.currentData() == 990002)
+        _n80 = len(_geplottet80)
+        win._mk_auto_start()
+        check("b80 ... aber nur einmal, nicht bei jedem Tab-Wechsel",
+              _geplottet80[_n80:] == [])
+        # Ohne gemerktes Item: "Acolyte II" (Tutorial-Item), ueber den Namen
+        win._mk_auto_lief = False
+        win.settings["mk_last_item"] = None
+        _n80 = len(_geplottet80)
+        win._mk_auto_start()
+        check("b80 ohne gemerktes Item: Acolyte II, ueber den Namen aufgeloest",
+              _geplottet80[_n80:] == [990004] and win.mk_item.currentText() == "Acolyte II")
+        check("b80 keine Type-ID fuer das Startitem im Quelltext (Regel 2)",
+              win._MK_STARTITEM == "Acolyte II" and "2488" not in
+              __import__("inspect").getsource(type(win)._mk_auto_start))
+        check("b80 der Tab-Wechsel ruft den Auto-Start",
+              "self._mk_auto_start()" in
+              __import__("inspect").getsource(type(win)._on_tab_changed))
+        check("b80 mk_last_item hat einen Standard in DEFAULT_SETTINGS",
+              "mk_last_item" in __import__("eve_trader.config", fromlist=["x"]).DEFAULT_SETTINGS)
+    finally:
+        win._do_plot = _alt_plot80
+        _st80.all_names = _alt_names80
+        win.settings["mk_last_item"] = None
+        win._mk_auto_lief = False
+        win._mk_namen_laden()
+except Exception as _e80:                                # pragma: no cover
+    _fail.append(f"b80 Preisverlauf-Vervollstaendigung: {type(_e80).__name__}: {_e80}")
+
+
+# ---------------------------------------------------------------- (b81)
+# "-1 ..." AUF DEM GROSSEN LADESCHIRM (Nutzer 18.09.2026, zweiter Fundort
+# nach aa370): _set_loading_progress bekam progress(-1, 0) und schrieb die
+# Zahl roh. Am Widget geprueft, nicht am Text.
+try:
+    win._set_loading_progress(-1, 0)
+    check("b81 Ladeschirm: -1 wird als Entpack-Phase gezeigt, nicht als Zahl",
+          "-1" not in win._overlay_progress.text()
+          and win._overlay_progress.text() == _t4("Unpacking and importing …"))
+    win._set_loading_progress(57, 140)
+    check("b81 Gegenprobe: mit Groesse weiter Balken + Zahlen",
+          "57" in win._overlay_progress.text() and "140" in win._overlay_progress.text())
+    win._set_loading_progress(3, 0)
+    check("b81 Gegenprobe: ohne Groesse weiter die nackte Zahl",
+          win._overlay_progress.text().startswith("3"))
+except Exception as _e81:                                # pragma: no cover
+    _fail.append(f"b81 Ladeschirm -1: {type(_e81).__name__}: {_e81}")
+
+
+# ---------------------------------------------------------------- (b79)
+# FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
+# fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.
+# Netz-/ESI-Fehler (offline, Test-Corp 403) sind erwartet und bleiben erlaubt.
+_flog_neu = ""
+try:
+    with open(_FLOG, "r", encoding="utf-8", errors="replace") as _fh79:
+        _fh79.seek(_FLOG_START)
+        _flog_neu = _fh79.read()
+except OSError:
+    pass
+_flog_bad = [_z.strip() for _z in _flog_neu.splitlines()
+             if "has no attribute" in _z or "NameError" in _z
+             or "is not defined" in _z or "TypeError" in _z
+             or "KeyError" in _z or "IndexError" in _z]
+check("b79 fehler.log: keine Programmierfehler waehrend des Laufs angehaengt"
+      + (" - " + " | ".join(sorted(set(_flog_bad))[:3]) if _flog_bad else ""),
+      not _flog_bad)
 
 print(f"(b) Bauplan-Aufbau: {_ok}/{_ok + len(_fail)} gruen")
 for f in _fail:

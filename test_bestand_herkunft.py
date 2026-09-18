@@ -1628,7 +1628,7 @@ check("aa46 zusaetzlich der komplette Rezeptbaum (aa20-Fix bleibt)",
 # Die Materialtabelle speist sich aus genau diesen drei Mengen-Feldern -
 # wenn dort eines fehlt, entstehen wieder namenlose Zeilen.
 check("aa46 Materialtabelle nutzt buy/stock_used/built",
-      "all_ids = set(buy) | set(stock_used) | set(built_net)" in _src_txt)
+      "all_ids = (set(buy) | set(stock_used) | set(built_net)" in _src_txt)
 
 # ---------------------------------------------------------------- (aa47)
 # NUTZER: "sortiere bitte von Intermediate Reactions zu normalen Reactions,
@@ -3040,8 +3040,8 @@ check("aa73 Optimierer klammert das Endprodukt aus",
 # die Zeile zumuellt.
 _sch74 = _fn_src("_fill_bauplan_schedule")
 check("aa74 Runplaner nennt die Struktur", 'label = f"{label}' in _sch74)
-check("aa74 Reaktionsstufen nehmen die Reaktions-Struktur",
-      'if stage.startswith("reaction")' in _sch74
+check("aa74 Reaktionsstufen nehmen die Reaktions-Struktur (auch Unrefined)",
+      'if (stage.startswith("reaction") or stage == "unrefined")' in _sch74
       and '_bd_react_struct' in _sch74)
 check("aa74 Komponenten/Endprodukt die Fertigungs-Struktur",
       '_bd_mfg_struct' in _sch74)
@@ -3390,7 +3390,11 @@ check("aa82 Fingerabdruck deckt Menge und Optionen",
 # MUSS der Cache fallen - sonst rechnet der Dialog mit veralteten Zahlen
 # weiter (genau die Fehlerklasse, die hier schon zweimal Zeit gekostet hat).
 eq("aa82 Cache faellt bei jedem Preis-/Options-Wechsel",
-   _src_txt.count("self._bd_plan_cache = None"), 3)
+   _src_txt.count("self._bd_plan_cache = None"), 4)
+check("aa82 ... auch wenn Weg A die Rezept-Kopie wechselt",
+      "if set(_uw.keys()) != _uw_vorher:\n"
+      "                self._bd_reaction_stages = None" in _rb82
+      and "self._bd_plan_cache = None" in _rb82.split("_uw_vorher:")[1][:400])
 for _site82 in ("self._bd_pricemap = pm", "self._bd_pricemap = _pm_live"):
     _i = _pos_von(_src_txt, _site82)
     check(f"aa82 Invalidierung direkt bei: {_site82[:34]}",
@@ -4560,7 +4564,8 @@ check("aa116 Rueckfall auf die alten Schluessel",
       'opts.get("facility_tax", 0.0)' in _jc116
       and 'opts.get("role_bonus", 0.0)' in _jc116)
 _MWc = MW._STRUCT_ROLE_JOBCOST
-eq("aa116 Engineering Complexes geben 4 %", _MWc.get("azbel"), 4.0)
+eq("aa116 Azbel 4 %, Sotiyo 5 % (Info-Fenster, Nutzer-Screenshot 19.09.2026)",
+   (_MWc.get("azbel"), _MWc.get("sotiyo")), (4.0, 5.0))
 eq("aa116 Refineries geben keinen", _MWc.get("tatara"), 0.0)
 check("aa116 alle bekannten Typen erfasst",
       set(_MWc) == {"raitaru", "azbel", "sotiyo", "athanor", "tatara"})
@@ -6287,9 +6292,25 @@ check("aa153 Stufe 1 weiterhin vor Stufe 2",
 # Runplaner-Aufbau, nicht im Planer. Per AST auf die echte Schleife geprueft,
 # nicht auf irgendeinen Treffer im Dateitext (Arbeitsregel 3b).
 _sched153 = _fn_src("_fill_bauplan_schedule")
-_tup153 = '("fuel", "reaction_1", "reaction_2", "component", "end")'
-check("aa153 Runplaner zeigt Treibstoff VOR den Reaktionen",
+# UNREFINED zwischen Fuel und Intermediate (Nutzer 19.09.2026).
+_tup153 = '("fuel", "unrefined", "reaction_1", "reaction_2", "component", "end")'
+check("aa153 Runplaner zeigt Treibstoff VOR den Reaktionen (Unrefined dazwischen)",
       f"for stage in {_tup153}:" in _sched153)
+# SCHEDULE_BUILD: Unrefined-Jobs (is_unrefined) bilden die Stufe "unrefined",
+# die ZWISCHEN Fuel und Intermediate laeuft - ihre Zeit zaehlt zur Summe.
+_jobs153u = [{"tid": 1, "name": "U", "runs": 2, "activity": _I.REACTION, "base_time": 3600,
+              "is_end": False, "bp_id": 11, "is_fuel": False, "is_unrefined": True,
+              "reaction_tier": 1},
+             {"tid": 2, "name": "R", "runs": 1, "activity": _I.REACTION, "base_time": 600,
+              "is_end": False, "bp_id": 12, "is_fuel": False, "reaction_tier": 1}]
+_res153u = _I.schedule_build(_jobs153u, [{"id": 1, "name": "A", "reaction_slots": 1,
+                                          "mfg_slots": 1, "can_mfg": True, "can_react": True}])
+_st153u = [a.get("stage") for a in _res153u["assignments"]]
+eq("aa153 Unrefined-Stufe liegt zwischen Fuel und Intermediate",
+   (_st153u, _res153u["stage_times"].get("unrefined", 0) > 0,
+    round(_res153u["total_seconds"] - _res153u["stage_times"]["reaction_1"]
+          - _res153u["stage_times"]["unrefined"], 3)),
+   (["unrefined", "reaction_1"], True, 0.0))
 check("aa153 Treibstoff-Zeit zaehlt in die Gesamtzeit",
       "fuel" in _res153["stage_times"]
       and _res153["total_seconds"] >= _res153["stage_times"]["fuel"] > 0)
@@ -8528,8 +8549,8 @@ check("aa198 das Tor steht VOR der Marker-Entscheidung",
                        "                            _active = []")
       < _rp198.find('_ready = [j for j in _active if j.get("status") == "ready"]'))
 check("aa198 die Aufteilung wird wie in der Blaupausen-Anzeige hergeleitet",
-      "_b9, _r9 = divmod(_pl_runs9, _pl_jobs9)" in _rp198
-      and "_split9 = [_b9 + 1] * _r9 + [_b9] * (_pl_jobs9 - _r9)" in _rp198)
+      "_split9 = self._bp_teile(" in _rp198
+      and '_pl_runs9, a.get("jobs"), a.get("max_runs"),' in _rp198)
 check("aa198 Teilmenge MIT Vielfachheit (remove, nicht in-Set)",
       "_rest9.remove(_x9)" in _rp198)
 # FUNKTIONAL nachrechnen (b2u-Regel: Anzeige-Logik nicht nur am Text
@@ -14795,7 +14816,8 @@ check("aa324 die Kaufliste des Plans steht bereit",
 check("aa324 gedeckte Zeile sagt 'aus Bestand gedeckt' statt 'kaufen'",
       '_cid_b in _su_b' in _an324 and 'covered from stock' in _an324)
 check("aa324 aber nur, wenn der Plan das Item wirklich nicht kauft",
-      "_cid_b not in _by_b" in _an324)
+      "_cid_b in _su_b and _by_b is not None\n"
+      "                        and _cid_b not in _by_b" in _an324)
 check("aa324 teils gedeckt bekommt ein eigenes Wort",
       "partly from stock" in _an324 and "_cid_b in _by_b" in _an324)
 check("aa324 der mittlere Fall traegt KEINE Mengen (zwei Bezugsgroessen)",
@@ -15854,7 +15876,9 @@ check("aa351 zu alt -> neu holen", not _ttl351(900) and not _ttl351(3600))
 # speichern die Einstellungen."
 _obd352 = _fn_src("open_build_detail")
 _PLAN_EIGEN = ("bau_blacklist_names", "bau_blacklist_gruppen",
-               "bau_buy_datacores", "bau_buy_decryptors")
+               "bau_buy_datacores", "bau_buy_decryptors",
+               # Reprocessing-Haken (Nutzer 19.09.2026: neuer Plan -> beide AUS)
+               "bau_reprocess_on", "bau_unrefined_on")
 check("aa352 ein neuer Plan setzt die plan-eigenen Werte zurueck",
       "_std = config.DEFAULT_SETTINGS" in _obd352)
 for _k352 in _PLAN_EIGEN:
@@ -15867,11 +15891,13 @@ check("aa352 Listen werden kopiert, nicht verwiesen",
 # GESPEICHERTE PLAENE BRINGEN IHRE EIGENEN MIT.
 _sav352 = open("eve_trader/ui/mw_bauplan_fenster.py", encoding="utf-8").read()
 for _k352 in ("blacklist_names", "blacklist_gruppen",
-              "buy_datacores", "buy_decryptors"):
+              "buy_datacores", "buy_decryptors", "reprocess_on", "unrefined_on"):
     check(f"aa352 {_k352} wird mitgespeichert", f'"{_k352}":' in _sav352)
 _open352 = _fn_src("_open_saved_plan")
 check("aa352 und beim Oeffnen zurueckgeholt",
-      '("blacklist_names", "bau_blacklist_names")' in _open352)
+      '("blacklist_names", "bau_blacklist_names")' in _open352
+      and '("reprocess_on", "bau_reprocess_on")' in _open352
+      and '("unrefined_on", "bau_unrefined_on")' in _open352)
 # ALTER PLAN OHNE DIESE FELDER darf nichts loeschen, was gerade eingetragen ist.
 check("aa352 ein alter Plan ohne die Felder laesst den Stand in Ruhe",
       "if _pk in p:" in _open352)
@@ -15880,6 +15906,9 @@ eq("aa352 Standard: Blacklist leer", _cfg336.DEFAULT_SETTINGS["bau_blacklist_nam
 eq("aa352 Standard: Gruppen leer", _cfg336.DEFAULT_SETTINGS["bau_blacklist_gruppen"], [])
 eq("aa352 Standard: Datacores kaufen", _cfg336.DEFAULT_SETTINGS["bau_buy_datacores"], True)
 eq("aa352 Standard: Decryptoren kaufen", _cfg336.DEFAULT_SETTINGS["bau_buy_decryptors"], True)
+eq("aa352 Standard: beide Reprocessing-Haken AUS (Nutzer 19.09.2026)",
+   (_cfg336.DEFAULT_SETTINGS["bau_reprocess_on"], _cfg336.DEFAULT_SETTINGS["bau_unrefined_on"]),
+   (False, False))
 
 # ---------------------------------------------------------------- (aa353)
 # EIN PLAN OHNE VERKAUFSPREIS DARF NICHT ABSTUERZEN.
@@ -16428,14 +16457,41 @@ eq("aa362 ohne Rolle wird der naechste Charakter genommen", _plan362b, {900: 12}
 eq("aa362 unbekannte Corp -> kein Abruf",
    _C362.abrufplan(_ch362, {}, {11: {"Director"}}, "Director"), ({}, {}))
 # 6. DIVISION-NAMEN: ESI liefert nur die umbenannten.
+# 5b. ORTE DER CORP-ASSETS (Tester-Befund 19.09.2026, Discord: die Citadel
+#     mit dem Corp-Hangar liess sich nicht verknuepfen - die Ortssuche sah
+#     nur Charakter-Assets). corp.orte laeuft je Item bis zur Wurzel hoch
+#     (Buero -> Division -> Struktur) und liefert Strukturen UND Stationen.
+_assets362o = [
+    {"item_id": 1, "location_id": 1000000000001, "location_flag": "OfficeFolder"},
+    {"item_id": 2, "location_id": 1, "location_flag": "CorpSAG3", "type_id": 34, "quantity": 5},
+    {"item_id": 3, "location_id": 60003760, "location_flag": "CorpSAG1", "type_id": 35, "quantity": 1},
+    {"item_id": 4, "location_id": 3, "location_flag": "Unlocked", "type_id": 36, "quantity": 1},
+]
+eq("aa362 corp.orte: Wurzel je Item - Citadel ueber das Buero, Station direkt, Container hoch",
+   _C362.orte(_assets362o), {1000000000001, 60003760})
+eq("aa362 corp.orte ohne Assets leer", _C362.orte([]), set())
+_cbd362 = _fn_src("_corp_bau_daten")
+check("aa362 _corp_bau_daten liefert die Orte samt lesendem Charakter",
+      '"orte": {}' in _cbd362 and 'out["orte"].setdefault(int(_o), cid)' in _cbd362)
+_pick362 = _fn_src("_bau_pick_structure")
+check("aa362 die Ortssuche nimmt Corp-Orte dazu (Strukturen UND Stationen)",
+      "_corp_orte" in _pick362 and "_o >= 1_000_000_000_000" in _pick362
+      and "60_000_000 <= _o < 64_000_000" in _pick362
+      and 'self.settings.get("use_corp")' in _pick362)
 eq("aa362 Division-Namen mit Vorgabe", _C362.division_namen(
     {"hangar": [{"division": 3, "name": "Minerals"}]}, [1, 3]),
-   {1: "Division 1", 3: "Minerals"})
-# 7. STANDARD AUS, KEINE DIVISION - der Entscheid, im Code.
-eq("aa362 Corp-Hangar ist standardmaessig AUS",
-   _cfg362.DEFAULT_SETTINGS.get("use_corp"), False)
-eq("aa362 standardmaessig ist keine Division gewaehlt",
-   _cfg362.DEFAULT_SETTINGS.get("corp_divisions"), [])
+   {1: "Corp-Hangar 1", 3: "Minerals"})
+# 7. STANDARD AN (Nutzer 19.09.2026: "genau so wie es bei mir ist"), und
+#    ALLE SIEBEN HANGARS angehakt (Nutzer 19.09.2026: "alle Corp Divisions
+#    auf Standard ON") - abwaehlen bleibt moeglich.
+eq("aa362 Corp-Hangar ist standardmaessig AN, Implantat-Erkennung auch",
+   (_cfg362.DEFAULT_SETTINGS.get("use_corp"), _cfg362.DEFAULT_SETTINGS.get("use_implants")),
+   (True, True))
+eq("aa362 standardmaessig sind alle sieben Corp-Hangars gewaehlt",
+   _cfg362.DEFAULT_SETTINGS.get("corp_divisions"), [1, 2, 3, 4, 5, 6, 7])
+_mw362 = open("eve_trader/ui/main_window.py", encoding="utf-8").read()
+eq("aa362 die Kaestchen heissen 'Corp-Hangar n', nicht mehr 'Division n'",
+   (_mw362.count('t("Corp-Hangar {n}")'), _mw362.count('t("Division {n}")')), (2, 0))
 # 8. DIE SCOPES - genau die aus der ESI-Doku (16.09.2026), mit Namen.
 eq("aa362 die fuenf Corp-Scopes", sorted(_cfg362.CORP_SCOPES), sorted([
     "esi-assets.read_corporation_assets.v1",
@@ -16481,6 +16537,863 @@ eq("aa363 auf Deutsch heissen sie verschieden",
 check("aa363 kein SDE-Hinweis nennt mehr 'Load blueprints'",
       "\u201eLoad blueprints\u201c once" not in _mw362
       and "„Load blueprints“ (once)" not in _mw362)
+
+# ---------------------------------------------------------------- (aa364)
+# REPROCESSING-AUSGANG IN DER REZEPTDATENBANK (1.0.9, Vorbereitung).
+# Nutzer, 17.09.2026: Unrefined-Reaktionen und Compressed Ore statt Minerale
+# sollen in den Bauplan. Beides braucht den SDE-Basiswert "was ergibt ein
+# Erz / ein Unrefined-Mineral beim Reprocessen" - den lud "Load recipes"
+# bisher nicht. Hier: Tabellen, Abruf, reine Rechenfunktion.
+import tempfile as _tf364                                           # noqa: E402
+import eve_trader.industry as _I364                                 # noqa: E402
+# 1. DIE REINE RECHNUNG - Regel 3 in beide Richtungen.
+eq("aa364 volle Portionen, je Portion abgerundet",
+   _I364.reprocess_ergebnis({34: 400, 35: 20}, 100, 250, 0.784), {34: 626, 35: 30})
+eq("aa364 unter einer Portion kommt nichts",
+   _I364.reprocess_ergebnis({34: 400}, 100, 99, 0.9), {})
+eq("aa364 Ausbeute ueber 100 % ist keine Zahl, sondern ein Fehler",
+   _I364.reprocess_ergebnis({34: 400}, 100, 100, 1.2), {})
+eq("aa364 Ausbeute 0 -> nichts", _I364.reprocess_ergebnis({34: 400}, 100, 100, 0.0), {})
+eq("aa364 was je Portion auf 0 abrundet, faellt weg",
+   _I364.reprocess_ergebnis({34: 1}, 100, 100, 0.5), {})
+eq("aa364 Muell in der Eingabe -> leer, kein Absturz",
+   _I364.reprocess_ergebnis({34: "x"}, "p", None, 0.5), {})
+# 2. DIE TABELLEN ENTSTEHEN, UND DER LESER LIEST SIE - an einer Wegwerf-DB.
+_alt_db364 = _I364._db_path
+_tmp364 = _tf364.mkdtemp()
+try:
+    _I364._db_path = lambda: os.path.join(_tmp364, "industry.db")
+    _I364.init_db()
+    with _I364._conn() as _c364:
+        _tabs364 = {r[0] for r in _c364.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        check("aa364 init_db legt reprocess + reprocess_portion an",
+              {"reprocess", "reprocess_portion"} <= _tabs364)
+        _c364.execute("INSERT INTO reprocess VALUES (62516, 34, 400)")
+        _c364.execute("INSERT INTO reprocess VALUES (62516, 35, 20)")
+        _c364.execute("INSERT INTO reprocess_portion VALUES (62516, 100)")
+    # PORTION 100, NICHT 1 - mit 1 waere die Mutation "Portion ignoriert"
+    # blind, weil der Vorgabewert zufaellig stimmt.
+    eq("aa364 reprocess_map liest Portion und Ausgang",
+       _I364.reprocess_map(), {62516: {"portion": 100, "out": {34: 400, 35: 20}}})
+finally:
+    _I364._db_path = _alt_db364
+eq("aa364 ohne Datenbank ist die Karte leer (kein Absturz)",
+   (lambda: (setattr(_I364, "_db_path", lambda: os.path.join(_tmp364, "gibtsnicht.db")),
+             _I364.reprocess_map(),
+             setattr(_I364, "_db_path", _alt_db364))[1])(), {})
+# 3. DER ABRUF HOLT DIE ZEILEN AUS DER SDE - nur Erze (25) und Material (4).
+_ind364 = open(os.path.join(_here222, "eve_trader", "industry.py"),
+               encoding="utf-8").read()
+check("aa364 Load recipes liest invTypeMaterials",
+      '"FROM invTypeMaterials m JOIN invTypes t ON t.typeID=m.typeID "' in _ind364)
+check("aa364 ... nur fuer Erze und Material",
+      '"WHERE g.categoryID IN (25, 4)").fetchall()' in _ind364)
+check("aa364 ... und die Portionsgroesse dazu",
+      '"SELECT t.typeID, t.portionSize FROM invTypes t "' in _ind364)
+check("aa364 eine SDE ohne die Tabelle loescht keinen vollen Stand",
+      "        if repro_records:\n            c.execute(\"DELETE FROM reprocess\")" in _ind364)
+
+# ---------------------------------------------------------------- (aa365)
+# REPROCESSING: SKILLS, ERZ->SKILL, IMPLANTATE, KANDIDATEN-FORMEL (1.0.9,
+# Vorbereitung 2, 17.09.2026). Nutzer: "das reprocessen macht man in der
+# Regel mit einem Klick nur mit einem Charakter, da macht es Sinn den
+# besten reprocess Charakter zu waehlen". Hier: die reinen Rechenstuecke
+# und die Datengrundlage. NICHTS davon haengt am Bauplan - die Formel ist
+# ein Kandidat, bis die Messung im Spiel sie bestaetigt.
+_I365 = _I364
+# 1. CHARAKTER-FAKTOR: Regel 1 - die Zahl ist nachrechenbar, nicht "ungefaehr".
+eq("aa365 Faktor 5/5/4 + 4 % Implantat",
+   round(_I365.reprocess_char_faktor(5, 5, 4, 4.0), 6), round(1.15 * 1.10 * 1.08 * 1.04, 6))
+eq("aa365 ohne Skills und Implantat ist der Faktor genau 1",
+   _I365.reprocess_char_faktor(0, 0, 0), 1.0)
+eq("aa365 Stufe 6 gibt es nicht", _I365.reprocess_char_faktor(6, 0, 0), None)
+eq("aa365 negatives Implantat ist Muell", _I365.reprocess_char_faktor(5, 5, 5, -1), None)
+eq("aa365 Implantat ueber 100 % ist Muell", _I365.reprocess_char_faktor(5, 5, 5, 101), None)
+eq("aa365 Text als Stufe -> None, kein Absturz", _I365.reprocess_char_faktor("x", 0, 0), None)
+# 2. AUSBEUTE: Basis x Faktor, aber nie ueber 100 % (Regel 3).
+eq("aa365 Ausbeute = Basis x Faktor", round(_I365.reprocess_ausbeute(0.5, 1.2), 6), 0.6)
+# 2b. STRUKTUR-BASIS: Rig ERSETZT das Service-Modul, Sicherheits-Faktor
+#     des Rigs und Struktur-Bonus wirken MULTIPLIKATIV. Zusammensetzung
+#     gegen die Messung vom 18.09.2026 geprueft (Tatara + Monitor I, Null).
+# Ein None darf die Suite nicht abbrechen (sonst ist eine Mutation BLIND
+# statt ROT) - deshalb rundet _r365 nur Zahlen.
+_r365 = lambda x: None if x is None else round(x, 6)                # noqa: E731
+eq("aa365 NPC-Station ohne alles = 0.50", _I365.reprocess_struktur_basis(), 0.5)
+eq("aa365 Athanor ohne Rig = 0.51 (aus der SDE abgeleitet)",
+   _r365(_I365.reprocess_struktur_basis(None, 1.0, 2.0)), 0.51)
+eq("aa365 Tatara + Monitor I in Null = 0.602616 (GEMESSEN)",
+   _r365(_I365.reprocess_struktur_basis(0.51, 1.12, 5.5)), 0.602616)
+eq("aa365 Sicherheits-Faktor unter 1 ist Muell", _I365.reprocess_struktur_basis(0.51, 0.9, 5.5), None)
+eq("aa365 Struktur-Basis ueber 100 % ist keine", _I365.reprocess_struktur_basis(0.99, 1.12, 5.5), None)
+eq("aa365 Struktur-Basis mit Muell -> None", _I365.reprocess_struktur_basis("x", 1.0, 0), None)
+# 2c. DIE MESSUNG SELBST, Ende zu Ende (Regel 5: nachgestellt, nicht
+#     hergeleitet). Nutzer 18.09.2026, Vorschau im Spiel, Skills
+#     Reprocessing 5 / Efficiency 5 / Simple Ore Processing 5 / Complex 0,
+#     kein Implantat, Tatara "R&R Yard" mit L-Set Reprocessing Monitor I.
+_b365 = _I365.reprocess_struktur_basis(0.51, 1.12, 5.5)
+_y_ark365 = _I365.reprocess_ausbeute(_b365, _I365.reprocess_char_faktor(5, 5, 0))
+eq("aa365 MESSUNG Compressed Arkonor 100 -> 2439 Pyerite / 914 Mexallon / 91 Megacyte",
+   _I365.reprocess_ergebnis({35: 3200, 36: 1200, 40: 120}, 100, 100, _y_ark365),
+   {35: 2439, 36: 914, 40: 91})
+eq("aa365 MESSUNG Tooltip Arkonor 76.2 %", round(_y_ark365 * 100, 1), 76.2)
+_y_veld365 = _I365.reprocess_ausbeute(_b365, _I365.reprocess_char_faktor(5, 5, 5))
+eq("aa365 MESSUNG Compressed Veldspar 100 -> 335 Tritanium",
+   _I365.reprocess_ergebnis({34: 400}, 100, 100, _y_veld365), {34: 335})
+eq("aa365 MESSUNG Tooltip Veldspar 83.9 %", round(_y_veld365 * 100, 1), 83.9)
+# 2d. NPC-STATION (Nutzer 18.09.2026, anderer Charakter: Reprocessing 4,
+#     Efficiency 5, Simple Ore Processing 0, kein Implantat): Basis 0.50
+#     ohne alles, Tooltip 61.6 %, 100 Compressed Veldspar -> 246 Tritanium.
+_y_npc365 = _I365.reprocess_ausbeute(_I365.reprocess_struktur_basis(),
+                                     _I365.reprocess_char_faktor(4, 5, 0))
+eq("aa365 MESSUNG NPC-Station Compressed Veldspar 100 -> 246 Tritanium",
+   _I365.reprocess_ergebnis({34: 400}, 100, 100, _y_npc365), {34: 246})
+eq("aa365 MESSUNG Tooltip NPC 61.6 %", round(_y_npc365 * 100, 1), 61.6)
+# 2e. NUTZER: "man kann immer nur 100 Bloecke reprocessen, bei 99 wird es
+#     verweigert" - genau die Portionsregel; 99 Stueck ergeben NICHTS.
+eq("aa365 99 Compressed Veldspar ergeben nichts (Portion 100)",
+   _I365.reprocess_ergebnis({34: 400}, 100, 99, _y_npc365), {})
+eq("aa365 199 Stueck = eine Portion, der Rest wartet",
+   _I365.reprocess_ergebnis({34: 400}, 100, 199, _y_npc365), {34: 246})
+eq("aa365 Ausbeute ueber 100 % ist keine Ausbeute", _I365.reprocess_ausbeute(0.9, 1.2), None)
+eq("aa365 Basis 0 ist keine Basis", _I365.reprocess_ausbeute(0, 1.0), None)
+eq("aa365 Faktor unter 1 ist keiner", _I365.reprocess_ausbeute(0.5, 0.9), None)
+# 3. BESTER CHARAKTER: hoechster Faktor gewinnt, Implantat zaehlt mit,
+#    Gleichstand -> kleinere ID, str-Schluessel wie in bau_char_skills.
+_ids365 = {"Reprocessing": 3385, "Reprocessing Efficiency": 3389}
+eq("aa365 das Implantat schlaegt eine Erz-Skill-Stufe",
+   _I365.bester_reprocess_char({"1": {3385: 5, 3389: 5, 99: 3},
+                                "2": {3385: 5, 3389: 5, 99: 4}},
+                               {1: 4.0}, _ids365, 99)[0], 1)
+eq("aa365 ohne Implantat gewinnt der bessere Erz-Skill",
+   _I365.bester_reprocess_char({"1": {3385: 5, 3389: 5, 99: 3},
+                                "2": {3385: 5, 3389: 5, 99: 4}},
+                               {}, _ids365, 99)[0], 2)
+eq("aa365 Gleichstand -> kleinere ID",
+   _I365.bester_reprocess_char({"7": {3385: 5, 3389: 5}, "3": {3385: 5, 3389: 5}},
+                               {}, _ids365, 99)[0], 3)
+eq("aa365 ohne Erz-Skill zaehlt Stufe 0, nicht 'fehlt'",
+   round(_I365.bester_reprocess_char({"1": {3385: 5, 3389: 5}}, {}, _ids365, 99)[1], 6),
+   round(1.15 * 1.10, 6))
+eq("aa365 ohne Skill-IDs (SDE zu alt) niemand, kein Raten",
+   _I365.bester_reprocess_char({"1": {3385: 5}}, {}, {}, 99), (None, None))
+eq("aa365 ohne geladene Skills niemand",
+   _I365.bester_reprocess_char({}, {}, _ids365, 99), (None, None))
+# 4. TABELLEN + LESER an einer Wegwerf-DB; DIAGNOSE an einer Wegwerf-SDE.
+import sqlite3 as _sq365                                            # noqa: E402
+_alt_db365 = _I365._db_path
+_alt_app365 = _I365.config.app_data_dir
+_tmp365 = _tf364.mkdtemp()
+try:
+    _I365._db_path = lambda: os.path.join(_tmp365, "industry.db")
+    _I365.config.app_data_dir = lambda: _tmp365
+    _I365.init_db()
+    with _I365._conn() as _c365:
+        _tabs365 = {r[0] for r in _c365.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        check("aa365 init_db legt die drei Reprocessing-Tabellen an",
+              {"reprocess_skill_ids", "reprocess_erz_skill", "reprocess_implant"} <= _tabs365)
+        _c365.execute("INSERT INTO reprocess_skill_ids VALUES ('Reprocessing', 3385)")
+        _c365.execute("INSERT INTO reprocess_erz_skill VALUES (1230, 12180)")
+        _c365.execute("INSERT INTO reprocess_implant VALUES "
+                      "(27175, 'Zainou Beancounter Reprocessing RX-804', 'refiningYieldMutator', 4.0)")
+    eq("aa365 reprocess_skill_ids liest Name -> ID",
+       _I365.reprocess_skill_ids(), {"Reprocessing": 3385})
+    eq("aa365 reprocess_erz_skill liest Erz -> Skill",
+       _I365.reprocess_erz_skill(), {1230: 12180})
+    eq("aa365 reprocess_implants liest den Attributnamen MIT",
+       _I365.reprocess_implants()[27175]["attr"], "refiningYieldMutator")
+    # Die Diagnose an einer Mini-SDE: sie muss die Abschnitte schreiben und
+    # bei fehlenden Tabellen NICHT abbrechen.
+    _src365 = _sq365.connect(":memory:")
+    _src365.executescript("""
+        CREATE TABLE invTypes (typeID INTEGER, groupID INTEGER, typeName TEXT);
+        CREATE TABLE dgmAttributeTypes (attributeID INTEGER, attributeName TEXT);
+        CREATE TABLE dgmTypeAttributes (typeID INTEGER, attributeID INTEGER,
+                                        valueInt INTEGER, valueFloat REAL);
+        INSERT INTO invTypes VALUES (3385, 1218, 'Reprocessing');
+        INSERT INTO invTypes VALUES (3389, 1218, 'Reprocessing Efficiency');
+        INSERT INTO invTypes VALUES (27175, 300, 'Zainou ''Beancounter'' Reprocessing RX-804');
+        INSERT INTO invTypes VALUES (1230, 462, 'Veldspar');
+        INSERT INTO dgmAttributeTypes VALUES (790, 'reprocessingSkillType');
+        INSERT INTO dgmTypeAttributes VALUES (1230, 790, 12180, NULL);
+        INSERT INTO dgmTypeAttributes VALUES (27175, 379, NULL, 4.0);
+    """)
+    _pfad365 = _I365._write_reprocess_diagnostic(_src365)
+    _diag365 = open(_pfad365, encoding="utf-8").read()
+    check("aa365 Diagnose nennt das Erz->Skill-Attribut",
+          "790  reprocessingSkillType" in _diag365)
+    check("aa365 Diagnose listet die Skills der Reprocessing-Gruppe",
+          "Reprocessing Efficiency  (typeID 3389)" in _diag365)
+    check("aa365 Diagnose zeigt das Implantat mit Attributwert",
+          "Reprocessing RX-804  (typeID 27175)" in _diag365 and "= 4.0" in _diag365)
+    check("aa365 Diagnose zeigt Veldspar mit Skill-Attribut",
+          "[Veldspar  (typeID 1230)]" in _diag365 and "= 12180" in _diag365)
+    check("aa365 Diagnose bricht bei fehlenden Tabellen nicht ab",
+          "(nichts gefunden)" in _diag365)
+finally:
+    _I365._db_path = _alt_db365
+    _I365.config.app_data_dir = _alt_app365
+eq("aa365 ohne Datenbank sind alle drei Leser leer (kein Absturz)",
+   (lambda: (setattr(_I365, "_db_path", lambda: os.path.join(_tmp365, "gibtsnicht.db")),
+             (_I365.reprocess_skill_ids(), _I365.reprocess_erz_skill(),
+              _I365.reprocess_implants()),
+             setattr(_I365, "_db_path", _alt_db365))[1])(), ({}, {}, {}))
+# 5. DER ABRUF RAET KEINE IDs: Gruppe ueber den Namen, Attribut ueber den
+#    Namen, Implantat-Attribut MIT Namen gespeichert; leer loescht nichts.
+_ind365 = open(os.path.join(_here222, "eve_trader", "industry.py"),
+               encoding="utf-8").read()
+check("aa365 Load recipes findet die Skill-Gruppe ueber den Namen",
+      "\"SELECT groupID FROM invTypes WHERE typeName='Reprocessing'\").fetchone()" in _ind365)
+check("aa365 ... und das Erz->Skill-Attribut ueber den Namen",
+      "\"WHERE attributeName='reprocessingSkillType'\").fetchone()" in _ind365)
+check("aa365 ... und speichert beim Implantat den Attributnamen",
+      "\"SELECT t.typeID, t.typeName, at.attributeName, ta.valueInt, ta.valueFloat \"" in _ind365)
+check("aa365 eine SDE ohne die Daten loescht keinen vollen Stand",
+      "        if erz_skill_records:\n            c.execute(\"DELETE FROM reprocess_erz_skill\")" in _ind365
+      and "        if repro_imp_records:\n            c.execute(\"DELETE FROM reprocess_implant\")" in _ind365)
+check("aa365 die Diagnose wird beim Load geschrieben",
+      "            _write_reprocess_diagnostic(src)" in _ind365)
+
+# ---------------------------------------------------------------- (aa366)
+# WEG B: COMPRESSED ORE STATT MINERALE (1.0.9, Nutzer 18.09.2026 "also
+# los"). Reine Logik in eve_trader/reprocess.py: Struktur-Basis aus Typ +
+# Rig + Sicherheit, Kandidaten-Erze, gieriger Einkaufsplaner. Alles ohne
+# Oberflaeche pruefbar. Regel 3: Portionen AUF, Ausgang AB, Nebenprodukte
+# nur soweit gebraucht.
+import eve_trader.reprocess as _R366                                # noqa: E402
+_sde366 = {"bonus": {"Athanor": 2.0, "Tatara": 5.5},
+           "rig": {46639: {"name": "Standup L-Set Reprocessing Monitor I", "mult": 0.51,
+                           "hi": 1.0, "low": 1.06, "null": 1.12},
+                   46640: {"name": "Standup L-Set Reprocessing Monitor II", "mult": 0.53,
+                           "hi": 1.0, "low": 1.06, "null": 1.12}}}
+# 1. STRUKTUR-BASIS - die gemessene Tatara als Anker.
+_b366, _i366 = _R366.struktur_basis({"type": "tatara", "rigs": ["sde:46639", ""],
+                                     "security": 2.1}, _sde366)
+eq("aa366 Tatara + Monitor I in Null = 0.602616 (die Messung)", round(_b366, 6), 0.602616)
+eq("aa366 ... und die Info nennt Rig und Sicherheit",
+   (_i366["rig"], _i366["sec"], _i366["bonus"]),
+   ("Standup L-Set Reprocessing Monitor I", "null", 5.5))
+eq("aa366 dieselbe Tatara in Lowsec nimmt 1.06",
+   round(_R366.struktur_basis({"type": "tatara", "rigs": ["sde:46639"], "security": 1.9},
+                              _sde366)[0], 6), round(0.51 * 1.06 * 1.055, 6))
+eq("aa366 Athanor ohne Rig = 0.51",
+   round(_R366.struktur_basis({"type": "athanor", "rigs": []}, _sde366)[0], 6), 0.51)
+eq("aa366 zwei Rigs: das bessere zaehlt",
+   round(_R366.struktur_basis({"type": "athanor", "rigs": ["sde:46639", "sde:46640"],
+                               "security": 1.0}, _sde366)[0], 6), round(0.53 * 1.02, 6))
+eq("aa366 NPC-Station = 0.50", _R366.struktur_basis({"type": "npc"}, _sde366)[0], 0.5)
+eq("aa366 Refinery ohne SDE-Eintrag -> None, kein geratener Bonus",
+   _R366.struktur_basis({"type": "athanor"}, {})[0], None)
+eq("aa366 ... mit Grund", _R366.struktur_basis({"type": "athanor"}, {})[1].get("grund"), "sde")
+eq("aa366 unbekanntes Rig wird ignoriert (kein Absturz)",
+   round(_R366.struktur_basis({"type": "athanor", "rigs": ["sde:999", "x", None]},
+                              _sde366)[0], 6), 0.51)
+eq("aa366 Engineering Complex: 0.50 ohne Bonus (nicht gemessen)",
+   _R366.struktur_basis({"type": "raitaru", "rigs": ["sde:46639"], "security": 2.1},
+                        _sde366)[0], round(0.51 * 1.12, 6))
+eq("aa366 Sicherheit: 1.0 hi / 1.9 low / 2.1 null / Muell hi",
+   tuple(_R366.sicherheits_schluessel(v) for v in (1.0, 1.9, 2.1, "x", None)),
+   ("hi", "low", "null", "hi", "hi"))
+# 2. KANDIDATEN - nur komprimierte Erze mit Preis und Ausgang.
+_karte366 = {62516: {"portion": 100, "out": {34: 400}},
+             1230: {"portion": 100, "out": {34: 400}},
+             62568: {"portion": 100, "out": {35: 3200, 36: 1200, 40: 120}},
+             90000: {"portion": 100, "out": {34: 1}},
+             90001: {"portion": 100, "out": {34: 1}},
+             90002: {"portion": 100, "out": {34: 1}},
+             90003: {"portion": 100, "out": {}}}
+_names366 = {62516: "Compressed Veldspar", 1230: "Veldspar", 62568: "Compressed Arkonor",
+             90000: "Compressed Prismaticite", 90001: "Batch Compressed Veldspar IV-Grade",
+             90002: "Compressed Fakeore", 90003: "Compressed Leerore"}
+_cats366 = {62516: (25, 462, 0), 1230: (25, 462, 0), 62568: (25, 450, 0),
+            90000: (25, 4915, 0), 90001: (25, 462, 0), 90002: (4, 18, 0), 90003: (25, 462, 0)}
+_preise366 = {62516: 1.0, 62568: 10000.0, 90000: 1.0, 90001: 1.0, 90002: 1.0, 90003: 1.0,
+              34: 5.0, 35: 6.0, 36: 50.0, 40: 3000.0}
+eq("aa366 Kandidaten: nur komprimiert, mit Preis, ohne Prismaticite, Kat. 25, mit Ausgang",
+   sorted(_R366.kandidaten(_karte366, _names366, _cats366, _preise366.get)), [62516, 62568, 90001])
+# "Batch Compressed" zaehlt mit (Nutzer 18.09.2026, Batch Compressed Plagioclase).
+check("aa366 Batch Compressed ist Kandidat",
+      90001 in _R366.kandidaten(_karte366, _names366, _cats366, _preise366.get))
+eq("aa366 Kandidat ohne Preis faellt raus",
+   sorted(_R366.kandidaten(_karte366, _names366, _cats366, {62516: 0.0}.get)), [])
+# 3. DER PLANER.
+_kand366 = _R366.kandidaten(_karte366, _names366, _cats366, _preise366.get)
+_a366 = lambda erz: (0.83854, 7)                                     # noqa: E731
+_res366 = _R366.plane_erz_einkauf({34: 1000, 35: 100, 40: 5}, _preise366.get, _kand366, _a366)
+eq("aa366 Veldspar ersetzt Tritanium: 3 Portionen = 300 Stueck, Pyerite/Megacyte bleiben",
+   _res366["buy"], {35: 100, 40: 5, 62516: 300})
+eq("aa366 ... ein Schritt: 1005 Tritanium, 1000 gedeckt, 5 Ueberschuss, Charakter 7",
+   (_res366["schritte"][0]["ausgang"], _res366["schritte"][0]["deckt"],
+    _res366["schritte"][0]["ueberschuss"], _res366["schritte"][0]["char"]),
+   ({34: 1005}, {34: 1000}, {34: 5}, 7))
+eq("aa366 ... Ersparnis = 1000 x 5 - 300 x 1", _res366["ersparnis"], 4700.0)
+eq("aa366 ... Arkonor fuer 5 Megacyte lohnt nicht (100 x 10000 gegen 15000)",
+   62568 in _res366["buy"], False)
+# Regel 3: 350 Tritanium brauchen 2 Portionen (nicht 1.04 -> 1).
+eq("aa366 Portionen werden AUFgerundet: 350 -> 2 Portionen, 320 Ueberschuss",
+   (_R366.plane_erz_einkauf({34: 350}, _preise366.get, _kand366, _a366)["buy"],
+    _R366.plane_erz_einkauf({34: 350}, _preise366.get, _kand366, _a366)["ueberschuss"]),
+   ({62516: 200}, {34: 320}))
+# Nebenprodukte: nur soweit der Plan sie braucht. Arkonor-Portion = 2439
+# Pyerite + 914 Mexallon + 91 Megacyte bei 0.76231 (die Messung).
+_a_ark366 = lambda erz: (0.76231, 7) if erz == 62568 else (None, None)   # noqa: E731
+_p_ark366 = {62568: 100.0, 35: 6.0, 36: 50.0, 40: 3000.0}
+_r2 = _R366.plane_erz_einkauf({35: 2000, 36: 900, 40: 5}, _p_ark366.get, _kand366, _a_ark366)
+eq("aa366 Arkonor deckt drei Minerale in einem Schritt, Rest ist Ueberschuss",
+   (_r2["buy"], _r2["schritte"][0]["deckt"], _r2["ueberschuss"]),
+   ({62568: 100}, {35: 2000, 36: 900, 40: 5}, {35: 439, 36: 14, 40: 86}))
+eq("aa366 ... Ersparnis rechnet nur den gedeckten Bedarf, nicht den Ueberschuss",
+   _r2["ersparnis"], 2000 * 6.0 + 900 * 50.0 + 5 * 3000.0 - 100 * 100.0)
+# Nur 5 Megacyte gebraucht, Arkonor teuer: die 2439 Pyerite Ueberschuss
+# duerfen NICHT als Ersparnis zaehlen - sonst wuerde getauscht.
+_r3 = _R366.plane_erz_einkauf({40: 5}, {62568: 200.0, 35: 6.0, 36: 50.0, 40: 3000.0}.get,
+                              _kand366, _a_ark366)
+eq("aa366 Ueberschuss zaehlt nicht als Ersparnis: kein Tausch", _r3["buy"], {40: 5})
+eq("aa366 ... und der Eingang bleibt unberuehrt (Kopie)", _r3["schritte"], [])
+# WARUM NICHT: je gekauft gebliebenem Material das beste Erz + Aufpreis.
+_r4 = _R366.plane_erz_einkauf({34: 1000, 40: 5, 37: 10}, _preise366.get, _kand366, _a366)
+eq("aa366 abgelehnt: Megacyte nennt Arkonor mit Aufpreis, Isogen hat kein Erz",
+   (_r4["abgelehnt"][40]["erz"], round(_r4["abgelehnt"][40]["aufpreis_pct"]),
+    _r4["abgelehnt"][37]),
+   (62568, round((100 * 10000.0 - 5 * 3000.0) / (5 * 3000.0) * 100), {"erz": None, "aufpreis_pct": None}))
+eq("aa366 abgelehnt: getauschtes Tritanium steht NICHT drin", 34 in _r4["abgelehnt"], False)
+# Zwei Erze liefern Megacyte: das GUENSTIGERE muss genannt werden, auch wenn
+# es in der Reihenfolge spaeter kommt.
+_kand_ab = {62568: {"portion": 100, "out": {40: 120}}, 62569: {"portion": 100, "out": {40: 120}}}
+_r5 = _R366.plane_erz_einkauf({40: 5}, {62568: 10000.0, 62569: 5000.0, 40: 3000.0}.get,
+                              _kand_ab, lambda e: (0.76231, 7))
+eq("aa366 abgelehnt nennt das guenstigste Erz (5000 vor 10000)", _r5["abgelehnt"][40]["erz"], 62569)
+eq("aa366 ohne Ausbeute (Struktur unbekannt) kein Tausch",
+   _R366.plane_erz_einkauf({34: 1000}, _preise366.get, _kand366,
+                           lambda e: (None, None))["buy"], {34: 1000})
+eq("aa366 ohne Mineralpreis kein Vergleich, kein Tausch",
+   _R366.plane_erz_einkauf({34: 1000}, {62516: 1.0}.get, _kand366, _a366)["buy"], {34: 1000})
+eq("aa366 leerer Einkauf -> leer, kein Absturz",
+   _R366.plane_erz_einkauf({}, _preise366.get, _kand366, _a366)["buy"], {})
+# Gleichstand zweier Erze: kleinere ID, damit es reproduzierbar bleibt.
+_kand_tie = {62516: {"portion": 100, "out": {34: 400}}, 62517: {"portion": 100, "out": {34: 400}}}
+eq("aa366 Gleichstand -> kleinere Erz-ID",
+   list(_R366.plane_erz_einkauf({34: 100}, {62516: 1.0, 62517: 1.0, 34: 5.0}.get,
+                                _kand_tie, _a366)["buy"]), [62516])
+# 4. AUSBEUTE-FUNKTION: bester Charakter je Erz.
+_ids366 = {"Reprocessing": 3385, "Reprocessing Efficiency": 3389}
+_f366 = _R366.ausbeute_funktion(0.602616, {"1": {3385: 5, 3389: 5, 60377: 5},
+                                           "2": {3385: 5, 3389: 5}}, {}, _ids366,
+                                {62516: 60377, 62568: 60380})
+eq("aa366 Veldspar: Charakter 1 (Simple Ore Processing 5) -> 0.83854",
+   (round(_f366(62516)[0], 5), _f366(62516)[1]), (0.83854, 1))
+eq("aa366 Arkonor: beide gleich (Complex 0) -> kleinere ID, 0.76231",
+   (round(_f366(62568)[0], 5), _f366(62568)[1]), (0.76231, 1))
+eq("aa366 ohne Struktur-Basis -> (None, None)",
+   _R366.ausbeute_funktion(None, {"1": {3385: 5}}, {}, _ids366, {})(62516), (None, None))
+# EIN CHARAKTER FUER ALLES (Nutzer 19.09.2026: "man reprocesst mit einem
+# Charakter alles auf einmal ... der mit den besten Skills/Implantaten").
+# Charakter 1: Simple 5 (Veldspar), Charakter 2: Complex 5 (Arkonor).
+_sk366e = {"1": {3385: 5, 3389: 5, 60377: 5}, "2": {3385: 5, 3389: 5, 60380: 5}}
+_es366e = {62516: 60377, 62568: 60380}
+_st366e = [{"erz": 62516, "menge": 100}, {"erz": 62568, "menge": 100}]
+eq("aa366 ein Charakter: bei gleicher Menge entscheidet der Einkaufswert - Arkonor teurer -> 2",
+   _R366.ein_charakter(_st366e, {62516: 1.0, 62568: 50.0}.get, _sk366e, {}, _ids366, _es366e), 2)
+eq("aa366 ... Veldspar teurer -> 1",
+   _R366.ein_charakter(_st366e, {62516: 50.0, 62568: 1.0}.get, _sk366e, {}, _ids366, _es366e), 1)
+eq("aa366 ... Gleichstand -> kleinere ID; ohne Schritte/Skills None",
+   (_R366.ein_charakter(_st366e, {62516: 1.0, 62568: 1.0}.get, _sk366e, {}, _ids366, _es366e),
+    _R366.ein_charakter([], {}.get, _sk366e, {}, _ids366, _es366e),
+    _R366.ein_charakter(_st366e, {}.get, {}, {}, _ids366, _es366e)), (1, None, None))
+_f366e = _R366.ausbeute_funktion(0.602616, _sk366e, {}, _ids366, _es366e, fest=2)
+eq("aa366 ausbeute_funktion(fest=2): auch Veldspar bei Charakter 2 (Simple 0 -> 0.76231)",
+   (_f366e(62516)[1], round(_f366e(62516)[0], 5), _f366e(62568)[1]), (2, 0.76231, 2))
+_ra366e = _fn_src("_reprocess_anwenden")
+check("aa366 der Dialog plant bei mehreren Charakteren noch einmal mit dem einen",
+      "reprocess.ein_charakter(" in _ra366e and "fest=_einer" in _ra366e)
+# 5. SDE-ABRUF fuer Struktur-Bonus und Rig-Werte: ueber Attributnamen, mit
+#    Leser, ohne Loeschen bei leerer SDE.
+_ind366 = open(os.path.join(_here222, "eve_trader", "industry.py"), encoding="utf-8").read()
+check("aa366 Load recipes findet den Struktur-Bonus ueber den Attributnamen",
+      '_attr_id("strRefiningYieldBonus")' in _ind366)
+check("aa366 ... und die Rig-Werte samt Sicherheits-Faktoren",
+      '_attr_id("refiningYieldMultiplier"), _attr_id("hiSecModifier"),' in _ind366)
+check("aa366 leere SDE loescht keinen vollen Stand",
+      '        if repro_rig_records:\n            c.execute("DELETE FROM reprocess_rig")' in _ind366)
+_alt_db366 = _I364._db_path
+try:
+    _I364._db_path = lambda: os.path.join(_tmp365, "industry366.db")
+    _I364.init_db()
+    with _I364._conn() as _c366:
+        _c366.execute("INSERT INTO reprocess_struktur VALUES (35836, 'Tatara', 5.5)")
+        _c366.execute("INSERT INTO reprocess_rig VALUES (46639, 'Standup L-Set Reprocessing "
+                      "Monitor I', 0.51, 1.0, 1.06, 1.12)")
+    _sde_r366 = _I364.reprocess_struktur_sde()
+    eq("aa366 reprocess_struktur_sde liest Bonus nach Name und Rig nach ID",
+       (_sde_r366["bonus"], _sde_r366["rig"][46639]["null"]), ({"Tatara": 5.5}, 1.12))
+finally:
+    _I364._db_path = _alt_db366
+eq("aa366 ohne Datenbank leer (kein Absturz)",
+   (lambda: (setattr(_I364, "_db_path", lambda: os.path.join(_tmp365, "nix366.db")),
+             _I364.reprocess_struktur_sde(),
+             setattr(_I364, "_db_path", _alt_db366))[1])(), {"bonus": {}, "rig": {}})
+# 5b. FORTSCHRITT: Stufe 0 abgehakt oder nicht (Nutzer-Befund 18.09.2026:
+#     "Einkaufsliste ohne Compressed Ore" - weder Erz noch gedeckte
+#     Minerale standen drin). Nicht abgehakt: Erz ist Bedarf, gedeckte
+#     Minerale nicht. Abgehakt: umgekehrt.
+_sch366 = [{"erz": 62516, "menge": 300, "portionen": 3, "portion": 100,
+            "deckt": {34: 1000}, "ausgang": {34: 1005}, "ueberschuss": {34: 5}}]
+eq("aa366 schritt_key", _R366.schritt_key(_sch366[0]), "repro|62516")
+eq("aa366 Restbedarf nicht abgehakt: Erz rein, gedecktes Mineral raus",
+   _R366.rest_anpassen({34: 1000, 35: 5}, _sch366, set()), {35: 5, 62516: 300})
+eq("aa366 Restbedarf teils gedeckt: Rest bleibt",
+   _R366.rest_anpassen({34: 1200}, _sch366, set()), {34: 200, 62516: 300})
+eq("aa366 Restbedarf abgehakt: unveraendert, kein Erz",
+   _R366.rest_anpassen({34: 1000, 35: 5}, _sch366, {"repro|62516"}), {34: 1000, 35: 5})
+eq("aa366 Fehlbedarf nicht abgehakt: Mineral-Fehlmenge gutgeschrieben, Erz fehlt (300 - 100 im Lager)",
+   _R366.fehl_anpassen([(34, 1000, 1000, 0, 0), (35, 5, 5, 0, 0)], _sch366, set(), {62516: 100}),
+   [(62516, 200, 300, 100, 0), (35, 5, 5, 0, 0)])
+eq("aa366 Fehlbedarf: Erz komplett im Lager -> keine Erz-Zeile",
+   _R366.fehl_anpassen([(34, 1000, 1000, 0, 0)], _sch366, set(), {62516: 300}), [])
+eq("aa366 Fehlbedarf abgehakt: kein Kredit, kein Erz",
+   _R366.fehl_anpassen([(34, 1000, 1000, 0, 0)], _sch366, {"repro|62516"}, {}),
+   [(34, 1000, 1000, 0, 0)])
+eq("aa366 Fehlbedarf: Kredit nur bis zur Fehlmenge (1200 fehlen, 1000 gedeckt -> 200)",
+   _R366.fehl_anpassen([(34, 1200, 1200, 0, 0)], _sch366, set(), {62516: 300}),
+   [(34, 200, 1200, 0, 0)])
+_mwf366 = open(os.path.join(_here222, "eve_trader", "ui", "mw_bauplan_fenster.py"),
+               encoding="utf-8").read()
+check("aa366 die Vollkauf-Liste zieht gedeckte Minerale wie Gebautes ab",
+      '                return max(0, int(r.get("total", 0) or 0)\n'
+      '                           - int(r.get("built", 0) or 0)\n'
+      '                           - int(r.get("reprocessed", 0) or 0))' in _mwf366)
+# 6. DER ERST-AUFBAU (Worker in main_window, laeuft in keiner Suite mit
+#    Oberflaeche): Schalter -> opts, Erz-Namen VOR der Aufloesung, Tausch
+#    nur ohne eingefrorenen Plan. Quelltext-Waechter, weil der Worker an
+#    ESI haengt.
+_mw366 = open(os.path.join(_here222, "eve_trader", "ui", "main_window.py"),
+              encoding="utf-8").read()
+check("aa366 der Erst-Aufbau setzt opts['reprocess'] nur mit Schalter",
+      '            _ro = self._reprocess_opts()\n            if _ro:\n'
+      '                opts["reprocess"] = _ro\n' in _mw366)
+check("aa366 ... loest die Erz-Namen VOR kandidaten() auf",
+      '                ids |= self._reprocess_erz_ids(pm.get)\n'
+      '            names = esi.resolve_names(list(ids))\n' in _mw366)
+check("aa366 ... und wendet den Tausch nie auf einen eingefrorenen Plan an",
+      '            if opts.get("reprocess") and _frozen_plan is None:\n'
+      '                plan = self._reprocess_anwenden(plan, pm.get, names, opts["reprocess"],\n'
+      '                                                kredit_pfn=pm.get)'
+      in _mw366)
+
+# ---------------------------------------------------------------- (aa367)
+# WEG A: UNREFINED-REAKTIONEN (1.0.9, Nutzer 19.09.2026 "erraten und
+# einfuegen" -> "ja"). Reine Logik in eve_trader/reprocess.py: Kandidaten
+# aus der FORM der SDE-Daten (Formel mit 1 Stueck je Run, Reprocessing-
+# Ausgang mit genau EINEM Nicht-Input), Ausbeute je Run abgerundet,
+# Wahl nur wenn strikt guenstiger als normale Reaktion UND Kauf, Rezept-
+# Kopie, Ruecklaeufer-Gutschrift. Ausbeute 0.602616 (gemessene Tatara),
+# Skill-Faktor ohne Erz-Skill (ANNAHME, Vorschau steht aus).
+import types as _ty367
+import eve_trader.reprocess as _R367                                # noqa: E402
+import eve_trader.industry as I                                     # noqa: E402
+_FUEL, _A, _B, _C, _X, _U, _V, _W, _END = 4051, 301, 302, 303, 200, 32999, 32998, 32997, 100
+_rec367 = _ty367.SimpleNamespace(
+    product_to_bp={_END: (6000, I.MANUFACTURING, 1),
+                   _X: (5000, I.REACTION, 200),
+                   _U: (5001, I.REACTION, 1),
+                   _V: (4999, I.REACTION, 1),      # zwei Fremd-Ausgaenge -> kein Kandidat
+                                                   # (kleinere Formel-ID: gewaenne bei
+                                                   # laxer Form-Pruefung den Gleichstand)
+                   _W: (5003, I.REACTION, 1)},     # Portion 2 -> kein Kandidat
+    bp_materials={(6000, I.MANUFACTURING): [(_X, 10)],
+                  (5000, I.REACTION): [(_FUEL, 5), (_A, 100), (_B, 100)],
+                  (5001, I.REACTION): [(_FUEL, 5), (_A, 100), (_C, 100)],
+                  (4999, I.REACTION): [(_FUEL, 5), (_A, 100), (_C, 100)],
+                  (5003, I.REACTION): [(_FUEL, 5), (_A, 100), (_C, 100)]},
+    activity_time={(6000, I.MANUFACTURING): 60, (5000, I.REACTION): 10800,
+                   (5001, I.REACTION): 21600, (4999, I.REACTION): 21600,
+                   (5003, I.REACTION): 21600},
+    activity_max_runs={}, reaction_products={_X, _U, _V, _W}, invention_for_bpc={})
+_karte367 = {_U: {"portion": 1, "out": {_X: 36, _A: 164}},
+             _V: {"portion": 1, "out": {_X: 36, 305: 10}},
+             _W: {"portion": 2, "out": {_X: 36}}}
+# 1. KANDIDATEN aus der Form.
+_k367 = _R367.unrefined_kandidaten(_rec367, _karte367)
+eq("aa367 genau ein Kandidat: X ueber U (V hat zwei Fremd-Ausgaenge, W Portion 2)",
+   sorted(_k367), [_X])
+eq("aa367 ... mit Formel, Inputs, Ausgang je Run und Ruecklaeufer",
+   (_k367[_X]["u"], _k367[_X]["bp"], _k367[_X]["mats"], _k367[_X]["je_run"],
+    _k367[_X]["zurueck"]),
+   (_U, 5001, [(_FUEL, 5), (_A, 100), (_C, 100)], {_X: 36, _A: 164}, {_A: 164}))
+eq("aa367 ohne Reprocessing-Karte kein Kandidat", _R367.unrefined_kandidaten(_rec367, {}), {})
+# 2. AUSBEUTE je Run: floor(36 x 0.602616) = 21, floor(164 x 0.602616) = 98.
+_k367a = _R367.unrefined_ausbeute(_k367, lambda u: (0.602616, 7))
+eq("aa367 21 X je Run, 98 A zurueck, Charakter 7",
+   (_k367a[_X]["out_je_run"], _k367a[_X]["zurueck_je_run"], _k367a[_X]["char"]),
+   (21, {_A: 98}, 7))
+eq("aa367 ohne Ausbeute (keine Skills) kein Kandidat",
+   _R367.unrefined_ausbeute(_k367, lambda u: (None, None)), {})
+eq("aa367 Ausbeute so klein, dass 0 X je Run bleiben -> kein Kandidat",
+   _R367.unrefined_ausbeute(_k367, lambda u: (0.02, 7)), {})
+# 2b. SCRAPMETAL-PFAD (gemessen 19.09.2026, Unrefined Titanium Chromide,
+#     Vorschau: 50 % Basis x1.06 Scrapmetal Processing = 53,0 %; 36 -> 19,
+#     164 -> 86). Reprocessing/Efficiency 5/5 des Nutzers, Rig und Tatara-
+#     Bonus fehlten in der Vorschau - der Pfad kennt nur den einen Skill.
+eq("aa367 Scrapmetal-Faktor: Stufe 3 = 1.06, Stufe 0 = 1.0, Muell = None",
+   (I.scrap_char_faktor(3), I.scrap_char_faktor(0), I.scrap_char_faktor(7)), (1.06, 1.0, None))
+eq("aa367 Scrapmetal-Ausbeute 53,0 % - unabhaengig von Struktur und Rig",
+   round(I.scrap_ausbeute(1.06), 4), 0.53)
+eq("aa367 die Messung: 36 -> 19 und 164 -> 86 bei 53,0 %",
+   I.reprocess_ergebnis({_X: 36, _A: 164}, 1, 1, I.scrap_ausbeute(1.06)), {_X: 19, _A: 86})
+_sid367 = {"Reprocessing": 3385, "Reprocessing Efficiency": 3389, "Scrapmetal Processing": 12196}
+eq("aa367 bester Scrap-Charakter: hoechste Stufe, Gleichstand kleinere ID, ohne Skill Stufe 0",
+   (I.bester_scrap_char({"1": {"12196": 3}, "2": {"12196": 4}, "3": {"3385": 5}}, _sid367),
+    I.bester_scrap_char({"5": {"12196": 2}, "4": {"12196": 2}}, _sid367),
+    I.bester_scrap_char({"9": {"3385": 5}}, _sid367),
+    I.bester_scrap_char({"1": {"12196": 3}}, {"Reprocessing": 3385})),
+   ((2, 1.08), (4, 1.04), (9, 1.0), (None, None)))
+_saf367 = _R367.scrap_ausbeute_funktion({"1": {"12196": 3}}, _sid367)
+eq("aa367 scrap_ausbeute_funktion: (0.53, Charakter 1) fuer jedes Item",
+   (tuple(round(x, 4) if isinstance(x, float) else x for x in _saf367(_U)), _saf367(999)),
+   ((0.53, 1), (0.53, 1)))
+eq("aa367 ... ohne Skills (None, None)",
+   _R367.scrap_ausbeute_funktion({}, _sid367)(_U), (None, None))
+eq("aa367 Unrefined-Ausbeute ueber den Scrap-Pfad: 19 X + 86 A je Run",
+   (_R367.unrefined_ausbeute(_k367, _saf367)[_X]["out_je_run"],
+    _R367.unrefined_ausbeute(_k367, _saf367)[_X]["zurueck_je_run"]), (19, {_A: 86}))
+# 3. WAHL: Preise fuel 100, A 1'000, B 20'000, C 50, X 12'000.
+#    normal je X = (500 + 100'000 + 2'000'000) / 200 = 10'502.5; Kauf 12'000
+#    unrefined je X = (500 + 100'000 + 5'000 - 98 x 1'000) / 21 = 357.14...
+_pr367 = {_FUEL: 100.0, _A: 1000.0, _B: 20000.0, _C: 50.0, _X: 12000.0, _END: 99999.0}
+_o367 = {"me": 0, "me_reaction": 0, "job_pct": 0, "build_reactions": True}
+_w367 = _R367.unrefined_wahl(_k367a, {_END, _X, _A}, _pr367.get, _rec367, _o367)
+_wx367 = _w367["wahl"].get(_X) or {}
+eq("aa367 Unrefined gewinnt: 357.14 je X gegen 10'502.5 normal",
+   (sorted(_w367["wahl"]), round(_wx367.get("per_unit") or 0, 2),
+    round(_wx367.get("vergleich") or 0, 2), _w367["abgelehnt"]),
+   ([_X], 357.14, 10502.5, {}))
+eq("aa367 ... Gutschrift je Run 98 x 1'000", _wx367.get("kredit_je_run"), 98000.0)
+# Mit teurem C (5'000) verliert Unrefined: (105'500 + 495'000 - 98'000) / 21 = 23'928.57
+_pr367b = dict(_pr367); _pr367b[_C] = 5000.0
+_w367b = _R367.unrefined_wahl(_k367a, {_X}, _pr367b.get, _rec367, _o367)
+eq("aa367 teurer Input: abgelehnt mit Aufpreis +128 %",
+   (_w367b["wahl"], sorted(_w367b["abgelehnt"]),
+    round((_w367b["abgelehnt"].get(_X) or {}).get("aufpreis_pct") or 0)),
+   ({}, [_X], 128))
+# Der Ruecklaeufer wird zum KREDIT-Preis bewertet (reiner Hub-Preis), nicht
+# zum Entscheidungspreis (z. B. mit Fracht).
+_w367c = _R367.unrefined_wahl(_k367a, {_X}, _pr367.get, _rec367, _o367,
+                              kredit_pfn=lambda t: 0.0)
+eq("aa367 ohne Gutschrift (Kredit-Preis 0) liegt Unrefined bei 5'023.81 je X",
+   round((_w367c["wahl"].get(_X) or {}).get("per_unit") or 0, 2), round(105500 / 21, 2))
+# X nicht in der Kette -> keine Wahl, auch wenn Kandidat.
+eq("aa367 X ausserhalb der Kette wird nicht gewaehlt",
+   _R367.unrefined_wahl(_k367a, {_END}, _pr367.get, _rec367, _o367)["wahl"], {})
+# Fehlt ein Input-Preis, kein Tausch (lieber kein Weg als ein geratener).
+_pr367d = dict(_pr367); _pr367d.pop(_C)
+eq("aa367 Input ohne Preis -> kein Tausch",
+   _R367.unrefined_wahl(_k367a, {_X}, _pr367d.get, _rec367, _o367)["wahl"], {})
+# NEVER_BUILD / BLACKLIST (Nutzer-Befund 19.09.2026: Plan mit Unrefined
+# TEURER als ohne): ein Input, den der Plan nicht bauen darf, zaehlt zum
+# KAUFpreis - build_cost() prueft never_build nur fuer Unter-Materialien.
+# Hier: C waere fuer 0.01 je Stueck baubar (100 aus 1 x Material 999 zu
+# 1 ISK), darf aber nicht -> 50 ISK Kauf, wie in der Einkaufsliste.
+_rec367c = _ty367.SimpleNamespace(
+    product_to_bp={**_rec367.product_to_bp, _C: (7000, I.MANUFACTURING, 100)},
+    bp_materials={**_rec367.bp_materials, (7000, I.MANUFACTURING): [(999, 1)]},
+    activity_time=_rec367.activity_time, activity_max_runs={},
+    reaction_products=_rec367.reaction_products, invention_for_bpc={})
+_pr367c = dict(_pr367); _pr367c[999] = 1.0
+_w367e = _R367.unrefined_wahl(_k367a, {_X}, _pr367c.get, _rec367c, _o367)
+_w367f = _R367.unrefined_wahl(_k367a, {_X}, _pr367c.get, _rec367c,
+                              dict(_o367, never_build={_C}))
+_w367g = _R367.unrefined_wahl(_k367a, {_X}, _pr367c.get, _rec367c,
+                              dict(_o367, excluded={_C}))
+eq("aa367 baubarer Input zaehlt zum Baupreis: (500 + 100'000 + 1 - 98'000) / 21",
+   round(_w367e["wahl"][_X]["per_unit"], 2), round((500 + 100000 + 1 - 98000) / 21, 2))
+eq("aa367 ... in never_build zaehlt er zum Kaufpreis (357.14 wie ohne Rezept)",
+   (round(_w367f["wahl"][_X]["per_unit"], 2), round(_w367g["wahl"][_X]["per_unit"], 2)),
+   (357.14, 357.14))
+eq("aa367 ... und die Diagnose nennt die Quelle je Input",
+   ([q for _m, _q, _e, q in _w367e["detail"][_X]["inputs"]],
+    [q for _m, _q, _e, q in _w367f["detail"][_X]["inputs"]]),
+   (["kauf", "kauf", "bau"], ["kauf", "kauf", "kauf"]))
+_dt367 = _R367.unrefined_diagnose_text(_w367f, {_X: "Testmat", _U: "Unref", _C: "Gamma",
+                                                 _A: "Alpha", _FUEL: "Fuel"})
+check("aa367 der Diagnose-Text nennt Wahl, Inputs mit Quelle und den Vergleichswert",
+      "Testmat  ->  GEWAEHLT" in _dt367 and "Gamma" in _dt367 and "(kauf)" in _dt367
+      and "10'502.50" in _dt367 and "357.14" in _dt367)
+# 4. REZEPT-KOPIE: X laeuft ueber 5001 mit 21 je Run, Original unberuehrt.
+_rec367u = _R367.rezepte_mit_unrefined(_rec367, _w367["wahl"])
+eq("aa367 Kopie: X -> (5001, REACTION, 21)", _rec367u.product_to_bp[_X], (5001, I.REACTION, 21))
+eq("aa367 ... Original unveraendert", _rec367.product_to_bp[_X], (5000, I.REACTION, 200))
+check("aa367 ... Materialien und Zeiten sind dieselben Objekte (nichts kopiert, nichts verloren)",
+      _rec367u.bp_materials is _rec367.bp_materials
+      and _rec367u.activity_time is _rec367.activity_time)
+check("aa367 ohne Wahl kommt das Original selbst zurueck",
+      _R367.rezepte_mit_unrefined(_rec367, {}) is _rec367)
+# 5. DER PLAN mit der Kopie: 10 Endprodukte -> 100 X -> 5 Runs (105 X, 5 Ueberschuss),
+#    Inputs der UNREFINED-Formel: 25 Fuel, 500 A, 500 C - kein B.
+_plan367 = I.production_plan(_END, 10, _pr367.get, _rec367u, _o367)
+eq("aa367 Plan: 5 Runs X ueber die Unrefined-Formel, Ueberschuss 5",
+   (_plan367["build_runs"].get(_X), _plan367["surplus"].get(_X)), (5, 5))
+eq("aa367 ... Einkauf sind die Inputs der Unrefined-Formel (kein B)",
+   {k: int(v) for k, v in _plan367["buy"].items()}, {_FUEL: 25, _A: 500, _C: 500})
+# GUTSCHRIFT IN build_cost (Nutzer-Befund 19.09.2026, Ishtar x10: Thulium
+# Hafnite wurde GEKAUFT, obwohl die Wahl es unrefined bauen wollte). Die
+# Kopie fuehrt X ueber die Formel; ohne Gutschrift kostet das
+# (500 + 100'000 + 5'000) / 21 = 5'023.81 je X, mit 98'000 zurueck 357.14.
+# Faellt der Kaufpreis dazwischen (z. B. 3'000), muss der Plan trotzdem
+# BAUEN - sonst kauft er, was die Wahl gerade als guenstiger befunden hat.
+eq("aa367 build_cost ueber die Kopie rechnet die Gutschrift ein: 357.14 je X",
+   round(I.build_cost(_X, _pr367.get, _rec367u, _o367, {}), 2), 357.14)
+eq("aa367 ... ohne Kopie (Basis) unveraendert die normale Formel: 10'502.5",
+   round(I.build_cost(_X, _pr367.get, _rec367, _o367, {}), 2), 10502.5)
+_pr367k = dict(_pr367); _pr367k[_X] = 3000.0
+_plan367k = I.production_plan(_END, 10, _pr367k.get, _rec367u, _o367)
+eq("aa367 Kaufpreis 3'000 (unter 5'023 ohne, ueber 357 mit Gutschrift): Plan BAUT X",
+   (_plan367k["build_runs"].get(_X), _plan367k["buy"].get(_X)), (5, None))
+# 6. ANWENDEN: Schritt (gebaut, nicht gekauft), Ruecklaeufer 5 x 98 = 490 A,
+#    Gutschrift 490'000, total_cost sinkt, mat_cost NICHT, Wahl reist mit.
+_tc367 = float(_plan367["total_cost"]); _mc367 = float(_plan367["mat_cost"])
+_plan367a = _R367.unrefined_anwenden(_plan367, _w367["wahl"], _pr367.get)
+_st367 = (_plan367a.get("reprocess") or {}).get("schritte") or []
+_rp367a = _plan367a.get("reprocess") or {}
+eq("aa367 ein Unrefined-Schritt: 5 x U -> deckt 100 X, 490 A zurueck, Gutschrift 490'000",
+   [(s["art"], s["built"], s["erz"], s["menge"], s["deckt"], s["ueberschuss"], s["kredit"],
+     s["char"]) for s in _st367],
+   [("unrefined", True, _U, 5, {_X: 100}, {_A: 490}, 490000.0, 7)])
+eq("aa367 ... total_cost minus Gutschrift, mat_cost unveraendert, Wert genannt",
+   (round(_tc367 - float(_plan367a["total_cost"])), float(_plan367a["mat_cost"]) == _mc367,
+    _rp367a.get("ruecklaeufer_wert")),
+   (490000, True, 490000.0))
+eq("aa367 ... der Ruecklaeufer steht im Ueberschuss des Plans", _plan367a["surplus"].get(_A), 490)
+eq("aa367 ... und die Wahl reist im Plan mit (fuers Einfrieren)",
+   sorted(_plan367a.get("unrefined") or {}), [_X])
+check("aa367 der Eingangs-Plan bleibt unberuehrt",
+      "reprocess" not in _plan367 and _plan367["total_cost"] == _tc367)
+eq("aa367 ohne gebautes X kein Schritt",
+   _R367.unrefined_anwenden(dict(_plan367, build_runs={}), _w367["wahl"], _pr367.get).get(
+       "reprocess"), None)
+# 7. FORTSCHRITT: gebaute Schritte aendern Rest- und Fehlbedarf NICHT (das
+#    Unrefined-Produkt wird nie gekauft, X ist kein Kaufbedarf).
+eq("aa367 rest_anpassen ignoriert den gebauten Schritt",
+   _R367.rest_anpassen({_A: 500}, _st367, set()), {_A: 500})
+eq("aa367 fehl_anpassen ignoriert den gebauten Schritt",
+   _R367.fehl_anpassen([(_A, 500, 500, 0, 0)], _st367, set(), {}), [(_A, 500, 500, 0, 0)])
+eq("aa367 Schluessel des Schritts: repro|<U>",
+   _R367.schritt_key(_st367[0] if _st367 else {}), f"repro|{_U}")
+
+
+# ---------------------------------------------------------------- (aa368)
+# RUNS JE JOB DECKELN (Nutzer 19.09.2026, Einherji II, eingefrorener Plan
+# ueber 330 Stueck mit erfundenen 10-Run-BPCs): "Der Runplaner denkt ich
+# kann 17 Stueck mit einem Blueprint bauen, das geht aber gar nicht, so wie
+# wir den Blueprint erforscht haben gibts maximal 10 runs. Das muesste der
+# Bauplan wissen." NACHGESTELLT (Regel 5): 170 Runs, ein Charakter mit 10
+# Slots, 33 Kopien -> ohne Deckel 10 Jobs a 17 Runs.
+_ch368 = [{"id": 1, "name": "Peanut Motor", "mfg_slots": 10, "reaction_slots": 10}]
+_jobs368 = [{"tid": 100, "name": "Einherji II", "runs": 170, "base_time": 3600.0,
+             "activity": _I.MANUFACTURING, "is_end": True}]
+_ohne368 = _I.schedule_build(_jobs368, _ch368, end_bp=33)["assignments"][0]
+eq("aa368 der Fehlerfall ohne Deckel: 10 Jobs a 17 Runs (so sah es der Nutzer)",
+   (_ohne368["runs"], _ohne368["jobs"], "max_runs" in _ohne368), (170, 10, False))
+# GANZE KOPIEN (Nutzer 19.09.2026: "moeglichst alle Blueprints am Ende
+# verbraucht haben, nicht dass Blueprints mit angefangenen Runs stehen
+# bleiben"): 170 Runs = 17 Kopien a 10, auf 10 Slots -> 7 Slots fahren zwei
+# Kopien nacheinander (20 Runs), 3 Slots eine. Keine halbe Kopie.
+_res368 = _I.schedule_build(_jobs368, _ch368, end_bp=33, per_item_runs_cap={100: 10})
+_mit368 = _res368["assignments"][0]
+eq("aa368 mit Deckel 10: 17 Jobs a genau 10 Runs, Summe bleibt 170",
+   (_mit368["runs"], _mit368["jobs"], _mit368["parts"]), (170, 17, [10] * 17))
+eq("aa368 die Zuteilung traegt den Deckel", _mit368.get("max_runs"), 10)
+eq("aa368 Slot-Zeit = zwei volle Kopien (20 Runs), nicht 17",
+   (_mit368["seconds"], _res368["total_seconds"]), (20 * 3600.0, 20 * 3600.0))
+eq("aa368 zwei Wellen (10 Starts, dann 7 Starts), jede so lang wie eine Kopie",
+   _res368["waves_by_char_stage"].get("1|end"), [36000.0, 36000.0])
+_res368r = _I.schedule_build([dict(_jobs368[0], runs=175)], _ch368, end_bp=33,
+                             per_item_runs_cap={100: 10})["assignments"][0]
+eq("aa368 175 Runs: 17 volle Kopien + eine mit 5 (nur der Rest bleibt angefangen)",
+   (_res368r["runs"], _res368r["jobs"], _res368r["parts"]), (175, 18, [10] * 17 + [5]))
+eq("aa368 unter dem Deckel: 8 Runs = EINE Kopie mit 8 Runs, nicht 8 Kopien a 1",
+   _I.schedule_build([dict(_jobs368[0], runs=8)], _ch368, end_bp=33,
+                     per_item_runs_cap={100: 10})["assignments"][0]["parts"], [8])
+# Ueber mehrere Charaktere: die Kopien werden verteilt, nie die Runs einzeln.
+_ch368b = [{"id": 1, "name": "A", "mfg_slots": 9, "reaction_slots": 9},
+           {"id": 2, "name": "B", "mfg_slots": 10, "reaction_slots": 10},
+           {"id": 3, "name": "C", "mfg_slots": 5, "reaction_slots": 5}]
+_res368b = _I.schedule_build([dict(_jobs368[0], runs=190)], _ch368b, end_bp=33,
+                             per_item_runs_cap={100: 10})
+# ALLE SLOTS ALLER CHARAKTERE (Nutzer 19.09.2026: "ich kann nicht 18
+# Blueprints laufen lassen ... auf andere Charaktere verteilen"): 31 Kopien
+# auf 9+10+5 Slots -> 24 in der ersten Welle, 7 als zweite Welle.
+_res368c = _I.schedule_build([dict(_jobs368[0], runs=310)], _ch368b, end_bp=33,
+                             per_item_runs_cap={100: 10})
+eq("aa368 310 Runs auf 9+10+5 Slots: alle 24 Slots voll, Rest 7 als zweite Welle bei Leziris",
+   ({a["char_name"]: (a["runs"], a["jobs"]) for a in _res368c["assignments"]},
+    _res368c["waves_by_char_stage"]),
+   ({"A": (160, 16), "B": (100, 10), "C": (50, 5)},
+    {"1|end": [36000.0, 36000.0], "2|end": [36000.0], "3|end": [36000.0]}))
+eq("aa368 die Zuteilung traegt die Sekunden je Run (tv) fuer die Wellen-Zeilen",
+   sorted({a["tv"] for a in _res368c["assignments"]}), [3600.0])
+eq("aa368 190 Runs auf 3 Charaktere: 19 Kopien a 10, jede Zuteilung nur volle Kopien",
+   (sum(a["runs"] for a in _res368b["assignments"]),
+    sum(a["jobs"] for a in _res368b["assignments"]),
+    all(set(a["parts"]) == {10} for a in _res368b["assignments"])),
+   (190, 19, True))
+eq("aa368 Deckel 0/None/Muell = kein Deckel",
+   tuple(_I.schedule_build(_jobs368, _ch368, end_bp=33, per_item_runs_cap=_c)[
+       "assignments"][0]["jobs"] for _c in ({100: 0}, {100: None}, {100: "x"}, {})),
+   (10, 10, 10, 10))
+eq("aa368 Deckel auf einem anderen Item aendert nichts",
+   _I.schedule_build(_jobs368, _ch368, end_bp=33, per_item_runs_cap={7: 3})[
+       "assignments"][0]["jobs"], 10)
+# Wellen der Unrefined-Stufe zaehlen mit den REAKTIONS-Slots (sie ist eine
+# Reaktionsstufe, siehe is_reaction) - nicht mit den Fertigungs-Slots.
+_chu368 = [{"id": 1, "name": "A", "mfg_slots": 1, "reaction_slots": 3}]
+_ju368 = [{"tid": 5, "name": "U", "runs": 3, "base_time": 100.0,
+           "activity": _I.REACTION, "is_unrefined": True}]
+eq("aa368 Unrefined-Wellen rechnen mit Reaktions-Slots (3 Jobs = 1 Welle)",
+   len(_I.schedule_build(_ju368, _chu368, react_bp=3)[
+       "waves_by_char_stage"].get("1|unrefined") or []), 1)
+# ANZEIGE-AUFTEILUNG (_bp_teile): dieselbe Rechnung fuer die Blaupausen-
+# Zeile und die Job-Zuordnung (ESI-Jobs passen nur, wenn sie in die
+# Aufteilung passen).
+_bt368 = MW._bp_teile
+eq("aa368 ohne Deckel wie bisher gleichmaessig (divmod)",
+   (_bt368(170, 10), _bt368(7, 3)), ((10, [17] * 10), (3, [3, 2, 2])))
+eq("aa368 Teile des Planers gelten, solange die Summe stimmt",
+   _bt368(175, 18, 10, [10] * 17 + [5]), (18, [10] * 17 + [5]))
+eq("aa368 nach ESI-Fortschritt (Rest 100) neu: 10 volle Kopien, nicht 20 x 5",
+   _bt368(100, 20, 10, [10] * 17), (10, [10] * 10))
+eq("aa368 Rest 23 mit Deckel 10: 10 + 10 + 3 - egal, wie viele Jobs geplant waren",
+   (_bt368(23, 20, 10), _bt368(23, 2, 10)), ((3, [10, 10, 3]), (3, [10, 10, 3])))
+eq("aa368 kein Teil ueber dem Deckel, auch wenn der Planer weniger Jobs nannte",
+   _bt368(170, 1, 10), (17, [10] * 17))
+eq("aa368 Teile, die den Deckel verletzen, werden verworfen",
+   _bt368(20, 1, 10, [20]), (2, [10, 10]))
+eq("aa368 0 Runs -> ein leerer Job; Muell -> wie 1 Job",
+   (_bt368(0, 5, 10), _bt368(5, "x", "y")), ((1, [0]), (1, [5])))
+# Quelle 2: eigene BPCs aus dem ESI-Cache - die KLEINSTE Kopie zaehlt, eine
+# BPO hebt den Deckel auf.
+_br368 = MW._bpc_runs_by_tid
+_own368 = [{"type_id": 900, "quantity": 1, "is_bpo": True, "runs": -1},
+           {"type_id": 900, "quantity": 1, "is_bpo": False, "runs": 5},
+           {"type_id": 901, "quantity": 2, "is_bpo": False, "runs": 10},
+           {"type_id": 901, "quantity": 1, "is_bpo": False, "runs": 4},
+           {"type_id": 902, "quantity": 1, "is_bpo": False, "runs": 0}]
+_p2b368 = {100: (900, 1, 1), 101: (901, 1, 1), 102: (902, 1, 1), 103: (903, 1, 1)}
+eq("aa368 BPC-Runs je Item: 901 -> 4 (kleinste), BPO 900 hebt auf, 0 Runs zaehlt nicht",
+   _br368(_own368, {100: 6, 101: 40, 102: 3, 103: 2}, _p2b368), {101: 4})
+eq("aa368 Item mit 0 Plan-Runs oder ohne Cache: kein Eintrag",
+   (_br368(_own368, {101: 0}, _p2b368), _br368(None, {101: 5}, _p2b368)), ({}, {}))
+
+
+class _RezStub368:
+    """Nur die Attribute, die der Resolver liest (Muster aa149)."""
+    _bpc_runs_by_tid = staticmethod(MW._bpc_runs_by_tid)
+
+    def __init__(self, cache, build_runs, p2b, end=None, amr=None):
+        self._bd_owned_bp_cache = cache
+        self._bd_plan_ref = {"plan": {"build_runs": build_runs}}
+        self._bd_recipes = type("R", (), {"product_to_bp": p2b,
+                                          "activity_max_runs": amr or {}})()
+        self._bd_bp = {"end": end} if end else {}
+
+
+_runs368 = {100: 6, 101: 40, 103: 330}
+eq("aa368 Resolver: BPC-Runs aus dem Cache + Endprodukt aus der Karte",
+   MW._resolve_per_item_runs_cap(
+       _RezStub368(_own368, _runs368, _p2b368,
+                   end={"copies": 33, "runs": 10, "bpo": False, "runs_known": True}), 103),
+   {101: 4, 103: 10})
+eq("aa368 Endprodukt als BPO: kein Deckel",
+   MW._resolve_per_item_runs_cap(
+       _RezStub368(None, _runs368, _p2b368,
+                   end={"copies": 5, "runs": 1, "bpo": True, "runs_known": True}), 103), {})
+eq("aa368 der Platzhalter 1x1 VOR dem ersten rebuild (ohne runs_known) zaehlt NICHT",
+   MW._resolve_per_item_runs_cap(
+       _RezStub368(None, _runs368, _p2b368, end={"copies": 1, "runs": 1, "bpo": False}), 103),
+   {})
+eq("aa368 SDE-Limit (maxProductionLimit) greift, das Kleinste gewinnt",
+   MW._resolve_per_item_runs_cap(
+       _RezStub368(_own368, _runs368, _p2b368,
+                   end={"copies": 33, "runs": 10, "bpo": False, "runs_known": True},
+                   amr={(901, 1): 3, (903, 1): 30, (900, 1): 2}), 103),
+   {100: 2, 101: 3, 103: 10})
+# Verdrahtung: der Runplaner uebergibt den Deckel, die Anzeige teilt damit.
+_sched368 = _fn_src("_fill_bauplan_schedule")
+check("aa368 _fill_bauplan_schedule uebergibt per_item_runs_cap aus dem Resolver",
+      "per_item_runs_cap=self._resolve_per_item_runs_cap(type_id)" in _sched368)
+check("aa368 die Blaupausen-Zeile teilt ueber _bp_teile mit max_runs und parts",
+      'self._bp_teile(R, njobs, a.get("max_runs"),' in _sched368
+      and 'a.get("parts")' in _sched368)
+eq("aa368 kein zweiter divmod-Weg mehr in der Zeilen-Aufteilung",
+   _sched368.count("divmod("), 0)
+# Alle drei abgeleiteten Endprodukt-Karten tragen runs_known - der
+# Platzhalter nicht (sonst deckelt er auf 1 Run je Job).
+_fen368 = open("eve_trader/ui/mw_bauplan_fenster.py", encoding="utf-8").read()
+eq("aa368 runs_known steht an beiden abgeleiteten Stellen im Dialog",
+   _fen368.count('"runs_known": True'), 2)
+check("aa368 ... und bei den echten ESI-Blaupausen",
+      '"bpo": False, "runs_known": True' in _fn_src("_bd_lookup_owned_bp_for_item"))
+check("aa368 der Platzhalter traegt es nicht",
+      '{"copies": 1, "runs": 1, "bpo": False}' in _fen368
+      and '{"copies": 1, "runs": 1, "bpo": False, "runs_known"' not in _fen368)
+
+
+# ---------------------------------------------------------------- (aa369)
+# EC-ROLLENBONUS (1 %) AUCH FUER INVENTED ITEMS (Nutzer-Befund 19.09.2026,
+# Viator x20 in der Azbel, BPC ME 3 % / Parity, im Spiel nachgesehen): von
+# JEDER Komponente blieb ~1 % uebrig - Plates 580 von 58'200, Fusion Reactor
+# 10 von 740, Ion Thruster 25 von 2'200. Der Plan rechnete 3'000 x 0,97 =
+# 2'910 Plates je Run (nur Invention-ME), das Spiel 3'000 x 0,97 x 0,99.
+# Ursache: der invented-Pfad (build_cost/_me_of/build_tree) ersetzte die
+# me_map (die den Bonus traegt) durch Invention-ME x Rig - ohne den Bonus.
+# Jetzt EINE Formel me_invented_pct(inv, rig, ec) und opts["ec_me_map"].
+_E369, _F369, _P369, _T369, _BP369, _T1_369 = 900, 901, 902, 903, 9000, 9001
+
+
+class _Rec369:
+    product_to_bp = {_E369: (_BP369, _I.MANUFACTURING, 1)}
+    bp_materials = {(_BP369, _I.MANUFACTURING): [(_F369, 38), (_P369, 3000), (_T369, 113)]}
+    activity_time = {(_BP369, _I.MANUFACTURING): 3600}
+    activity_max_runs = {}
+    reaction_products = set()
+    invention_for_bpc = {_BP369: (_T1_369, 1, 0.3, [])}
+    bp_products = {}
+    item_cat = {}
+
+
+_pr369 = {_F369: 1000.0, _P369: 10.0, _T369: 500.0, _E369: 1e9}.get
+_o369 = {"invention": True, "inv_me_mod": 1, "job_pct": 0, "build_reactions": True,
+         "me": 0, "me_map": {}}
+eq("aa369 me_invented_pct: 3 % x 0 Rig x 1 % EC = 3,97 %; ohne EC 3 %; mit Rig 2,1 % = 5,9866 %",
+   (round(_I.me_invented_pct(3, 0, 1), 4), round(_I.me_invented_pct(3, 0, 0), 4),
+    round(_I.me_invented_pct(3, 2.1, 1), 4)),
+   (3.97, 3.0, 5.9866))
+_pl369o = _I.production_plan(_E369, 20, _pr369, _Rec369(), _o369)
+eq("aa369 ohne ec_me_map wie bisher: 58'200 Plates, 740 Fusion, 2'200 Ion (x 0,97)",
+   {k: int(v) for k, v in _pl369o["buy"].items()}, {_F369: 740, _P369: 58200, _T369: 2200})
+_pl369 = _I.production_plan(_E369, 20, _pr369, _Rec369(),
+                            dict(_o369, ec_me_map={_E369: 1.0}))
+# Rundung JE RUN (material_menge, Regel 3 - bewusst): 3'000 x 0,9603 = 2'880,9
+# -> 2'881 x 20 = 57'620 (Plates: die 580 des Nutzers sind exakt erklaert);
+# 38 x 0,9603 = 36,49 -> 37 x 20 = 740 (Fusion: die 10 uebrig sind die
+# gewollte Je-Run-Rundung, das Spiel rundet je 4er-Job auf 146 = 730);
+# 113 x 0,9603 = 108,5 -> 109 x 20 = 2'180 (Ion: 20 der 25 erklaert).
+eq("aa369 mit EC 1 %: 57'620 Plates (statt 58'200), 740 Fusion, 2'180 Ion",
+   {k: int(v) for k, v in _pl369["buy"].items()}, {_F369: 740, _P369: 57620, _T369: 2180})
+eq("aa369 build_cost je Stueck mit EC 1 % um den Faktor 0,99 kleiner",
+   round(_I.build_cost(_E369, _pr369, _Rec369(), dict(_o369, ec_me_map={_E369: 1.0}), {})
+         / _I.build_cost(_E369, _pr369, _Rec369(), _o369, {}), 4), 0.99)
+# Verdrahtung: _bau_me_maps liefert ec_me_map, alle drei Aufrufer reichen es durch.
+_mm369 = _fn_src("_bau_me_maps")
+check("aa369 _bau_me_maps liefert ec_me_map (5. Wert)",
+      "return me_map, me_map_reaction, rig_me_map, used, ec_me_map" in _mm369
+      and "ec_me_map[tid] = ec_me.get(stufe, 0.0)" in _mm369)
+eq("aa369 drei Aufrufer setzen ec_me_map in die opts",
+   _src_txt.count('["ec_me_map"] = '), 3)
+check("aa369 industry liest ec_me_map an allen drei invented-Stellen",
+      open("eve_trader/industry.py", encoding="utf-8").read().count(
+          '(opts.get("ec_me_map") or {})') == 3)
+
 
 # ---------------------------------------------------------------- (aa359)
 # DIE ROTPROBE FAEHRT NUR NOCH DIE PASSENDE SUITE.
@@ -16559,6 +17472,65 @@ eq("aa359 keine zugeordnete Pruefung liegt in der ANDEREN Suite",
 # Laufzeit gebaut, haette sie nichts zu vergleichen und waere still gruen.
 check("aa359 und die Zuordnung ist an vielen Stellen wirklich belegt",
       _belegt359 > 100)
+
+# ---------------------------------------------------------------- (aa370)
+# "-1/0 MB" IN DER STATUSZEILE (Nutzer-Rauchtest 18.09.2026): download_sde
+# meldet die Phase "Entpacken + Einlesen" als progress(-1, 0). Das
+# Einrichtungsfenster uebersetzt das (erst_einrichtung.py), die Statuszeile
+# des Hauptfensters (load_sde) schrieb die Zahl roh hin. Beide Stellen
+# muessen denselben Text zeigen.
+_b370 = _ab_anker('w = Worker(industry.download_sde, with_progress=True)')
+check("aa370 load_sde uebersetzt die Entpack-Phase (d < 0)",
+      't("Unpacking and importing \\u2026") if d < 0 else' in _b370)
+check("aa370 gleicher Text wie im Einrichtungsfenster",
+      'Unpacking and importing' in open(
+          "eve_trader/ui/erst_einrichtung.py", encoding="utf-8").read())
+
+# ---------------------------------------------------------------- (aa371)
+# TASKLEISTEN-SYMBOL (Nutzer 18.09.2026). Windows nimmt fuer die Taskleiste
+# die AppUserModelID des Prozesses - unter `python main.py` also python.exe
+# samt Python-Symbol, egal was setWindowIcon sagt. Die eigene ID muss VOR
+# dem ersten Fenster gesetzt werden.
+_m371 = open("eve_trader/__main__.py", encoding="utf-8").read()
+check("aa371 eigene AppUserModelID wird gesetzt",
+      'SetCurrentProcessExplicitAppUserModelID(' in _m371
+      and '"PeanutMotor.EVEMotorMarket"' in _m371)
+_i371 = _m371.find('SetCurrentProcessExplicitAppUserModelID(')
+check("aa371 ... nur unter Windows und abgesichert",
+      _i371 >= 0 and 0 <= _m371.find('if sys.platform == "win32":') < _i371)
+check("aa371 ... und VOR dem Hauptfenster",
+      _i371 >= 0 and _i371 < _m371.find('win = MainWindow()'))
+
+# ---------------------------------------------------------------- (aa372)
+# REAGENZGLAS-EMOJI IN PLAN-NAMEN (Nutzer 18.09.2026: "diese Reagenzglas-
+# Emojis im Profit-Tab muessen weg"). Alte Plaene tragen "\U0001F9EA Name"
+# in label und item_name; die Migration streift es ab, das Speichern laesst
+# es gar nicht mehr hinein. AUSGEFUEHRT, nicht nur gelesen.
+from eve_trader import config as _cfg372
+check("aa372 plan_name_bereinigen streift das Reagenzglas ab",
+      _cfg372.plan_name_bereinigen("\U0001F9EA Vagabond Blueprint") == "Vagabond Blueprint"
+      and _cfg372.plan_name_bereinigen("  Ishtar \u00d710 ") == "Ishtar \u00d710"
+      and _cfg372.plan_name_bereinigen("") == "")
+_alt_save372 = _cfg372.save_settings
+_cfg372.save_settings = lambda d: None
+try:
+    _d372 = {"bau_rollen_vorbelegt": True,
+             "bau_saved_plans": [{"id": 1, "label": "\U0001F9EA Vagabond Blueprint \u00d720",
+                                  "item_name": "\U0001F9EA Vagabond Blueprint"},
+                                 {"id": 2, "label": "Ishtar \u00d710", "item_name": "Ishtar"}]}
+    _r372 = _cfg372._nach_migrationen(dict(_d372))
+    _p372 = _r372["bau_saved_plans"]
+    check("aa372 die Migration bereinigt label UND item_name alter Plaene",
+          _p372[0]["label"] == "Vagabond Blueprint \u00d720"
+          and _p372[0]["item_name"] == "Vagabond Blueprint")
+    check("aa372 saubere Plaene bleiben unangetastet",
+          _p372[1]["label"] == "Ishtar \u00d710" and _p372[1]["item_name"] == "Ishtar")
+finally:
+    _cfg372.save_settings = _alt_save372
+_bf372 = open("eve_trader/ui/mw_bauplan_fenster.py", encoding="utf-8").read()
+check("aa372 beim Speichern werden label und item_name bereinigt",
+      "label = config.plan_name_bereinigen(label)" in _bf372
+      and '"item_name": config.plan_name_bereinigen(name),' in _bf372)
 
 print(f"(aa) Bestand-Herkunft: {_ok}/{_ok + len(_fail)} gruen")
 for f in _fail:

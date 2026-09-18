@@ -156,7 +156,10 @@ def schritte(zweig):
         # blieb dort. Ein Schritt muss seinen Zustand selbst herstellen,
         # sonst haengt er davon ab, WOHER man kommt. Dieselbe Schreibweise
         # wie bei "Materials" weiter unten: Reiter zuerst, dann das Element.
-        (("bd:tab:" + t("Recipe structure"), "_bd_karte_bauenkaufen"),
+        # BEIDE KARTEN BLINKEN (Nutzer 18.09.2026): der Text spricht von
+        # "Production depth", geblinkt hat nur "Build or buy?".
+        (("bd:tab:" + t("Recipe structure"), "_bd_karte_bauenkaufen",
+          "_bd_karte_tiefe"),
          t("Build or buy?"),
          t("Decides what you make yourself. 'Production depth' switches whole "
            "stages at once."), None, None),

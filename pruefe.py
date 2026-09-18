@@ -21,6 +21,58 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)) or ".")
 PY = sys.executable
 
 
+class _Doppelt:
+    """Alles, was auf dem Bildschirm steht, auch in pruefe_bericht.txt.
+
+    18.09.2026: das Fenster schloss sich beim Nutzer sofort nach dem
+    Lauf, er konnte NICHTS lesen. Der Nutzer hat keine Shell - eine
+    Textdatei neben dem Skript ist der einzige Weg, der immer geht.
+    Faellt das Skript selbst mit einer Ausnahme, steht auch die drin
+    (siehe sys.excepthook unten)."""
+
+    def __init__(self, konsole, datei):
+        self._k = konsole
+        self._f = datei
+
+    def write(self, s):
+        try:
+            self._k.write(s)
+        except Exception:
+            pass
+        try:
+            self._f.write(s)
+            self._f.flush()
+        except Exception:
+            pass
+
+    def flush(self):
+        for o in (self._k, self._f):
+            try:
+                o.flush()
+            except Exception:
+                pass
+
+
+_BERICHT = open("pruefe_bericht.txt", "w", encoding="utf-8", errors="replace")
+sys.stdout = _Doppelt(sys.stdout, _BERICHT)
+sys.stderr = _Doppelt(sys.stderr, _BERICHT)
+import datetime as _dt
+print(f"pruefe.py Fassung 2 - {_dt.datetime.now():%Y-%m-%d %H:%M:%S} - "
+      f"Python {sys.version.split()[0]}")
+
+
+def _haken(typ, wert, tb):
+    import traceback
+    print("\nABBRUCH von pruefe.py selbst:")
+    print("".join(traceback.format_exception(typ, wert, tb)))
+    _w = globals().get("_warte")
+    if _w is not None:
+        _w()
+
+
+sys.excepthook = _haken
+
+
 def lauf(titel, befehl, umgebung=None, muster_ok=None):
     u = dict(os.environ)
     u.update(umgebung or {})

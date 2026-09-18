@@ -353,6 +353,15 @@ def name_to_type_id() -> dict:
             for r in rows if r["name"]}
 
 
+def all_names() -> dict:
+    """{type_id: name} - der GANZE Namens-Cache (nach einem Market scan
+    ~13k). Fuer die Vervollstaendigung im Preisverlauf; cached_names() mit
+    13k Parametern liefe in die SQLite-Grenze fuer Platzhalter."""
+    with _conn() as c:
+        rows = c.execute("SELECT type_id, name FROM type_names").fetchall()
+    return {r["type_id"]: r["name"] for r in rows if r["name"]}
+
+
 def cached_names(type_ids) -> dict:
     if not type_ids:
         return {}

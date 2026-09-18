@@ -34,12 +34,32 @@ rotprobe_stand.json
 RELEASE_*.txt
 PATCHNOTES_*_DISCORD.txt
 README_*.txt
+eve-motor-market-source-*.zip
+mache_source_zip_*.bat
+source_zip_*_bericht.txt
+
+# Sitzungs-Helfer und Archiv (19.09.2026)
+_archiv/
+aufraeumen_*.bat
+aufraeumen_bericht.txt
+backup_*.bat
+backup_*_bericht.txt
+zeige_reprocess.*
+zeige_breite.*
+breite_bericht.txt
+breite_lauf.txt
+reprocess_bericht.txt
 
 # Editor / OS
 .vscode/
 .idea/
 Thumbs.db
 desktop.ini
-_sicherung_1.0.8/
-backup_*.bat
-backup_*_bericht.txt
+pruefe_bericht.txt
+logo_neu.zip
+EVE_Motor_Market_Logo.zip
+setze_logo.bat
+LIESMICH_LOGO.txt
+logo_bericht.txt
+veroeffentliche_*.bat
+veroeffentliche_bericht.txt

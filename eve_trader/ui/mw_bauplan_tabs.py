@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from .. import esi, hubs, industry, store
+from .. import esi, hubs, industry, reprocess, store
 from . import icons, theme
 from ..sprache import t
 from .mw_basis import (KEIN_DECRYPTOR, ROLLE_KOPIERNAME, NumericItem,
@@ -1821,6 +1821,44 @@ class BauplanTabs:
         if not _top_covered:
             _own_bpc_fallback_card()
 
+    def _knappheit_zeile(self, names):
+        """Warnzeile "zu wenig am Hub" aus self._bd_ladder_shorts - oder "".
+        Eine Stelle fuer den Tab-Aufbau UND das Nachziehen, sobald die
+        Ladder nach dem Tab-Aufbau fertig ist (rebuild-Reihenfolge)."""
+        _shorts = getattr(self, "_bd_ladder_shorts", None) or []
+        if not _shorts:
+            return ""
+        _teile = []
+        for _sh in _shorts:
+            _tid_s = int(_sh.get("type_id") or 0)
+            _teile.append("{name} {da} / {soll}".format(
+                name=str((names or {}).get(_tid_s) or _tid_s),
+                da=f"{int(_sh.get('available') or 0):,}".replace(",", "'"),
+                soll=f"{int(_sh.get('needed') or 0):,}".replace(",", "'")))
+        return "\u26a0 " + t("Not enough at the hub (order book, available / "
+                             "needed): {liste} \u2013 the rest is priced at the "
+                             "most expensive order, you may have to buy "
+                             "elsewhere or wait.").format(liste=", ".join(_teile))
+
+    def _knappheit_nachziehen(self, names):
+        """Die Warnzeile im Materialien-Tab ersetzen/anhaengen, ohne den
+        ganzen Tab neu zu bauen (die Ladder ist erst NACH dem Tab-Aufbau
+        fertig)."""
+        _il = getattr(self, "_bd_mat_tab_info", None)
+        if _il is None:
+            return
+        _marke = "\u26a0 " + t("Not enough at the hub (order book, available / "
+                               "needed): {liste} \u2013 the rest is priced at the "
+                               "most expensive order, you may have to buy "
+                               "elsewhere or wait.")[:24]
+        _zeilen = [z for z in (_il.text() or "").split("\n")
+                   if z and not z.startswith(_marke)]
+        _kz = self._knappheit_zeile(names)
+        if _kz:
+            _zeilen.append(_kz)
+        _il.setText("\n".join(_zeilen))
+        _il.setVisible(bool(_zeilen))
+
     def _fill_material_tab(self, plan, names, tbl, status_lbl=None):
         """Füllt den 'Materialien'-Tab: jedes Rohmaterial, das laut production_plan()
         tatsächlich eingekauft werden muss (plan["buy"]) plus, was schon durch
@@ -1923,6 +1961,29 @@ class BauplanTabs:
                         "now \u2013 check „{action}“ in the tools menu."
                     ).format(n=len(_verl_vor),
                              action=t("Buy missing again")))
+            # REPROCESSING (1.0.9): hier NUR noch Warnungen. Die Schritte,
+            # die Ersparnis und "warum nicht" standen als Textblock ueber der
+            # Liste - Nutzer 19.09.2026: "komisch und ueberladen". Jetzt: das
+            # Erz ist eine eigene Gruppe in der Liste (Status nennt Ausgang,
+            # Ausbeute, Charakter), "warum nicht" steht im Tooltip des
+            # Minerals, die Ersparnis in der Reprocessing-Karte.
+            _rp = (plan or {}).get("reprocess")
+            if _rp is not None:
+                if _rp.get("grund") == "sde":
+                    _zeilen_info.append(
+                        "\u26a0 " + t("Reprocessing: no structure data \u2013 run "
+                                      "\u201eLoad recipes\u201c once (Setup)."))
+                elif _rp.get("grund") == "fehler":
+                    _zeilen_info.append(
+                        "\u26a0 " + t("Reprocessing could not be calculated \u2013 "
+                                      "see fehler.log."))
+            # AUSVERKAUFT / ZU WENIG AM HUB (nach "Neu berechnen", Orderbuch):
+            # je Material "da von gebraucht". Ohne Ladder gibt es diese
+            # Information nicht - dann steht hier nichts, statt etwas
+            # Beruhigendes.
+            _kz = self._knappheit_zeile(names)
+            if _kz:
+                _zeilen_info.append(_kz)
             _info_lbl.setText("\n".join(_zeilen_info))
             _info_lbl.setVisible(bool(_zeilen_info))
         # REST-BEDARF STATT GESAMT-BEDARF (Nutzer-Vorfall Sitzung 12).
@@ -1985,7 +2046,7 @@ class BauplanTabs:
                      # de_scan2: an
                      t("Datacores and decryptors"),
                      # de_scan4: aus - interner SCHLUESSEL (Kategorie/Stufe/Dict), Anzeige uebersetzt woanders
-                     "Mineralien", "Mond-Materialien", "Rohstoffe",
+                     "Erz", "Mineralien", "Mond-Materialien", "Rohstoffe",
                      # de_scan4: an
                      # Markierung, keine Kategorie: Items, deren SDE-Gruppe
                      # (noch) fehlt. Eigener Kopf ganz unten, damit sie
@@ -2024,7 +2085,49 @@ class BauplanTabs:
         _inv_buy = (plan or {}).get("inv_buy") or {}
         _inv_stock = (plan or {}).get("inv_stock_used") or {}
         _inv_ids = set(_inv_buy) | set(_inv_stock)
-        all_ids = set(buy) | set(stock_used) | set(built_net) | _inv_ids
+        # REPROCESSING (1.0.9, Weg B): Minerale, die das Erz deckt, stehen
+        # weder in buy noch in build_runs - ohne diese Zeilen waeren sie aus
+        # dem Reiter verschwunden (Nutzer-Befund 18.09.2026).
+        _rp_deckt = {}
+        # JE ERZ: was es liefert, Ausbeute, Charakter - fuer die Statusspalte
+        # der Erz-Zeile (Nutzer 19.09.2026: Textblock ueber der Liste weg).
+        _rp_erz_info = {}
+        # JE MINERAL: das beste geprueft Erz und sein Aufpreis - Tooltip.
+        _rp_warum_nicht = {}
+        _rp_alle = (plan or {}).get("reprocess") or {}
+        try:
+            _cn_rp = {int(_c["character_id"]): (_c.get("character_name")
+                                                or str(_c["character_id"]))
+                      for _c in store.list_characters()}
+        except Exception:
+            _cn_rp = {}
+        # GRATIS-ERZ (Blacklist = "bekomme ich"): steht nicht auf der
+        # Einkaufsliste, aber der Nutzer muss sehen, WIEVIEL er bekommen
+        # muss (Nutzer 19.09.2026: "wo sind denn hier die Compressed Ores?").
+        _rp_gratis = {}
+        for _st in (_rp_alle.get("schritte") or []):
+            for _m, _q in (_st.get("deckt") or {}).items():
+                _rp_deckt[int(_m)] = _rp_deckt.get(int(_m), 0) + int(_q or 0)
+            if _st.get("art") == "unrefined":
+                continue
+            if _st.get("gratis"):
+                _rp_gratis[int(_st.get("erz") or 0)] = (
+                    _rp_gratis.get(int(_st.get("erz") or 0), 0) + int(_st.get("menge") or 0))
+            _rp_erz_info[int(_st.get("erz") or 0)] = (
+                "\u267b \u2192 " + ", ".join(
+                    f"{int(_q):,}".replace(",", "'") + " " + str((names or {}).get(_m) or _m)
+                    for _m, _q in sorted((_st.get("deckt") or {}).items()))
+                + f"  \u00b7  {float(_st.get('ausbeute') or 0) * 100.0:.1f} %"
+                + f"  \u00b7  {_cn_rp.get(_st.get('char'), '?')}")
+        for _m, _e in (_rp_alle.get("abgelehnt") or {}).items():
+            if _e.get("erz") is not None and _e.get("aufpreis_pct") is not None:
+                _rp_warum_nicht[int(_m)] = t(
+                    "Compressed ore checked: {ore} would be {pct} % more expensive "
+                    "than buying the mineral.").format(
+                    ore=str((names or {}).get(_e["erz"]) or _e["erz"]),
+                    pct=f"{float(_e['aufpreis_pct']):+.0f}")
+        all_ids = (set(buy) | set(stock_used) | set(built_net) | _inv_ids | set(_rp_deckt)
+                   | set(_rp_gratis))
         rows = []
         # Die ZAHLEN dieser Funktion werden auch vom Einkaufsfenster gebraucht.
         # Sie dort aus den angezeigten Texten zurueckzulesen war ein Fehler:
@@ -2089,7 +2192,9 @@ class BauplanTabs:
             missing = (buy.get(tid, 0) or 0) + (_inv_buy.get(tid, 0) or 0)
             used = (stock_used.get(tid, 0) or 0) + (_inv_stock.get(tid, 0) or 0)
             built = built_net.get(tid, 0) or 0
-            total = missing + used + built
+            reprocessed = _rp_deckt.get(tid, 0) or 0
+            gratis_q = _rp_gratis.get(tid, 0) or 0
+            total = missing + used + built + reprocessed + gratis_q
             if total <= 0:
                 continue
             has_recipe = False
@@ -2143,6 +2248,8 @@ class BauplanTabs:
             rows.append({"tid": tid, "name": names.get(tid, f"#{tid}"),
                         "total": total, "owned": _used_q,
                         "missing": missing, "built": built, "reason": reason,
+                        "reprocessed": reprocessed,
+                        "gratis": gratis_q,
                         "grund_art": grund_art,
                         "category": _category_for(tid),
                         # Herkunfts-Bausteine: ohne src_map fällt alles auf
@@ -2229,6 +2336,26 @@ class BauplanTabs:
                 have_txt = t("\u23f3 loading \u2026")
                 have_col = theme.MUTED
                 status_txt, status_col = t("Subtract assets needed"), theme.MUTED
+            elif (r.get("gratis", 0) or 0) > 0:
+                # ERZ AUF DER BLACKLIST: wird gestellt, nicht gekauft - die
+                # Zeile zeigt die Menge, zaehlt aber nirgends als fehlend.
+                have_txt = f"{int(owned):,}".replace(",", "'") if owned else "0"
+                have_col = theme.MUTED
+                status_txt = t("on blacklist \u2013 provided, not bought")
+                status_col = theme.VIOLET
+            elif (r.get("reprocessed", 0) or 0) > 0 and r["missing"] <= 0 and built <= 0:
+                # GEDECKT DURCH REPROCESSING (1.0.9, Weg B): nicht "genug" -
+                # im Hangar liegt noch nichts, das Erz muss erst durch die
+                # Anlage. Die Zeile sagt, woher es kommt.
+                have_txt = f"{int(owned):,}".replace(",", "'") if owned else "0"
+                have_col = theme.GREEN
+                status_txt = t("from reprocessing \u267b \u00b7 {n} units").format(
+                    n=f"{int(r['reprocessed']):,}".replace(",", "'"))
+                status_col = theme.GREEN_BRIGHT
+                r["reason"] = t("Covered by reprocessing compressed ore (run planner, "
+                                "stage 0) \u2013 nothing to buy. Once the ore is "
+                                "reprocessed and ticked there, the minerals must lie "
+                                "in stock.")
             elif r["missing"] <= 0 and built <= 0:
                 have_txt = f"{int(owned):,}".replace(",", "'")
                 have_col = theme.GREEN
@@ -2392,6 +2519,8 @@ class BauplanTabs:
             # den Bestand; die offene Menge musste man sich aus Benoetigt
             # minus Bestand selbst ausrechnen.
             _missing_q = max(0, int(r["total"]) - int(_src_qty))
+            if (r.get("gratis", 0) or 0) > 0:
+                _missing_q = 0          # wird gestellt - fehlt nicht
             miss_txt = ("\u2013" if _missing_q <= 0
                         else f"{_missing_q:,}".replace(",", "'"))
             # DIE FARBE FOLGT DER AUSSAGE (Sitzung 17, Nutzer: "es sieht auf
@@ -2477,6 +2606,14 @@ class BauplanTabs:
                     " \u2013 you own {n} in total, the rest is not at this "
                     "plan's structures").format(
                         n=f"{_ges_row:,}".replace(",", "'"))
+            # ERZ-ZEILE: Ausgang, Ausbeute, Charakter vor dem Kaufstatus;
+            # MINERAL-ZEILE: "warum kein Erz" als Tooltip des Status.
+            _rp_zeile = _rp_erz_info.get(int(r["tid"]))
+            if _rp_zeile:
+                status_txt = _rp_zeile + "  \u00b7  " + status_txt
+            _rp_wn = _rp_warum_nicht.get(int(r["tid"]))
+            if _rp_wn:
+                r["reason"] = ((r.get("reason") + "\n") if r.get("reason") else "") + _rp_wn
             cells = [r["name"], self._kategorie_anzeige(r["category"]),
                     _sq(int(r["total"]), 2),
                     _esi_zelle,
@@ -2884,8 +3021,15 @@ class BauplanTabs:
                 _tid, _groups, recipes.reaction_products, type_id,
                 mfg_struct=_s_item or _mfg_struct,
                 react_struct=_s_item or _react_struct)
-            jobs.append({"tid": _tid, "name": names.get(_tid, f"#{_tid}"), "runs": runs,
+            # WEG A: der Job heisst nach dem, was er baut - "Unrefined Hexite",
+            # nicht "Hexite" (Nutzer 19.09.2026: "erst muss man Unrefined
+            # Hexite bauen, danach reprocessen"). Eigene Stufe "unrefined".
+            _is_unref = _tid in (getattr(self, "_bd_unrefined", None) or {})
+            jobs.append({"tid": _tid,
+                         "name": self._bp_basisname(_tid, names.get(_tid, f"#{_tid}")),
+                         "runs": runs,
                          "activity": activity, "base_time": base_t,
+                         "is_unrefined": _is_unref,
                          "is_end": (_tid == type_id), "bp_id": bp_id,
                          "is_fuel": self._ist_fuel_block(_tid, _groups,
                                                          recipes.reaction_products),
@@ -3078,7 +3222,10 @@ class BauplanTabs:
             jobs, sched_chars, te_factor=te,
             mfg_bp=_cap("component"), react_bp=_cap("reaction"), end_bp=_cap("end"),
             fuel_ids={j["tid"] for j in jobs if j.get("is_fuel")},
-            per_item_cap=self._resolve_per_item_bp_cap())
+            per_item_cap=self._resolve_per_item_bp_cap(),
+            # RUNS JE JOB DECKELN (Nutzer 19.09.2026: "17 Stueck mit einem
+            # Blueprint ... gibts maximal 10 runs"): BPC-Runs / SDE-Limit.
+            per_item_runs_cap=self._resolve_per_item_runs_cap(type_id))
         # FORTSCHRITT AUS ESI-JOBS (nur eingefrorene Plaene, Nutzer-Spez
         # Punkt 2): gelieferte Runs seit dem Einfrieren je Item aufsummieren;
         # deckt die Summe die Plan-Runs, wird die Zeile automatisch abgehakt -
@@ -3138,7 +3285,8 @@ class BauplanTabs:
         # Funktion), sonst passen die Feldnamen nicht zur Kalender-Anzeige.
         (self._bd_last_assignments, self._bd_last_waves,
          self._bd_last_stage_times) = self._transform_schedule_result(res, sched_chars)
-        react_total = stt.get("reaction_1", 0) + stt.get("reaction_2", 0)
+        react_total = (stt.get("unrefined", 0) + stt.get("reaction_1", 0)
+                       + stt.get("reaction_2", 0))
         # Nutzer-Frage "wo steht die Gesamtzeit?": Bau-Durchlauf stand hier,
         # Invention nur im anderen Tab, Kopierzeit NIRGENDS. Jetzt eine Zeile:
         _needs_t = getattr(self, "_bd_invention_needs", None) or {}
@@ -3178,7 +3326,7 @@ class BauplanTabs:
         else:
             sub.setText("")
             sub.setStyleSheet("")
-        sd = {"fuel": t("Fuel"),
+        sd = {"fuel": t("Fuel"), "unrefined": t("Unrefined reaction"),
               "reaction_1": t("Reaction"), "reaction_2": t("Reaction"),
               "component": t("Component"), "end": t("End product")}
         _cat_short = {
@@ -3204,14 +3352,14 @@ class BauplanTabs:
                 return "Endprodukt"
                 # de_scan4: an
             tid = a["tid"]
-            is_react = stage.startswith("reaction")
+            is_react = stage.startswith("reaction") or stage == "unrefined"
             info = _catmap_fine.get(tid)
             cat = info[0] if info else None
             meta = info[2] if info else None
             key = self._category_key(tid, _groups.get(tid, ""), is_react, cat, meta)
             fine = _cat_short.get(key)
             base = sd.get(stage, stage)
-            if is_react:
+            if is_react and stage != "unrefined":
                 # Die Stufe steht jetzt schon direkt im Stage-Namen (reaction_1/2) -
                 # kein erneutes Nachschlagen nötig, das war vorher pro Item einzeln.
                 st = 1 if stage == "reaction_1" else 2
@@ -3312,6 +3460,11 @@ class BauplanTabs:
             # Verbrauchern.
             # SYMBOL-NAMEN statt Emoji (Sitzung 16) - gesetzt per setIcon.
             "fuel": ("1. " + t("Fuel"), "package", "ms", theme.GREEN),
+            # UNREFINED ZUERST (Nutzer 19.09.2026): eigene Stufe vor den
+            # Intermediates, dahinter der Reprocessing-Block - erst dann
+            # gibt es das Zwischenmaterial. Die Nummern ruecken um eins,
+            # sobald die Stufe vorkommt (sonst alles wie bisher).
+            "unrefined": ("2. " + t("Unrefined reactions"), "flask", "rs", theme.VIOLET),
             "reaction_1": ("2. " + t("Reactions \u2013 Intermediate"),
                           "flask", "rs", theme.VIOLET),
             # EIGENE FARBE fuer die zweite Reaktions-Stufe (Nutzer,
@@ -3321,7 +3474,217 @@ class BauplanTabs:
                           "flask", "rs", theme.VIOLET_2),
             "component": ("4. " + t("Components"), "wrench", "ms", theme.BLUE),
             "end": ("5. " + t("End product"), "target", "ms", theme.AMBER)}
-        for stage in ("fuel", "reaction_1", "reaction_2", "component", "end"):
+        if by_stage_char.get("unrefined"):
+            for _sk, _nr in (("reaction_1", 3), ("reaction_2", 4), ("component", 5), ("end", 6)):
+                _l, _i, _s, _c = stage_meta[_sk]
+                stage_meta[_sk] = (f"{_nr}. " + _l.split(". ", 1)[1], _i, _s, _c)
+        # STUFE 0: REPROCESSING (1.0.9, Weg B; Nutzer: "im Runplaner als
+        # aller erste Kategorie ganz oben"). Nur, wenn der Plan wirklich Erz
+        # statt Mineral kauft - sonst keine Zeile. OPTIK WIE DIE ANDEREN
+        # STUFEN (Nutzer 18.09.2026: "dass das Reprocessing mehr aussieht wie
+        # das andere"): Stufenkopf mit Farbe und Symbol, Charakterzeile in
+        # Cyan, je Erz eine Zeile mit denselben Spalten - Name (Klick
+        # kopiert den Erz-Namen), Menge fett, Kopier-Knopf fuer die Menge,
+        # Ergebnis in der Stufen-Spalte, Ueberschuss rechts. Haken = reprocesst.
+        _rp0 = (plan or {}).get("reprocess") or {}
+        _rp0_alle = _rp0.get("schritte") or []
+        # Gratis-Erz (Blacklist: bekommt man, kauft man nicht) bleibt aus dem
+        # Runplaner draussen (Nutzer 19.09.2026).
+        _rp0_erz = [_s for _s in _rp0_alle
+                    if _s.get("art") != "unrefined" and not _s.get("gratis")]
+        _rp0_unref = [_s for _s in _rp0_alle if _s.get("art") == "unrefined"]
+
+        def _repro_block(_lbl0, _rp0_sch, _kopf_tip, _kopf_rechts=None, _ckey0="repro"):
+            """Ein Reprocessing-Block (Kopf, Charakterzeilen, je Erz/Produkt
+            eine Zeile) - fuer Stufe 0 (gekauftes Erz) und fuer die Unrefined-
+            Schritte nach der Reaktionsstufe (Weg A). Gleiche Optik, gleiche
+            Haken-Mechanik."""
+            if not _rp0_sch:
+                return
+            _farbe0 = theme.GREEN
+            _basis0 = _rp0.get("basis")
+            _item0 = QTreeWidgetItem([
+                _lbl0, "", "", "",
+                (_kopf_rechts if _kopf_rechts is not None else
+                 _txt("Structure base {pct} %").format(pct=f"{float(_basis0) * 100.0:.1f}")
+                 if _basis0 else ""), ""])
+            _item0.setIcon(0, icons.icon("package", farbe=_farbe0))
+            _sf0 = _item0.font(0)
+            _sf0.setBold(True); _sf0.setPointSize(_sf0.pointSize() + 2)
+            _item0.setFont(0, _sf0)
+            _bg0 = QColor(_farbe0); _bg0.setAlpha(38)
+            for _c0 in range(5):
+                _item0.setBackground(_c0, QBrush(_bg0))
+            _item0.setForeground(0, QColor(_farbe0))
+            _item0.setForeground(4, QColor(_farbe0))
+            _item0.setToolTip(0, _kopf_tip)
+            tbl.addTopLevelItem(_item0)
+            _by_char0 = {}
+            for _st0 in _rp0_sch:
+                _by_char0.setdefault(_st0.get("char"), []).append(_st0)
+            _hakt_alle0 = getattr(self, "_bd_runplan_checked", None) or set()
+            for _cid0, _steps0 in sorted(_by_char0.items(),
+                                         key=lambda kv: (kv[0] is None, kv[0] or 0)):
+                _cname0 = cmap.get(_cid0, str(_cid0) if _cid0 is not None else "?")
+                _n_bl0 = sum(int(_s.get("portionen") or 0) for _s in _steps0)
+                _unref0 = all(_s.get("art") == "unrefined" for _s in _steps0)
+                _citem0 = QTreeWidgetItem([
+                    _cname0, "",
+                    (_txt("{n} units") if _unref0 else _txt("{n} batches")).format(
+                        n=f"{_n_bl0:,}".replace(",", "'")),
+                    "", "", ""])
+                _citem0.setForeground(0, QColor(theme.CYAN))
+                _citem0.setToolTip(0, _txt(
+                    "Best reprocessing character for these ores (skills x implant) "
+                    "\u2013 log in with this one."))
+                # HAKEN AM CHARAKTER (Nutzer 19.09.2026: "hinter dem
+                # Charakternamen gibt es noch keinen Haken") - wie bei den
+                # Stufen: der Haken zieht die Erz-Zeilen darunter mit
+                # (_on_sched_check), gesichert unter "char|repro|<cid>".
+                _f0c = _citem0.font(0); _f0c.setBold(True); _citem0.setFont(0, _f0c)
+                _citem0.setFlags(_citem0.flags() | Qt.ItemIsUserCheckable)
+                _ckey_c0 = f"char|{_ckey0}|{_cid0}"
+                _citem0.setData(0, Qt.UserRole + 6, _ckey_c0)
+                _citem0.setCheckState(0, Qt.Checked if _ckey_c0 in _hakt_alle0
+                                      else Qt.Unchecked)
+                if _ckey_c0 in _hakt_alle0:
+                    for _c0 in range(tbl.columnCount()):
+                        _fc0 = _citem0.font(_c0); _fc0.setStrikeOut(True)
+                        _citem0.setFont(_c0, _fc0)
+                        _citem0.setData(_c0, Qt.UserRole + 5, _citem0.foreground(_c0))
+                        _citem0.setForeground(_c0, QColor(theme.GREEN))
+                _item0.addChild(_citem0)
+                for _st0 in _steps0:
+                    _erz_nm0 = str((names or {}).get(_st0.get("erz")) or _st0.get("erz"))
+                    _menge0 = int(_st0.get("menge") or 0)
+                    _ausg0 = ", ".join(
+                        f"{int(_q0):,}".replace(",", "'") + " "
+                        + str((names or {}).get(_m0) or _m0)
+                        for _m0, _q0 in sorted((_st0.get("deckt") or {}).items()))
+                    _ueb0 = ", ".join(
+                        "+" + f"{int(_q0):,}".replace(",", "'") + " "
+                        + str((names or {}).get(_m0) or _m0)
+                        for _m0, _q0 in sorted((_st0.get("ueberschuss") or {}).items()))
+                    _row0 = QTreeWidgetItem([
+                        _erz_nm0,
+                        f"{_menge0:,}".replace(",", "'"),
+                        "", "",
+                        "\u2192 " + _ausg0 + "  \u00b7  "
+                        + f"{float(_st0.get('ausbeute') or 0) * 100.0:.1f} %",
+                        _ueb0 or "\u2013"])
+                    _row0.setTextAlignment(1, Qt.AlignCenter)
+                    _fr0 = _row0.font(1); _fr0.setBold(True); _row0.setFont(1, _fr0)
+                    _row0.setForeground(4, QColor(theme.MUTED))
+                    if _ueb0:
+                        _row0.setForeground(5, QColor(theme.AMBER))
+                    _ic0 = self._table_icon(_st0.get("erz"))
+                    if _ic0:
+                        _row0.setIcon(0, _ic0)
+                    # KLICK AUF DEN NAMEN KOPIERT DEN ERZ-NAMEN (wie bei den
+                    # Blaupausen: Rahmen malt KopierRahmenDelegate, den Klick
+                    # nimmt _sched_name_klick).
+                    _row0.setData(0, ROLLE_KOPIERNAME, _erz_nm0)
+                    _row0.setData(0, Qt.UserRole, _st0.get("erz"))
+                    if _st0.get("art") == "unrefined":
+                        _row0.setToolTip(0, _txt(
+                            "{n} units from the reaction stage above. Yield {pct} % "
+                            "with this character: 50 % \u00d7 Scrapmetal Processing \u2013 "
+                            "structure, rig and ore skills do not apply here.\nTick = "
+                            "reprocessed (progress mark only).").format(
+                            n=int(_st0.get("menge") or 0),
+                            pct=f"{float(_st0.get('ausbeute') or 0) * 100.0:.1f}")
+                            + "\n" + _txt("Click copies the name for the market search."))
+                    else:
+                        _row0.setToolTip(0, _txt(
+                            "{n} batches of {p} units. Yield {pct} % with this "
+                            "character at this structure.\nTick = reprocessed: from then "
+                            "on the minerals must be in stock and the ore no longer "
+                            "counts as needed.").format(
+                            n=int(_st0.get("portionen") or 0), p=int(_st0.get("portion") or 0),
+                            pct=f"{float(_st0.get('ausbeute') or 0) * 100.0:.1f}")
+                            + "\n" + _txt("Click copies the name for the market search."))
+                    _row0.setToolTip(4, _txt("What the ore yields for this plan; the "
+                                             "rest is surplus (right)."))
+                    # HAKEN = REPROCESST (Nutzer-Befund 18.09.2026: die
+                    # Einkaufsliste kannte weder Erz noch gedeckte Minerale).
+                    # Derselbe Mechanismus wie bei den Runs (_on_sched_check,
+                    # _bd_runplan_checked, im Plan gesichert); der Schluessel
+                    # "repro|<erz>" wird von _restbedarf_jetzt /
+                    # _fehlbedarf_jetzt gelesen, sonst von niemandem.
+                    _row0.setFlags(_row0.flags() | Qt.ItemIsUserCheckable)
+                    _key0 = reprocess.schritt_key(_st0)
+                    _row0.setData(0, Qt.UserRole + 6, _key0)
+                    _hakt0 = _key0 in _hakt_alle0
+                    _row0.setCheckState(0, Qt.Checked if _hakt0 else Qt.Unchecked)
+                    if _hakt0:
+                        for _c0 in range(tbl.columnCount()):
+                            _f0 = _row0.font(_c0); _f0.setStrikeOut(True); _row0.setFont(_c0, _f0)
+                            _row0.setData(_c0, Qt.UserRole + 5, _row0.foreground(_c0))
+                            _row0.setForeground(_c0, QColor(theme.GREEN))
+                    _citem0.addChild(_row0)
+                    # KOPIER-KNOPF FUER DIE MENGE (Nutzer: "Zahlen koennen
+                    # nicht kopiert werden ... da moechte ich nur draufklicken
+                    # koennen") - dieselbe Optik wie die Run-Knoepfe.
+                    try:
+                        _cw0 = QWidget()
+                        _cl0 = QHBoxLayout(_cw0)
+                        _cl0.setContentsMargins(0, 3, 0, 3)
+                        _cl0.setSpacing(3)
+                        _b0 = QPushButton(f"{_menge0:,}".replace(",", "'"))
+                        _b0.setCursor(Qt.PointingHandCursor)
+                        _b0.setMinimumHeight(24)
+                        _b0.setToolTip(_txt("Click copies {r} \u2013 paste it into the "
+                                            "quantity field in game (Ctrl+V).").format(
+                            r=f"{_menge0:,}".replace(",", "'")))
+                        _b0.setStyleSheet(
+                            f"QPushButton{{background:{theme.PANEL2}; "
+                            f"border:1px solid {theme.AMBER_DIM}; "
+                            f"color:{theme.AMBER}; border-radius:5px; "
+                            f"padding:0px 10px; font-weight:700;}}"
+                            f"QPushButton:hover{{border-color:"
+                            f"{theme.AMBER}; background:{theme.PANEL};}}")
+                        _b0.clicked.connect(
+                            lambda _c=False, _v=_menge0, _n=_erz_nm0:
+                            self._copy_runs_value(_v, _n))
+                        _cl0.addWidget(_b0)
+                        _cl0.addStretch()
+                        _cw0.adjustSize()
+                        _h0 = max(34, _cw0.sizeHint().height() + 10)
+                        _row0.setSizeHint(2, QSize(0, _h0))
+                        _row0.setSizeHint(0, QSize(0, _h0))
+                        tbl.setItemWidget(_row0, 2, _cw0)
+                    except Exception:
+                        pass       # Knoepfe sind Komfort, nie kritisch
+                # Charakter ZU, Stufe AUF - wie bei den anderen Stufen
+                # (Nutzer 19.09.2026, Screenshot).
+                _citem0.setExpanded(False)
+            _item0.setExpanded(True)
+
+        _lbl_st0 = "0. " + _txt("Reprocessing")
+        if _rp0.get("struct"):
+            _lbl_st0 += f"  \u00b7  {_rp0['struct']}"
+        _repro_block(_lbl_st0, _rp0_erz, _txt(
+            "Buy the compressed ore, reprocess it with the named character at "
+            "this structure \u2013 then the minerals are in stock for the stages "
+            "below. Ore is reprocessed in batches of 100; the number in the "
+            "Runs column is the number of batches."))
+        # WEG A: die Unrefined-Produkte entstehen erst in der Reaktionsstufe -
+        # ihr Reprocessing-Block steht deshalb DAHINTER, nicht oben.
+        _ub_nach = "unrefined" if by_stage_char.get("unrefined") else None
+
+        def _unref_block():
+            # Kein Strukturname: der Scrapmetal-Pfad ist ueberall 50 % Basis.
+            _repro_block("\u21b3 " + _txt("Reprocessing of unrefined products"),
+                         _rp0_unref, _txt(
+                "After the reaction: reprocess the unrefined products with the "
+                "named character (any station or structure) \u2013 only then is the "
+                "intermediate material in stock for the next stage. The returned "
+                "input (surplus, right) comes back here as well."),
+                _kopf_rechts=_txt("Base 50 % \u00d7 Scrapmetal Processing"),
+                _ckey0="urepro")
+        if _ub_nach is None:
+            _unref_block()
+        for stage in ("fuel", "unrefined", "reaction_1", "reaction_2", "component", "end"):
             char_map = by_stage_char.get(stage)
             if not char_map:
                 continue
@@ -3339,6 +3702,7 @@ class BauplanTabs:
             # Endprodukt eine andere Struktur genommen hatte.
             _stufe_key = {"fuel": "components", "component": "components",
                           "end": "endproduct", "reaction_1": "reaction_1",
+                          "unrefined": "reaction_1",
                           "reaction_2": "reaction_2"}.get(stage)
             _stage_struct = (getattr(self, "_bd_stage_structs", {}) or {}).get(
                 _stufe_key)
@@ -3346,7 +3710,7 @@ class BauplanTabs:
                 # Rueckfall auf die alten Sammelvariablen, wenn die Stufen-Karte
                 # (noch) fehlt - z.B. bei eingefrorenen Alt-Plaenen.
                 _stage_struct = (getattr(self, "_bd_react_struct", None)
-                                 if stage.startswith("reaction")
+                                 if (stage.startswith("reaction") or stage == "unrefined")
                                  else getattr(self, "_bd_mfg_struct", None))
             _sname = (_stage_struct or {}).get("name")
             if _sname:
@@ -3475,9 +3839,49 @@ class BauplanTabs:
             # Bis hierher zaehlte `_zustand is not None` AUCH "laeuft" als
             # erledigt - eine Stufe mit laufenden Jobs bekam den Haken.
             _stage_laeuft = 0
+
+            def _wellen(alist, cap):
+                """[(Welle, Zuteilungen)] - ganze Kopien (`parts`) eines
+                Charakters, die nicht in seine Slots passen, als ZWEITE
+                Auflistung desselben Charakters (Nutzer 19.09.2026: "ich kann
+                nicht 18 Blueprints laufen lassen ... wenn alle Slots voll
+                sind, muss der Charakter zweimal aufgelistet werden, um den
+                Rest am naechsten Tag zu bauen"). Ohne `parts` (keine ganzen
+                Kopien) bleibt es bei einer Zeile mit dem Wellen-Hinweis."""
+                _jobs = sum(max(1, int(a.get("jobs") or 1)) for a in alist)
+                if _jobs <= cap or not all(a.get("parts") for a in alist):
+                    return [(1, alist)]
+                out = []
+                welle, frei, akt = 1, cap, []
+                for a in alist:
+                    _tv = float(a.get("tv") or 0.0)
+                    if not _tv and a.get("parts"):
+                        _tv = float(a.get("seconds") or 0.0) / max(1, max(a["parts"]))
+                    for p in sorted(a["parts"], reverse=True):
+                        if frei == 0:
+                            out.append((welle, akt))
+                            welle, frei, akt = welle + 1, cap, []
+                        if akt and akt[-1]["tid"] == a["tid"]:
+                            akt[-1]["parts"].append(p)
+                            akt[-1]["runs"] += p
+                            akt[-1]["jobs"] += 1
+                        else:
+                            akt.append({**a, "parts": [p], "runs": p, "jobs": 1,
+                                        "seconds": p * _tv, "welle": welle})
+                        frei -= 1
+                if akt:
+                    out.append((welle, akt))
+                return out
+            _eintraege = []
             for cid, alist in char_map.items():
                 ms, rs = cslots.get(cid, (1, 1))
+                for _welle, _al in _wellen(alist, rs if slot_kind == "rs" else ms):
+                    _eintraege.append((cid, _welle, _al))
+            for cid, _welle, alist in _eintraege:
+                ms, rs = cslots.get(cid, (1, 1))
                 cap = rs if slot_kind == "rs" else ms
+                # Zweite Auflistung: eigener Schluessel-Zusatz fuer die Haken.
+                _wsuf = f"|w{_welle}" if _welle > 1 else ""
                 _mx2 = cmax.get(cid, (None, None))
                 cap_max = _mx2[1] if slot_kind == "rs" else _mx2[0]
                 jobs_sum = sum(a.get("jobs", 1) for a in alist)
@@ -3497,7 +3901,14 @@ class BauplanTabs:
                         n=jobs_sum, cap=cap)
                 else:
                     slot_txt = _txt("{n}/{cap} slots").format(n=jobs_sum, cap=cap)
-                citem = QTreeWidgetItem([cmap.get(cid, str(cid)), "", slot_txt, "", ""])
+                citem = QTreeWidgetItem([
+                    cmap.get(cid, str(cid))
+                    + ("  \u00b7  " + _txt("wave {n}").format(n=_welle) if _welle > 1 else ""),
+                    "", slot_txt, "", ""])
+                if _welle > 1:
+                    citem.setToolTip(0, _txt(
+                        "Second listing of this character: start these copies once "
+                        "the first wave has freed the slots (e.g. the next day)."))
                 # BESETZTE SLOTS: seit Sitzung 11 plant das Tool mit dem
                 # MAXIMUM (Nutzer-Entscheid: "die besetzten slots sollen
                 # ignoriert werden") - der Plan laeuft ueber Tage, die jetzt
@@ -3532,7 +3943,7 @@ class BauplanTabs:
                                                             # unterscheidet sich von
                                                             # den Phasen-Farben oben
                 citem.setFlags(citem.flags() | Qt.ItemIsUserCheckable)
-                _ckey_char = f"char|{stage}|{cid}"
+                _ckey_char = f"char|{stage}|{cid}{_wsuf}"
                 citem.setData(0, Qt.UserRole + 6, _ckey_char)
                 if _ckey_char in _checked_set:
                     citem.setCheckState(0, Qt.Checked)
@@ -3642,9 +4053,11 @@ class BauplanTabs:
                                     else "fertig")
                         # de_scan4: an
                         R = R_plan
-                    njobs = max(1, min(int(njobs), R))
-                    base, extra = divmod(R, njobs)
-                    parts = [base + 1] * extra + [base] * (njobs - extra)
+                    # Aufteilung in Blaupausen-Jobs - MIT Runs-Deckel je Job
+                    # (`max_runs` aus schedule_build: BPC-Runs / SDE-Limit),
+                    # kein Teil groesser als eine Kopie hergibt (17 -> 10 + 7).
+                    njobs, parts = self._bp_teile(R, njobs, a.get("max_runs"),
+                                                  a.get("parts"))
                     # Klare, schnell lesbare Blaupausen-Angabe: wie viele BPs muss
                     # ich diesem Char geben und mit wie vielen Runs je BP. Bei
                     # ungleichen Runs die Gruppen zeigen, z. B. "5×42 / 1×43 Runs".
@@ -3702,7 +4115,7 @@ class BauplanTabs:
                             "size) - split here proportionally by runs."
                         ).format(n=int(round(_surp_total))))
                     iit.setFlags(iit.flags() | Qt.ItemIsUserCheckable)
-                    _ckey_item = f"{stage}|{cid}|{a['tid']}"
+                    _ckey_item = f"{stage}|{cid}|{a['tid']}{_wsuf}"
                     iit.setData(0, Qt.UserRole + 6, _ckey_item)
                     # HAND-HAEKCHEN FUER DIE EINKAUFSLISTE MERKEN (Sitzung 16,
                     # Nutzer: "die Einkaufsliste zeigt absurd viele
@@ -3820,9 +4233,11 @@ class BauplanTabs:
                     # samt Tooltip oben.
                     if _active:
                         _pl_runs9 = int(a.get("runs") or 0)
-                        _pl_jobs9 = max(1, int(a.get("jobs") or 1))
-                        _b9, _r9 = divmod(_pl_runs9, _pl_jobs9)
-                        _split9 = [_b9 + 1] * _r9 + [_b9] * (_pl_jobs9 - _r9)
+                        # DIESELBE Aufteilung wie die Blaupausen-Anzeige
+                        # (inkl. Runs-Deckel je Job) - eine Rechnung.
+                        _split9 = self._bp_teile(
+                            _pl_runs9, a.get("jobs"), a.get("max_runs"),
+                            a.get("parts"))[1]
                         _lauf9 = [int(j.get("runs") or 0) for j in _active]
                         _rest9 = list(_split9)
                         _passt9 = True
@@ -3887,8 +4302,9 @@ class BauplanTabs:
                     # EINE Quelle fuer den Namen: _bp_name_fuer, dieselbe
                     # Regel wie im Rechtsklick-Menue und in der BP-Spalte.
                     iit.setData(0, ROLLE_KOPIERNAME,
-                                self._bp_name_fuer(a.get("name"),
-                                                   a.get("activity")))
+                                self._bp_name_fuer(
+                                    self._bp_basisname(a.get("tid"), a.get("name")),
+                                    a.get("activity")))
                     # RUNS FETT (Nutzer, 15.09.2026): das ist die Zahl, nach
                     # der man ingame den Job einstellt - sie soll sich vom
                     # Rest der Zeile abheben.
@@ -4067,8 +4483,9 @@ class BauplanTabs:
                             # Die Run-Zahlen daneben tun das seit Sitzung 8;
                             # den Namen gab es nur ueber das Rechtsklick-Menue,
                             # und das findet man nicht.
-                            _bp_nm = self._bp_name_fuer(a.get("name"),
-                                                        a.get("activity"))
+                            _bp_nm = self._bp_name_fuer(
+                                self._bp_basisname(a.get("tid"), a.get("name")),
+                                a.get("activity"))
                             _kopf = QPushButton(
                                 _txt("{n} blueprints").format(n=njobs))
                             _kopf.setCursor(Qt.PointingHandCursor)
@@ -4252,6 +4669,8 @@ class BauplanTabs:
             for _cf in _stage_citems:
                 _cf.setExpanded(_stufe_abgedeckt)
             stage_item.setExpanded(not _stufe_abgedeckt)
+            if stage == _ub_nach:
+                _unref_block()
         # ---- ℹ NICHT EINGEPLANT: Kauf billiger / Bestand deckt --------------
         # Nutzer-Fall Magpulse Thruster: eine baubare Komponente fehlte im
         # Runplaner und sah "vergessen" aus - in Wahrheit hatte der Plan sie

@@ -146,6 +146,19 @@ def main():
         app.setWindowIcon(_ic.logo_icon())
     except Exception:
         pass
+    # ORT 4: TASKLEISTE (Nutzer 18.09.2026: "ich glaube das Logo erscheint
+    # nicht in der Taskleiste"). Windows gruppiert Fenster nach der
+    # AppUserModelID des PROZESSES - bei `python main.py` ist das python.exe,
+    # und die Taskleiste zeigt dann das Python-Symbol, egal was Qt am
+    # Fenster setzt. Eine eigene ID vor dem ersten Fenster loest das; fuer
+    # die EXE ist sie zusaetzlich die Klammer fuer angeheftete Verknuepfungen.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "PeanutMotor.EVEMotorMarket")
+        except Exception:
+            pass
     app.setStyleSheet(theme.QSS)
     # ALLE TOOLTIPS GLEICH (Sitzung 20) - vor dem Hauptfenster, damit jeder
     # setToolTip im Aufbau schon durch die eine Stelle laeuft.

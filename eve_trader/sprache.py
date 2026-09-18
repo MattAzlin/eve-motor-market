@@ -58,6 +58,99 @@ KATALOG = {
         # Fassung nannte auch die Blaupausen-Seite "Baurezepte laden".
         "Load recipes": "Baurezepte laden",
         "Load blueprints": "Blaupausen laden",
+        # Reprocessing (1.0.9): Skill-Stufen nur im Tooltip des Charakters.
+        "Reprocessing skills: {r} / Efficiency {e}": "Reprocessing-Skills: {r} / Efficiency {e}",
+        # Reprocessing, Weg B (18.09.2026): Karte in der Rezeptstruktur und
+        # Zeilen im Materialien-Tab.
+        "Reprocessing": "Reprocessing",
+        "NPC station": "NPC-Station",
+        "NPC station (50 %)": "NPC-Station (50 %)",
+        "Buy compressed ore instead of minerals": "Komprimiertes Erz statt Minerale kaufen",
+        "Reprocess at": "Reprocessen bei",
+        "Detects the reprocessing implants (Zainou 'Beancounter' Reprocessing RX-801/802/804) of all linked characters via ESI. Needs the implant scope (Settings \u2192 \u201eImplant manufacturing bonus\u201c \u2192 On + relink). The bonus goes into the yield and the character choice.":
+            "Erkennt die Reprocessing-Implantate (Zainou 'Beancounter' Reprocessing RX-801/802/804) aller verkn\u00fcpften Charaktere per ESI. Braucht den Implantat-Scope (Einstellungen \u2192 \u201eImplant manufacturing bonus\u201c \u2192 An + neu verkn\u00fcpfen). Der Bonus geht in Ausbeute und Charakterwahl ein.",
+        "no reprocessing implant detected": "kein Reprocessing-Implantat erkannt",
+        "No reprocessing implant data \u2013 run \u201eLoad recipes\u201c once.":
+            "Keine Reprocessing-Implantat-Daten \u2013 einmal \u201eLoad recipes\u201c dr\u00fccken.",
+        "{n} reprocessing implant(s) detected \u2713": "{n} Reprocessing-Implantat(e) erkannt \u2713",
+        "Where the ore is reprocessed. Refineries (Athanor/Tatara) get their bonus and reprocessing rig from the structure list; an NPC station has a flat 50 % base.":
+            "Wo das Erz reprocesst wird. Refineries (Athanor/Tatara) bekommen Bonus und Reprocessing-Rig aus der Strukturliste; eine NPC-Station hat fest 50 % Basis.",
+        "No reprocessing data for this structure – run „Load recipes“ once (Setup).":
+            "Keine Reprocessing-Daten für diese Struktur – einmal „Load recipes“ drücken (Setup).",
+        "Structure base {pct} %": "Struktur-Basis {pct} %",
+        "Not enough at the hub (order book, available / needed): {liste} \u2013 the rest is priced at the most expensive order, you may have to buy elsewhere or wait.":
+            "Zu wenig am Hub (Orderbuch, da / gebraucht): {liste} \u2013 der Rest ist zum teuersten Angebot bewertet, du musst evtl. woanders kaufen oder warten.",
+        "Reprocessing: no structure data – run „Load recipes“ once (Setup).":
+            "Reprocessing: keine Strukturdaten – einmal „Load recipes“ drücken (Setup).",
+        "Reprocessing could not be calculated – see fehler.log.":
+            "Reprocessing konnte nicht berechnet werden – siehe fehler.log.",
+        "Buy the compressed ore, reprocess it with the named character at this structure \u2013 then the minerals are in stock for the stages below. Ore is reprocessed in batches of 100; the number in the Runs column is the number of batches.":
+            "Das komprimierte Erz kaufen und mit dem genannten Charakter an dieser Struktur reprocessen \u2013 dann liegen die Minerale f\u00fcr die Stufen darunter im Bestand. Erz wird in Bl\u00f6cken von 100 reprocesst; die Zahl in der Runs-Spalte ist die Anzahl Bl\u00f6cke.",
+        "{n} batches": "{n} Bl\u00f6cke",
+        "Best reprocessing character for these ores (skills x implant) \u2013 log in with this one.":
+            "Bester Reprocessing-Charakter f\u00fcr diese Erze (Skills x Implantat) \u2013 mit dem einloggen.",
+        "Click copies the name for the market search.": "Klick kopiert den Namen f\u00fcr die Marktsuche.",
+        "What the ore yields for this plan; the rest is surplus (right).":
+            "Was das Erz f\u00fcr diesen Plan liefert; der Rest ist \u00dcberschuss (rechts).",
+        "Click copies {r} \u2013 paste it into the quantity field in game (Ctrl+V).":
+            "Klick kopiert {r} \u2013 ins Mengenfeld im Spiel einf\u00fcgen (Strg+V).",
+        "{n} batches of {p} units. Yield {pct} % with this character at this structure.\nTick = reprocessed: from then on the minerals must be in stock and the ore no longer counts as needed.":
+            "{n} Bl\u00f6cke zu {p} St\u00fcck. Ausbeute {pct} % mit diesem Charakter an dieser Struktur.\nHaken = reprocesst: ab dann m\u00fcssen die Minerale im Bestand liegen, das Erz z\u00e4hlt nicht mehr als Bedarf.",
+        "from reprocessing \u267b \u00b7 {n} units": "aus Reprocessing \u267b \u00b7 {n} St\u00fcck",
+        "from compressed ore \u267b \u00b7 {ore}": "aus komprimiertem Erz \u267b \u00b7 {ore}",
+        "buy \u00b7 partly from compressed ore \u267b": "kaufen \u00b7 teils aus komprimiertem Erz \u267b",
+        "Unrefined reaction": "Unrefined-Reaktion",
+        "Unrefined reactions": "Unrefined-Reaktionen",
+        "on blacklist \u2013 provided, not bought":
+            "auf der Blacklist \u2013 wird gestellt, nicht gekauft",
+        "incl. freight":
+            "inkl. Fracht",
+        "no compressed ore is cheaper":
+            "kein komprimiertes Erz ist g\xfcnstiger",
+        "Compressed ore the plan buys instead of minerals \u2013 reprocessed at {struct}.":
+            "Komprimiertes Erz, das der Plan statt Mineralen kauft \u2013 reprocesst an {struct}.",
+        "saves {isk} \xb7 {n} ores":
+            "spart {isk} \xb7 {n} Erze",
+        "no unrefined reaction is cheaper":
+            "keine Unrefined-Reaktion ist g\xfcnstiger",
+        "reprocess \u2192 {out} \xb7 {pct} %":
+            "reprocessen \u2192 {out} \xb7 {pct} %",
+        "{n} intermediates via unrefined reaction":
+            "{n} Zwischenmaterialien \xfcber Unrefined-Reaktion",
+        "Compressed ore checked: {ore} would be {pct} % more expensive than buying the mineral.":
+            "Komprimiertes Erz gepr\xfcft: {ore} w\xe4re {pct} % teurer als der Kauf des Minerals.",
+        "Compressed ore \u267b":
+            "Komprimiertes Erz \u267b",
+        "Builds intermediates via their \u201eUnrefined \u2026 Reaction Formula\u201c when that is cheaper per unit than the normal reaction or buying.\nYield: 50 % \xd7 Scrapmetal Processing. The returned input is credited but stays on the shopping list.\nNeeds: hub scan + \u201eLoad skills\u201c.":
+            "Baut Zwischenmaterialien \xfcber ihre \u201eUnrefined \u2026 Reaction Formula\u201c, wenn das je St\xfcck g\xfcnstiger ist als normale Reaktion oder Kauf.\nAusbeute: 50 % \xd7 Scrapmetal Processing. Der R\xfcckl\xe4ufer wird gutgeschrieben, bleibt aber auf der Einkaufsliste.\nBraucht: Hub-Scan + \u201eSkills laden\u201c.",
+        "Buys compressed ore instead of a mineral when the ore is cheaper \u2013 with your yield (structure, rig, skills). By-products count as far as the plan needs them. Batches of 100.\nNeeds: hub scan + \u201eLoad skills\u201c.":
+            "Kauft komprimiertes Erz statt eines Minerals, wenn das Erz g\xfcnstiger ist \u2013 mit deiner Ausbeute (Struktur, Rig, Skills). Nebenprodukte z\xe4hlen, soweit der Plan sie braucht. Bl\xf6cke zu 100.\nBraucht: Hub-Scan + \u201eSkills laden\u201c.",
+        "Unrefined: 50 % \xd7 Scrapmetal Processing \u2013 no skills loaded":
+            "Unrefined: 50 % \xd7 Scrapmetal Processing \u2013 keine Skills geladen",
+        "Unrefined: {pct} % \xb7 {char} (50 % \xd7 Scrapmetal Processing, structure does not apply)":
+            "Unrefined: {pct} % \xb7 {char} (50 % \xd7 Scrapmetal Processing, Struktur z\xe4hlt nicht)",
+        "After the reaction: reprocess the unrefined products with the named character (any station or structure) \u2013 only then is the intermediate material in stock for the next stage. The returned input (surplus, right) comes back here as well.":
+            "Nach der Reaktion: die Unrefined-Produkte mit dem genannten Charakter reprocessen (beliebige Station oder Struktur) \u2013 erst dann liegt das Zwischenmaterial f\xfcr die n\xe4chste Stufe im Bestand. Der R\xfcckl\xe4ufer (\xdcberschuss, rechts) kommt hier ebenfalls zur\xfcck.",
+        "Base 50 % \xd7 Scrapmetal Processing":
+            "Basis 50 % \xd7 Scrapmetal Processing",
+        "{n} units from the reaction stage above. Yield {pct} % with this character: 50 % \xd7 Scrapmetal Processing \u2013 structure, rig and ore skills do not apply here.\nTick = reprocessed (progress mark only).":
+            "{n} St\xfcck aus der Reaktionsstufe dar\xfcber. Ausbeute {pct} % mit diesem Charakter: 50 % \xd7 Scrapmetal Processing \u2013 Struktur, Rig und Erz-Skills z\xe4hlen hier nicht.\nHaken = reprocesst (nur Fortschrittsmarke).",
+        "Use unrefined reactions where cheaper":
+            "Unrefined-Reaktionen nutzen, wo g\xfcnstiger",
+        "Input material that comes back when the unrefined products are reprocessed \u2013 credited at the hub price. It stays on the shopping list because it returns only after the reaction.":
+            "Input-Material, das beim Reprocessing der Unrefined-Produkte zur\xfcckkommt \u2013 zum Hub-Preis gutgeschrieben. Es bleibt auf der Einkaufsliste, weil es erst nach der Reaktion zur\xfcckkommt.",
+        "Returned after reprocessing (credit): ":
+            "R\xfcckl\xe4ufer aus Reprocessing (Gutschrift): ",
+        "via {formula} \u267b":
+            "\xfcber {formula} \u267b",
+        "Reprocessing of unrefined products":
+            "Reprocessing der Unrefined-Produkte",
+        "Unrefined reaction not cheaper for: {liste}":
+            "Unrefined-Reaktion nicht g\xfcnstiger f\xfcr: {liste}",
+        "\u2212 Returned (reprocessing)":
+            "\u2212 R\xfcckl\xe4ufer (Reprocessing)",
+        "Covered by reprocessing compressed ore (run planner, stage 0) \u2013 nothing to buy. Once the ore is reprocessed and ticked there, the minerals must lie in stock.":
+            "Gedeckt durch Reprocessing von komprimiertem Erz (Runplaner, Stufe 0) \u2013 nichts zu kaufen. Sobald das Erz reprocesst und dort abgehakt ist, m\u00fcssen die Minerale im Bestand liegen.",
         "Character:": "Charakter:",
         "EVE data": "EVE-Daten",
         "Updates": "Updates",
@@ -4357,8 +4450,12 @@ KATALOG = {
             "= {q} St\u00fcck ({n} je Run)",
         "On (count corp hangars when building)":
             "An (Corp-Hangar beim Bauen mitzählen)",
-        "Division {n}":
-            "Division {n}",
+        "Corp-Hangar {n}":
+            "Corp-Hangar {n}",
+        "wave {n}":
+            "Welle {n}",
+        "Second listing of this character: start these copies once the first wave has freed the slots (e.g. the next day).":
+            "Zweite Auflistung dieses Charakters: diese Kopien starten, sobald die erste Welle die Slots freigegeben hat (z. B. am nächsten Tag).",
         "Load names":
             "Namen laden",
         "Fetches the division names of your corporation from ESI. Needs a linked character with the Director role and the corp permission.":

@@ -12,6 +12,7 @@ structure, rigs and system index.
 import csv
 import io
 import json
+import math
 import os
 import sqlite3
 import time
@@ -58,6 +59,11 @@ def _conn():
 
 
 def init_db():
+    # Tabellen `reprocess` / `reprocess_portion` (1.0.9, Vorbereitung): was
+    # ein Erz oder ein Unrefined-Mineral beim Reprocessen ergibt - BASISWERT
+    # je Portion laut SDE, ohne Ausbeute. Die Ausbeute (Struktur, Skills,
+    # Implantat) kommt spaeter obendrauf. Kein SQL-Kommentar im Schema: der
+    # steht in einem String, und de_scan4 liest Strings.
     with _conn() as c:
         c.executescript(
             """
@@ -109,6 +115,29 @@ def init_db():
             CREATE INDEX IF NOT EXISTS ix_bpinvsci ON bp_invention_skills(blueprint_id);
             CREATE INDEX IF NOT EXISTS ix_itemcat ON item_cat(category_id);
             CREATE INDEX IF NOT EXISTS ix_itemcat_meta ON item_cat(meta_group_id);
+            CREATE TABLE IF NOT EXISTS reprocess (
+                type_id INTEGER, material_id INTEGER, quantity INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS ix_repro ON reprocess(type_id);
+            CREATE TABLE IF NOT EXISTS reprocess_portion (
+                type_id INTEGER PRIMARY KEY, portion_size INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS reprocess_skill_ids (
+                name TEXT PRIMARY KEY, type_id INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS reprocess_erz_skill (
+                type_id INTEGER PRIMARY KEY, skill_id INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS reprocess_implant (
+                type_id INTEGER PRIMARY KEY, name TEXT, attr TEXT, value REAL
+            );
+            CREATE TABLE IF NOT EXISTS reprocess_struktur (
+                type_id INTEGER PRIMARY KEY, name TEXT, bonus_pct REAL
+            );
+            CREATE TABLE IF NOT EXISTS reprocess_rig (
+                type_id INTEGER PRIMARY KEY, name TEXT, mult REAL,
+                hi REAL, low REAL, null_sec REAL
+            );
             """
         )
         # migration for DBs created before meta_level existed
@@ -466,6 +495,299 @@ def container_type_ids() -> set:
         return {t for t, v in item_category_map().items() if v[1] in gids}
     except Exception:
         return set()
+
+
+# ---- Reprocessing-Ausgang (1.0.9, Vorbereitung) ------------------------------
+# Datengrundlage fuer zwei kommende Rechenwege (Nutzer, 17.09.2026):
+#   A) Unrefined-Reaktionen: Prismaticite + Gas -> "Unrefined X" -> reprocess
+#      -> Mineral X   (1 Eingang -> 1 Mineral)
+#   B) Compressed Ore statt Minerale kaufen: Erz -> reprocess -> mehrere
+#      Minerale, gegen Volumen/Transport gerechnet
+# Hier liegt NUR der SDE-Basiswert je Portion. Die Ausbeute (Struktur x
+# Skills x Implantat) und "variable Menge" bei Unrefined sind offen und
+# werden erst nach der Messung im Spiel gebaut - vorher rechnet nichts damit.
+
+def reprocess_map() -> dict:
+    """{type_id: {"portion": n, "out": {material_id: Stueck je Portion}}}
+    aus der lokalen Rezeptdatenbank. Leer, wenn die SDE fehlt oder die
+    Tabelle noch nie gefuellt wurde (Fassung vor 1.0.9)."""
+    if not os.path.exists(_db_path()):
+        return {}
+    try:
+        with _conn() as c:
+            portion = {int(r["type_id"]): int(r["portion_size"] or 1)
+                       for r in c.execute("SELECT type_id, portion_size "
+                                          "FROM reprocess_portion")}
+            out = {}
+            for r in c.execute("SELECT type_id, material_id, quantity "
+                               "FROM reprocess"):
+                t = int(r["type_id"])
+                e = out.setdefault(t, {"portion": portion.get(t, 1), "out": {}})
+                e["out"][int(r["material_id"])] = int(r["quantity"] or 0)
+            return out
+    except Exception:
+        return {}
+
+
+def reprocess_ergebnis(basis: dict, portion: int, menge: int, ausbeute: float) -> dict:
+    """{material_id: Stueck} fuer `menge` Eingangs-Items bei `ausbeute` (0..1).
+
+    PURE Funktion, ohne DB pruefbar. Zwei Regeln, beide Regel 3 (im Zweifel
+    weniger, nie mehr):
+    - nur VOLLE Portionen zaehlen - ein Rest unter der Portionsgroesse wird
+      im Spiel nicht reprocessed;
+    - je Portion wird ABGERUNDET, nicht gerundet.
+    Ausbeute ausserhalb 0..1 oder Portion < 1 -> leeres Ergebnis (lieber
+    nichts als eine Fantasiezahl).
+    """
+    try:
+        portion = int(portion)
+        menge = int(menge)
+        ausbeute = float(ausbeute)
+    except (TypeError, ValueError):
+        return {}
+    if portion < 1 or menge < portion or not (0.0 < ausbeute <= 1.0):
+        return {}
+    portionen = menge // portion
+    out = {}
+    for mat, q in (basis or {}).items():
+        try:
+            je_portion = int(math.floor(int(q) * ausbeute))
+        except (TypeError, ValueError):
+            continue
+        if je_portion > 0:
+            out[int(mat)] = je_portion * portionen
+    return out
+
+
+def reprocess_skill_ids() -> dict:
+    """{Skillname: type_id} der Gruppe, in der 'Reprocessing' liegt - aus der
+    SDE, nicht hartkodiert. Leer ohne Datenbank / vor dem ersten Load."""
+    if not os.path.exists(_db_path()):
+        return {}
+    try:
+        with _conn() as c:
+            return {str(r["name"]): int(r["type_id"])
+                    for r in c.execute("SELECT name, type_id FROM reprocess_skill_ids")}
+    except Exception:
+        return {}
+
+
+def reprocess_erz_skill() -> dict:
+    """{type_id: skill_id} - welcher Erz-Skill zu welchem Erz / Unrefined-
+    Produkt gehoert (SDE-Attribut reprocessingSkillType). Leer, wenn die SDE
+    das Attribut nicht kennt."""
+    if not os.path.exists(_db_path()):
+        return {}
+    try:
+        with _conn() as c:
+            return {int(r["type_id"]): int(r["skill_id"])
+                    for r in c.execute("SELECT type_id, skill_id FROM reprocess_erz_skill")}
+    except Exception:
+        return {}
+
+
+def reprocess_implants() -> dict:
+    """{type_id: {"name", "attr", "value"}} der Beancounter-Reprocessing-
+    Implantate mit dem SDE-Attribut, das den Bonus traegt - MIT Namen, weil
+    die Bedeutung des Werts erst gegen die Messung im Spiel geprueft wird."""
+    if not os.path.exists(_db_path()):
+        return {}
+    try:
+        with _conn() as c:
+            return {int(r["type_id"]): {"name": str(r["name"] or ""),
+                                        "attr": str(r["attr"] or ""),
+                                        "value": float(r["value"] or 0.0)}
+                    for r in c.execute("SELECT type_id, name, attr, value "
+                                       "FROM reprocess_implant")}
+    except Exception:
+        return {}
+
+
+def reprocess_struktur_sde() -> dict:
+    """{"bonus": {name: pct}, "rig": {type_id: {"name","mult","hi","low","null"}}}
+    aus der SDE (strRefiningYieldBonus der Refineries, refiningYieldMultiplier
+    + Sicherheits-Faktoren der Standup-Reprocessing-Rigs). Leer vor dem
+    ersten "Load recipes" mit dem Stand vom 18.09.2026."""
+    if not os.path.exists(_db_path()):
+        return {"bonus": {}, "rig": {}}
+    out = {"bonus": {}, "rig": {}}
+    try:
+        with _conn() as c:
+            for r in c.execute("SELECT name, bonus_pct FROM reprocess_struktur"):
+                out["bonus"][str(r["name"])] = float(r["bonus_pct"] or 0.0)
+            for r in c.execute("SELECT type_id, name, mult, hi, low, null_sec "
+                               "FROM reprocess_rig"):
+                out["rig"][int(r["type_id"])] = {
+                    "name": str(r["name"] or ""), "mult": float(r["mult"] or 0.0),
+                    "hi": float(r["hi"] or 1.0), "low": float(r["low"] or 1.0),
+                    "null": float(r["null_sec"] or 1.0)}
+    except Exception:
+        return {"bonus": {}, "rig": {}}
+    return out
+
+
+# AUSBEUTE-FORMEL (gegen die Messung des Nutzers vom 18.09.2026 geprueft,
+# Tatara "R&R Yard", Null, Standup L-Set Reprocessing Monitor I):
+#   Struktur-Basis  = Rig-Multiplikator (0.51 / 0.53; ohne Rig 0.50 des
+#                     Service-Moduls) x Sicherheits-Faktor des Rigs
+#                     (hiSec 1.0 / lowSec 1.06 / nullSec 1.12, Attribute
+#                     2355-2357 des Rigs) x (1 + Struktur-Bonus/100)
+#                     (Athanor 2.0, Tatara 5.5, strRefiningYieldBonus)
+#   Charakter-Faktor = (1 + 0.03 * Reprocessing) * (1 + 0.02 * Reprocessing
+#   Efficiency) * (1 + 0.02 * Erz-Skill) * (1 + Implantat-% / 100)
+#   Ausbeute        = Struktur-Basis * Charakter-Faktor, je Ausgang abgerundet
+# BELEG: 0.51 x 1.12 x 1.055 = 0.60262; x 1.15 x 1.1 (Skills 5/5, Erz-Skill 0)
+# = 0.76231 -> Compressed Arkonor 3200/1200/120 -> 2439/914/91 (Spiel: genau
+# das); x 1.1 (Simple Ore Processing 5) = 0.83854 -> Compressed Veldspar 400
+# -> 335 (Spiel: 335). Die Prozentsaetze stammen aus der SDE (Attribut
+# refiningYieldMutator: Reprocessing 3, Efficiency 2, Erz-Skills 2, Implantat
+# RX-801/802/804 = 1/2/4). NICHT gemessen: Struktur OHNE Rig (0.50 x Bonus)
+# und das Implantat - beide folgen derselben Bauart, bleiben aber bis zu
+# einer Messung als "aus der SDE abgeleitet" markiert. Wer die Formel
+# aendert, aendert sie HIER - kein Korrekturfaktor anderswo.
+REPRO_JE_STUFE = 0.03
+REPRO_EFF_JE_STUFE = 0.02
+REPRO_ERZ_JE_STUFE = 0.02
+REPRO_SERVICE_BASIS = 0.50
+# SCRAPMETAL-PFAD (gemessen 19.09.2026, Unrefined Titanium Chromide): Basis
+# 50 % x (1 + 0.02 x Scrapmetal Processing) - sonst nichts. Reprocessing,
+# Reprocessing Efficiency, Erz-Skill, Rig und Struktur-Bonus tauchten in der
+# Vorschau nicht auf (Skills 5/5 vorhanden, Struktur mit Rig). 36 -> 19 und
+# 164 -> 86 bei 53,0 %: abgerundet je Stueck, wie reprocess_ergebnis rechnet.
+REPRO_SCRAP_JE_STUFE = 0.02
+
+
+def reprocess_struktur_basis(rig_multiplikator=None, sicherheits_faktor=1.0,
+                             struktur_bonus_pct=0.0):
+    """Struktur-Basis 0..1. Ohne Rig gilt das Service-Modul (0.50); ein Rig
+    ERSETZT diesen Wert (0.51 / 0.53) und wird mit dem Sicherheits-Faktor
+    des Rigs multipliziert (1.0 / 1.06 / 1.12); der Struktur-Bonus (Athanor
+    2.0, Tatara 5.5) wirkt multiplikativ. NPC-Station: alles leer -> 0.50.
+    None bei Muell oder ueber 100 %."""
+    try:
+        basis = REPRO_SERVICE_BASIS if rig_multiplikator is None else float(rig_multiplikator)
+        sec = float(sicherheits_faktor if sicherheits_faktor is not None else 1.0)
+        bonus = float(struktur_bonus_pct or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if not (0.0 < basis <= 1.0) or sec < 1.0 or bonus < 0.0 or bonus > 100.0:
+        return None
+    a = basis * sec * (1.0 + bonus / 100.0)
+    return a if a <= 1.0 else None
+
+
+def _stufe(x):
+    try:
+        v = int(x)
+    except (TypeError, ValueError):
+        return None
+    return v if 0 <= v <= 5 else None
+
+
+def reprocess_char_faktor(reprocessing, efficiency, erz_skill, implant_pct=0.0):
+    """Skill-x-Implantat-Faktor eines Charakters (>= 1.0) oder None bei
+    Muell (Stufe ausserhalb 0..5, Implantat negativ / keine Zahl)."""
+    r, e, s = _stufe(reprocessing), _stufe(efficiency), _stufe(erz_skill)
+    if r is None or e is None or s is None:
+        return None
+    try:
+        imp = float(implant_pct or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if imp < 0.0 or imp > 100.0:
+        return None
+    return ((1.0 + REPRO_JE_STUFE * r) * (1.0 + REPRO_EFF_JE_STUFE * e)
+            * (1.0 + REPRO_ERZ_JE_STUFE * s) * (1.0 + imp / 100.0))
+
+
+def reprocess_ausbeute(struktur_basis, char_faktor):
+    """Ausbeute 0..1 aus Struktur-Basis (0..1, Rig schon eingerechnet) und
+    Charakter-Faktor. None, wenn das Ergebnis keine Ausbeute mehr ist
+    (ueber 100 %, Basis ausserhalb 0..1, Faktor unter 1)."""
+    try:
+        b = float(struktur_basis)
+        f = float(char_faktor)
+    except (TypeError, ValueError):
+        return None
+    if not (0.0 < b <= 1.0) or f < 1.0:
+        return None
+    a = b * f
+    return a if a <= 1.0 else None
+
+
+def scrap_char_faktor(scrapmetal):
+    """Faktor des Scrapmetal-Pfads (>= 1.0) oder None bei Muell."""
+    s = _stufe(scrapmetal)
+    if s is None:
+        return None
+    return 1.0 + REPRO_SCRAP_JE_STUFE * s
+
+
+def scrap_ausbeute(char_faktor):
+    """Ausbeute 0..1 fuer Items ohne Erz-Skill (Unrefined-Produkte, Module):
+    feste 50 % x Charakter-Faktor. Struktur, Rig und Implantat: nicht
+    beteiligt (gemessen; Implantat nicht getestet, deshalb NICHT gerechnet -
+    Regel 3)."""
+    return reprocess_ausbeute(REPRO_SERVICE_BASIS, char_faktor)
+
+
+def bester_scrap_char(skills_by_char, skill_ids):
+    """(character_id, faktor) des Charakters mit der hoechsten Scrapmetal-
+    Processing-Stufe - (None, None) ohne Skills oder ohne Skill-ID. Ohne den
+    Skill zaehlt Stufe 0 (Faktor 1.0). Gleichstand: kleinere ID."""
+    sid = (skill_ids or {}).get("Scrapmetal Processing")
+    if not sid:
+        return (None, None)
+    best = (None, None)
+    for cid, sk in (skills_by_char or {}).items():
+        try:
+            cid_i = int(cid)
+        except (TypeError, ValueError):
+            continue
+        sk = {int(k): v for k, v in (sk or {}).items()} if sk else {}
+        if not sk:
+            continue
+        f = scrap_char_faktor(sk.get(int(sid), 0))
+        if f is None:
+            continue
+        if best[1] is None or f > best[1] or (f == best[1] and cid_i < best[0]):
+            best = (cid_i, f)
+    return best
+
+
+def bester_reprocess_char(skills_by_char, implant_by_char, skill_ids, erz_skill_id):
+    """(character_id, faktor) des Charakters mit dem hoechsten Skill-x-
+    Implantat-Faktor fuer dieses Erz - oder (None, None), wenn niemand Skills
+    geladen hat oder die Skill-IDs fehlen. Gleichstand: kleinere ID, damit
+    das Ergebnis reproduzierbar ist. Ein Charakter ohne den Erz-Skill zaehlt
+    mit Stufe 0, nicht als fehlend - er darf ja reprocessen, nur schlechter.
+
+    skills_by_char: {cid: {skill_id: level}} (bau_char_skills, Schluessel
+    duerfen str sein), implant_by_char: {cid: prozent}, skill_ids: Ergebnis
+    von reprocess_skill_ids()."""
+    rid = (skill_ids or {}).get("Reprocessing")
+    eid = (skill_ids or {}).get("Reprocessing Efficiency")
+    if not rid or not eid:
+        return (None, None)
+    best = (None, None)
+    for cid, sk in (skills_by_char or {}).items():
+        try:
+            cid_i = int(cid)
+        except (TypeError, ValueError):
+            continue
+        sk = {int(k): v for k, v in (sk or {}).items()} if sk else {}
+        if not sk:
+            continue
+        imp = (implant_by_char or {}).get(cid_i, (implant_by_char or {}).get(str(cid_i), 0.0))
+        f = reprocess_char_faktor(sk.get(int(rid), 0), sk.get(int(eid), 0),
+                                  sk.get(int(erz_skill_id), 0) if erz_skill_id else 0,
+                                  imp)
+        if f is None:
+            continue
+        if best[1] is None or f > best[1] or (f == best[1] and cid_i < best[0]):
+            best = (cid_i, f)
+    return best
 
 
 def _rig_gids_from(names_by_gid) -> set:
@@ -1192,6 +1514,76 @@ def _write_implant_diagnostic(src):
     return path
 
 
+def _write_reprocess_diagnostic(src):
+    """DIAGNOSE (rein lesend): schreibt app_data_dir/reprocess_diagnose.txt.
+    Zweck (1.0.9): BEVOR eine Ausbeuteformel in den Bauplan kommt, muss
+    sichtbar sein, was die SDE ueber Reprocessing weiss - Attributnamen,
+    die Skills der Gruppe "Reprocessing", die Beancounter-Reprocessing-
+    Implantate, und die Attribute von Veldspar / Compressed Veldspar /
+    Unrefined Hexite / Athanor / Tatara / Reprocessing-Rigs. Nichts wird
+    interpretiert, nur gezeigt. Bricht den SDE-Load nie ab."""
+    import os as _os
+
+    def q(sql, params=()):
+        try:
+            return src.execute(sql, params).fetchall()
+        except Exception:
+            return None
+
+    def attrs(tid):
+        at = q("SELECT ta.attributeID, at.attributeName, ta.valueInt, ta.valueFloat "
+               "FROM dgmTypeAttributes ta "
+               "LEFT JOIN dgmAttributeTypes at ON at.attributeID=ta.attributeID "
+               "WHERE ta.typeID=? ORDER BY ta.attributeID", (tid,))
+        if not at:
+            return ["    dgmTypeAttributes: (keine)"]
+        return [f"    attr {a[0]:>5} {str(a[1] or '?'):<44} = "
+                f"{a[2] if a[2] is not None else a[3]}" for a in at]
+
+    def block(title, rows):
+        L.append("")
+        L.append(f"== {title} ==")
+        if not rows:
+            L.append("  (nichts gefunden)")
+            return
+        for tid, nm in rows:
+            L.append(f"  [{nm}  (typeID {tid})]")
+            L.extend(attrs(tid))
+
+    L = ["MOTOR MARKET - REPROCESSING-DIAGNOSE (1.0.9)",
+         "Zweck: was die SDE ueber Reprocessing-Ausbeute weiss. Nur gezeigt, "
+         "nicht interpretiert.",
+         "=" * 70, "",
+         "== Attributnamen mit 'reproc' oder 'refin' =="]
+    names = q("SELECT attributeID, attributeName FROM dgmAttributeTypes "
+              "WHERE LOWER(attributeName) LIKE '%reproc%' "
+              "OR LOWER(attributeName) LIKE '%refin%' ORDER BY attributeID")
+    for aid, an in (names or []):
+        L.append(f"  {aid:>5}  {an}")
+    if not names:
+        L.append("  (keine)")
+    grp = q("SELECT groupID FROM invTypes WHERE typeName='Reprocessing'")
+    block("Skills in der Gruppe von 'Reprocessing'",
+          q("SELECT typeID, typeName FROM invTypes WHERE groupID=? ORDER BY typeName",
+            (grp[0][0],)) if grp else [])
+    block("Implantate 'Beancounter Reprocessing'",
+          q("SELECT typeID, typeName FROM invTypes "
+            "WHERE typeName LIKE '%Beancounter%Reprocessing%' ORDER BY typeName"))
+    block("Erze / Unrefined (Beispiele)",
+          q("SELECT typeID, typeName FROM invTypes WHERE typeName IN "
+            "('Veldspar','Compressed Veldspar','Unrefined Hexite','Hexite') "
+            "ORDER BY typeName"))
+    block("Refineries", q("SELECT typeID, typeName FROM invTypes "
+                          "WHERE typeName IN ('Athanor','Tatara') ORDER BY typeName"))
+    block("Reprocessing-Rigs (Standup)",
+          q("SELECT typeID, typeName FROM invTypes "
+            "WHERE typeName LIKE 'Standup%Reprocessing%' ORDER BY typeName"))
+    path = _os.path.join(config.app_data_dir(), "reprocess_diagnose.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(L) + "\n")
+    return path
+
+
 def _write_skill_diagnostic(src):
     """DIAGNOSE (rein lesend): schreibt app_data_dir/skill_diagnose.txt.
     Zweck: prüfen, WIE/OB die SDE die Job-Zeit-Prozentsätze der Skills Industry
@@ -1673,6 +2065,114 @@ def download_sde(progress=None):
             pkg_vol_rows = src.execute("SELECT typeID, volume FROM invVolumes").fetchall()
         except Exception:
             pkg_vol_rows = []
+        # REPROCESSING-AUSGANG (1.0.9, Vorbereitung; Nutzer 17.09.2026:
+        # Unrefined-Reaktionen und Compressed Ore statt Minerale). NUR die
+        # Typen, um die es geht: Kategorie 25 (Asteroid = Erze, komprimiert
+        # und roh) und Kategorie 4 (Material - dort liegen die Unrefined-
+        # Minerale, Gruppe "Unrefined Mineral"). Alles andere (Module ->
+        # Minerale) waere Ballast. Fehlt die Tabelle in einer SDE-Fassung,
+        # bleibt die Liste leer - kein Absturz, kein Raten.
+        try:
+            repro_rows = src.execute(
+                "SELECT m.typeID, m.materialTypeID, m.quantity "
+                "FROM invTypeMaterials m JOIN invTypes t ON t.typeID=m.typeID "
+                "JOIN invGroups g ON g.groupID=t.groupID "
+                "WHERE g.categoryID IN (25, 4)").fetchall()
+        except Exception:
+            repro_rows = []
+        try:
+            portion_rows = src.execute(
+                "SELECT t.typeID, t.portionSize FROM invTypes t "
+                "JOIN invGroups g ON g.groupID=t.groupID "
+                "WHERE g.categoryID IN (25, 4)").fetchall()
+        except Exception:
+            portion_rows = []
+        # REPROCESSING-SKILLS, ERZ->SKILL, IMPLANTATE (1.0.9, Vorbereitung 2,
+        # 17.09.2026). Nichts davon rechnet schon im Bauplan - es wird nur
+        # gesammelt, damit die Ausbeuteformel gegen die Messung im Spiel
+        # geprueft werden kann (Regel 1/2). Keine ID ist hier geraten: die
+        # Skill-Gruppe kommt ueber den Namen "Reprocessing", das Erz->Skill-
+        # Attribut ueber seinen Namen in dgmAttributeTypes, das Implantat-
+        # Attribut wird MIT NAMEN gespeichert, damit man spaeter sieht, was
+        # es war. Fehlt etwas in einer SDE-Fassung: leer, kein Absturz.
+        try:
+            _rs_grp = src.execute(
+                "SELECT groupID FROM invTypes WHERE typeName='Reprocessing'").fetchone()
+            repro_skill_rows = src.execute(
+                "SELECT typeID, typeName FROM invTypes WHERE groupID=?",
+                (_rs_grp[0],)).fetchall() if _rs_grp else []
+        except Exception:
+            repro_skill_rows = []
+        try:
+            _aid = src.execute(
+                "SELECT attributeID FROM dgmAttributeTypes "
+                "WHERE attributeName='reprocessingSkillType'").fetchone()
+            erz_skill_rows = src.execute(
+                "SELECT ta.typeID, ta.valueInt, ta.valueFloat FROM dgmTypeAttributes ta "
+                "JOIN invTypes t ON t.typeID=ta.typeID "
+                "JOIN invGroups g ON g.groupID=t.groupID "
+                "WHERE ta.attributeID=? AND g.categoryID IN (25, 4)",
+                (_aid[0],)).fetchall() if _aid else []
+        except Exception:
+            erz_skill_rows = []
+        try:
+            repro_imp_rows = src.execute(
+                "SELECT t.typeID, t.typeName, at.attributeName, ta.valueInt, ta.valueFloat "
+                "FROM invTypes t JOIN dgmTypeAttributes ta ON ta.typeID=t.typeID "
+                "JOIN dgmAttributeTypes at ON at.attributeID=ta.attributeID "
+                "WHERE t.typeName LIKE '%Beancounter%Reprocessing%' "
+                "AND (LOWER(at.attributeName) LIKE '%reproc%' "
+                "OR LOWER(at.attributeName) LIKE '%refin%')").fetchall()
+        except Exception:
+            repro_imp_rows = []
+        # STRUKTUR-BONUS und RIG-WERTE fuers Reprocessing (18.09.2026, nach der
+        # Messung): Athanor/Tatara tragen strRefiningYieldBonus (2.0 / 5.5),
+        # die Standup-Reprocessing-Rigs refiningYieldMultiplier (0.51 / 0.53)
+        # plus hi/low/nullSecModifier (1.0 / 1.06 / 1.12). Alle IDs ueber den
+        # Attributnamen, wie bei den Skills.
+        def _attr_id(name):
+            try:
+                _r = src.execute("SELECT attributeID FROM dgmAttributeTypes "
+                                 "WHERE attributeName=?", (name,)).fetchone()
+                return int(_r[0]) if _r else None
+            except Exception:
+                return None
+        try:
+            _a_bonus = _attr_id("strRefiningYieldBonus")
+            repro_struct_rows = src.execute(
+                "SELECT t.typeID, t.typeName, ta.valueInt, ta.valueFloat "
+                "FROM invTypes t JOIN dgmTypeAttributes ta ON ta.typeID=t.typeID "
+                "WHERE ta.attributeID=?", (_a_bonus,)).fetchall() if _a_bonus else []
+        except Exception:
+            repro_struct_rows = []
+        try:
+            _a_mult, _a_hi, _a_low, _a_null = (
+                _attr_id("refiningYieldMultiplier"), _attr_id("hiSecModifier"),
+                _attr_id("lowSecModifier"), _attr_id("nullSecModifier"))
+            repro_rig_rows = []
+            if _a_mult:
+                for _tid, _nm, _vi, _vf in src.execute(
+                        "SELECT t.typeID, t.typeName, ta.valueInt, ta.valueFloat "
+                        "FROM invTypes t JOIN dgmTypeAttributes ta ON ta.typeID=t.typeID "
+                        "WHERE ta.attributeID=?", (_a_mult,)).fetchall():
+                    _mods = []
+                    for _aid in (_a_hi, _a_low, _a_null):
+                        _v = None
+                        if _aid:
+                            _r = src.execute(
+                                "SELECT valueInt, valueFloat FROM dgmTypeAttributes "
+                                "WHERE typeID=? AND attributeID=?", (_tid, _aid)).fetchone()
+                            if _r:
+                                _v = _r[0] if _r[0] is not None else _r[1]
+                        _mods.append(_v)
+                    repro_rig_rows.append((_tid, _nm, _vi if _vi is not None else _vf,
+                                           _mods[0], _mods[1], _mods[2]))
+        except Exception:
+            repro_rig_rows = []
+        try:
+            _write_reprocess_diagnostic(src)   # Diagnose: Reprocessing in der SDE
+        except Exception:
+            pass
         # Struktur-Rigs (Standup) + ihre Boni. Die Attribut-IDs 2593/2594/2595 sind
         # NUR für Fertigungs-Rigs bestätigt (Name "attributeEngRig...Bonus" - "Eng" =
         # Engineering). Reaktions-/Refinery-Rigs könnten andere IDs mit demselben
@@ -2002,6 +2502,50 @@ def download_sde(progress=None):
         if sk_id in science_skill_ids:
             bp_science_records.append((bp_id, sk_id))
     bp_invention_records = list(invention_skill_rows)
+    repro_records = clean_int(repro_rows, 3)
+    portion_records = []
+    for r in portion_rows:
+        try:
+            portion_records.append((int(r[0]), int(r[1] or 1)))
+        except (TypeError, ValueError):
+            continue
+    repro_skill_records = []
+    for r in repro_skill_rows:
+        try:
+            repro_skill_records.append((str(r[1]), int(r[0])))
+        except (TypeError, ValueError):
+            continue
+    erz_skill_records = []
+    for r in erz_skill_rows:
+        try:
+            _v = r[1] if r[1] is not None else r[2]
+            erz_skill_records.append((int(r[0]), int(_v)))
+        except (TypeError, ValueError):
+            continue
+    repro_imp_records = []
+    for r in repro_imp_rows:
+        try:
+            _v = r[3] if r[3] is not None else r[4]
+            repro_imp_records.append((int(r[0]), str(r[1]), str(r[2]), float(_v)))
+        except (TypeError, ValueError):
+            continue
+    repro_struct_records = []
+    for r in repro_struct_rows:
+        try:
+            _v = r[2] if r[2] is not None else r[3]
+            repro_struct_records.append((int(r[0]), str(r[1]), float(_v)))
+        except (TypeError, ValueError):
+            continue
+    repro_rig_records = []
+    for r in repro_rig_rows:
+        try:
+            # Fehlt ein Sicherheits-Faktor (Service-Modul hat keinen), gilt 1.0.
+            repro_rig_records.append((int(r[0]), str(r[1]), float(r[2]),
+                                      float(r[3] if r[3] is not None else 1.0),
+                                      float(r[4] if r[4] is not None else 1.0),
+                                      float(r[5] if r[5] is not None else 1.0)))
+        except (TypeError, ValueError):
+            continue
 
     with _conn() as c:
         c.execute("DELETE FROM materials")
@@ -2057,6 +2601,43 @@ def download_sde(progress=None):
             c.executemany(
                 "INSERT INTO bp_invention_skills(blueprint_id,skill_id,is_encryption) "
                 "VALUES (?,?,?)", bp_invention_records)
+        # NUR ERSETZEN, WENN ETWAS ANKAM: eine SDE-Fassung ohne die Tabelle
+        # darf einen frueheren, vollen Stand nicht durch Leere ersetzen.
+        if repro_records:
+            c.execute("DELETE FROM reprocess")
+            c.executemany(
+                "INSERT INTO reprocess(type_id,material_id,quantity) VALUES (?,?,?)",
+                repro_records)
+        if portion_records:
+            c.execute("DELETE FROM reprocess_portion")
+            c.executemany(
+                "INSERT OR REPLACE INTO reprocess_portion(type_id,portion_size) "
+                "VALUES (?,?)", portion_records)
+        if repro_skill_records:
+            c.execute("DELETE FROM reprocess_skill_ids")
+            c.executemany(
+                "INSERT OR REPLACE INTO reprocess_skill_ids(name,type_id) VALUES (?,?)",
+                repro_skill_records)
+        if erz_skill_records:
+            c.execute("DELETE FROM reprocess_erz_skill")
+            c.executemany(
+                "INSERT OR REPLACE INTO reprocess_erz_skill(type_id,skill_id) VALUES (?,?)",
+                erz_skill_records)
+        if repro_imp_records:
+            c.execute("DELETE FROM reprocess_implant")
+            c.executemany(
+                "INSERT OR REPLACE INTO reprocess_implant(type_id,name,attr,value) "
+                "VALUES (?,?,?,?)", repro_imp_records)
+        if repro_struct_records:
+            c.execute("DELETE FROM reprocess_struktur")
+            c.executemany(
+                "INSERT OR REPLACE INTO reprocess_struktur(type_id,name,bonus_pct) "
+                "VALUES (?,?,?)", repro_struct_records)
+        if repro_rig_records:
+            c.execute("DELETE FROM reprocess_rig")
+            c.executemany(
+                "INSERT OR REPLACE INTO reprocess_rig(type_id,name,mult,hi,low,null_sec) "
+                "VALUES (?,?,?,?,?,?)", repro_rig_records)
         c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('updated', ?)",
                   (str(time.time()),))
     _meta_counts = {}
@@ -2067,6 +2648,12 @@ def download_sde(progress=None):
             "activities": len(act_rows), "rigs": len(rig_records),
             "bp_science": len(bp_science_records),
             "bp_invention_skills": len(bp_invention_records),
+            "reprocess": len(repro_records),
+            "reprocess_skills": len(repro_skill_records),
+            "reprocess_erz_skill": len(erz_skill_records),
+            "reprocess_implants": len(repro_imp_records),
+            "reprocess_struktur": len(repro_struct_records),
+            "reprocess_rigs": len(repro_rig_records),
             "have_meta_col": have_meta_col,
             # Diagnose: wie viele Items je Tech-Stufe geladen wurden (1=T1,
             # 2=T2, 14=T3, 0=unbekannt/nicht zugeordnet) - macht sofort
@@ -2362,7 +2949,8 @@ def build_cost(type_id, price_fn, recipes: Recipes, opts: dict,
         inv_me = _invention_me_pct(bp_id, recipes, opts)
         if inv_me is not None:
             rig_me = (opts.get("rig_me_map") or {}).get(type_id, 0) or 0
-            me_pct = (1 - (1 - inv_me / 100.0) * (1 - rig_me / 100.0)) * 100.0
+            me_pct = me_invented_pct(inv_me, rig_me,
+                                     (opts.get("ec_me_map") or {}).get(type_id, 0) or 0)
         else:
             me_pct = (me_map.get(type_id) if me_map and type_id in me_map
                       else opts.get("me", 0))
@@ -2514,6 +3102,20 @@ def build_cost(type_id, price_fn, recipes: Recipes, opts: dict,
                     per_unit += _add
                     _p_inv += _add
 
+    # WEG A: RUECKLAEUFER-GUTSCHRIFT (Nutzer-Befund 19.09.2026, Ishtar x10:
+    # Thulium Hafnite wurde GEKAUFT, obwohl die Unrefined-Wahl es fuer
+    # 9'730 statt 18'560 je Stueck bauen wollte). Die Rezept-Kopie
+    # (reprocess.rezepte_mit_unrefined) fuehrt X ueber die Unrefined-Formel,
+    # deren Kosten je Run OHNE die zurueckkommenden 91 Hafnium 28'601 je
+    # Stueck sind - production_plan sah nur diese Zahl und kaufte. Die Wahl
+    # hatte die Gutschrift schon eingerechnet; hier zaehlt sie genauso,
+    # damit build_cost, Rezeptbaum und Plan EINE Entscheidung treffen.
+    _uw = (getattr(recipes, "unrefined", None) or {}).get(type_id)
+    if _uw and prod_qty:
+        _kr = float(_uw.get("kredit_je_run") or 0.0) / prod_qty
+        if _kr > 0:
+            per_unit = max(0.0, per_unit - _kr)
+            _p_market = max(0.0, _p_market - _kr)
     memo[type_id] = per_unit
     if parts_memo is not None:
         parts_memo[type_id] = {"mat_market": _p_market, "mat_adjusted": _p_adj,
@@ -2665,7 +3267,8 @@ def build_tree(type_id, price_fn, recipes: Recipes, opts: dict,
         inv_me = _invention_me_pct(bp_id, recipes, opts)
         if inv_me is not None:
             rig_me = (opts.get("rig_me_map") or {}).get(type_id, 0) or 0
-            me_pct = (1 - (1 - inv_me / 100.0) * (1 - rig_me / 100.0)) * 100.0
+            me_pct = me_invented_pct(inv_me, rig_me,
+                                     (opts.get("ec_me_map") or {}).get(type_id, 0) or 0)
         else:
             me_pct = (me_map.get(type_id) if me_map and type_id in me_map
                       else opts.get("me", 0))
@@ -3143,7 +3746,8 @@ def production_plan(type_id, units, price_fn, recipes: Recipes, opts: dict):
             inv_me = _invention_me_pct(bp[0], recipes, opts) if bp else None
             if inv_me is not None:
                 rig_me = (opts.get("rig_me_map") or {}).get(tid, 0) or 0
-                pct = (1 - (1 - inv_me / 100.0) * (1 - rig_me / 100.0)) * 100.0
+                pct = me_invented_pct(inv_me, rig_me,
+                                      (opts.get("ec_me_map") or {}).get(tid, 0) or 0)
             else:
                 pct = me_map.get(tid, opts.get("me", 0))
             return 1 - (pct or 0) / 100.0
@@ -3304,6 +3908,12 @@ def production_plan(type_id, units, price_fn, recipes: Recipes, opts: dict):
         c += _job_cost(eiv, activity, out_qty, opts) or 0.0
         if activity == MANUFACTURING:
             c += _inv_cost(bp_id, runs, recipes, price_fn, opts)
+        # WEG A: Ruecklaeufer-Gutschrift je Run (s. build_cost, gleiche
+        # Quelle recipes.unrefined) - sonst kauft der Plan X, das die Wahl
+        # gerade als guenstiger befunden hat (Thulium-Hafnite-Fund).
+        _uw = (getattr(recipes, "unrefined", None) or {}).get(tid)
+        if _uw and runs > 0:
+            c = max(0.0, c - runs * float(_uw.get("kredit_je_run") or 0.0))
         return c, runs, eiv, activity, out_qty, bp_id, complete
 
     while queue:
@@ -4129,6 +4739,21 @@ def invention_attempts_for_confidence(successes_needed, prob, confidence=0.75,
     return max_attempts
 
 
+def me_invented_pct(inv_me, rig_me, ec_me=0.0):
+    """Effektive ME einer INVENTED Blaupause: Invention-ME x Rig x Struktur-
+    Rollenbonus (Engineering Complex 1 %), multiplikativ wie im Spiel.
+    NUTZER-BEFUND 19.09.2026 (Viator x20, ME 3 % Parity, Azbel): von JEDER
+    Komponente blieb ~1 % uebrig (Plates 580 von 58'200, Fusion Reactor 10
+    von 740, Ion Thruster 25 von 2'200). Nachgerechnet: 38 x 4 Runs x 0,97
+    x 0,99 = 145,96 -> 146 je Job, 5 Jobs = 730 -> genau 10 uebrig. Der
+    invented-Pfad nahm nur Invention-ME x Rig - der 1-%-Bonus des Complexes
+    stand zwar in me_map (T1-Pfad), wurde hier aber uebersprungen. EINE
+    Formel fuer build_cost, build_time_per_unit, Rezeptbaum und
+    production_plan."""
+    return (1 - (1 - float(inv_me or 0) / 100.0) * (1 - float(rig_me or 0) / 100.0)
+            * (1 - float(ec_me or 0) / 100.0)) * 100.0
+
+
 def _invention_me_pct(bp_id, recipes, opts):
     """ECHTE ME einer invented BPC (2% Basis-Invention-ME + Decryptor-Bonus)
     statt der geschätzten Kategorie-/Blueprint-ME - eine invented BPC hat NIE
@@ -4536,7 +5161,7 @@ def job_slots(skills):
 
 def schedule_build(jobs, chars, te_factor=1.0, mfg_bp=1, react_bp=1, end_bp=None,
                    fuel_ids=None,
-                   per_item_cap=None):
+                   per_item_cap=None, per_item_runs_cap=None):
     """Verteilt die Runs eines Bauplans auf Charaktere/Slots, damit alles möglichst
     gleichzeitig fertig wird – mit Aufteilung großer Items über mehrere Slots/Chars.
       jobs:  [{tid, name, runs, activity, base_time, is_end, te_factor?}]  (base_time
@@ -4550,6 +5175,14 @@ def schedule_build(jobs, chars, te_factor=1.0, mfg_bp=1, react_bp=1, end_bp=None
       per_item_cap: optional {tid: copies} - überschreibt mfg_bp/react_bp/end_bp für
         EINZELNE Items mit der ECHTEN Anzahl deiner Blaupausen dieses Items (z.B. aus
         ESI geladen) - für Items ohne Eintrag gilt weiter die pauschale Stufen-Zahl.
+      per_item_runs_cap: optional {tid: max Runs je JOB} - eine BPC hat nur so
+        viele Runs (bzw. SDE maxProductionLimit). Das Item wird dann in GANZEN
+        Kopien geplant (Einheiten von m Runs, nur die letzte kleiner), die
+        nacheinander auf einem Slot laufen koennen. Nutzer 19.09.2026 (Einherji
+        II): "Der Runplaner denkt ich kann 17 Stueck mit einem Blueprint bauen
+        ... gibts maximal 10 runs" und "moeglichst alle Blueprints am Ende
+        verbraucht haben, nicht dass Blueprints mit angefangenen Runs stehen
+        bleiben". Zuteilungen tragen dann "max_runs" und "parts".
     Modell: drei Stufen nacheinander (Reaktionen → Komponenten → Endprodukt). Je Stufe
     ist jeder Slot eines geeigneten Chars ein „Track“. Ein Item wird über bis zu
     min(bp, #Tracks, runs) Tracks aufgeteilt (längster Job zuerst, auf die am wenigsten
@@ -4580,11 +5213,17 @@ def schedule_build(jobs, chars, te_factor=1.0, mfg_bp=1, react_bp=1, end_bp=None
     # FERTIGUNGS-Jobs und landeten deshalb bei den Komponenten - also HINTER
     # den Reaktionen, die sie verbrauchen. Wer den Runplaner von oben nach
     # unten abarbeitet, stand damit ohne Treibstoff da.
-    stages = {"fuel": [], "reaction_1": [], "reaction_2": [],
+    # UNREFINED-REAKTIONEN ALS EIGENE STUFE VOR DEN INTERMEDIATES (Nutzer
+    # 19.09.2026: "an erster Stelle ueber den Intermediate Reactions - schon
+    # aus Zeitgruenden, weil sie mehr Zeit brauchen"; erst danach kann das
+    # Unrefined-Produkt reprocesst werden). Job-Feld "is_unrefined".
+    stages = {"fuel": [], "unrefined": [], "reaction_1": [], "reaction_2": [],
               "component": [], "end": []}
     _fuel = set(fuel_ids or ())
     for j in jobs:
-        if j["activity"] == REACTION:
+        if j["activity"] == REACTION and j.get("is_unrefined"):
+            stages["unrefined"].append(j)
+        elif j["activity"] == REACTION:
             # Stufe 1 (Intermediate) MUSS fertig sein, bevor Stufe 2 (Composite)
             # sie als Zutat verbrauchen kann - deshalb zwei getrennte, nacheinander
             # laufende Phasen statt einer gemeinsamen "reaction"-Phase (die
@@ -4600,18 +5239,18 @@ def schedule_build(jobs, chars, te_factor=1.0, mfg_bp=1, react_bp=1, end_bp=None
             stages["component"].append(j)
 
     assignments = []
-    stage_times = {"fuel": 0.0, "reaction_1": 0.0, "reaction_2": 0.0,
+    stage_times = {"fuel": 0.0, "unrefined": 0.0, "reaction_1": 0.0, "reaction_2": 0.0,
                    "component": 0.0, "end": 0.0}
     per_char = defaultdict(float)
     per_char_stage = {}
     job_durs = {}          # (cid, stage) -> Liste einzelner Job-Dauern (Sekunden)
     name_of = {c["id"]: c["name"] for c in chars}
 
-    for stage in ("fuel", "reaction_1", "reaction_2", "component", "end"):
+    for stage in ("fuel", "unrefined", "reaction_1", "reaction_2", "component", "end"):
         jlist = stages[stage]
         if not jlist:
             continue
-        is_reaction = stage.startswith("reaction")
+        is_reaction = stage.startswith("reaction") or stage == "unrefined"
         act = REACTION if is_reaction else MANUFACTURING
         if is_reaction:
             bp_cap = max(1, int(react_bp))
@@ -4626,6 +5265,16 @@ def schedule_build(jobs, chars, te_factor=1.0, mfg_bp=1, react_bp=1, end_bp=None
         def _cap_for(tid):
             v = _pic.get(tid)
             return max(1, int(v)) if v else bp_cap
+        _prc = per_item_runs_cap or {}
+
+        def _rcap_for(tid):
+            """Max Runs je Job dieses Items - None = kein Limit bekannt."""
+            v = _prc.get(tid)
+            try:
+                v = int(v or 0)
+            except (TypeError, ValueError):
+                v = 0
+            return v if v >= 1 else None
         machines = elig(act)
         if not machines:
             continue
@@ -4665,10 +5314,37 @@ def schedule_build(jobs, chars, te_factor=1.0, mfg_bp=1, react_bp=1, end_bp=None
         # Last je Charakter (für "ganze Items pro Char"-Zuteilung).
         char_load = {cid: 0.0 for cid, _nm, _s in machines}
         cid_slots = {cid: s for cid, _nm, s in machines}
+        # RUNS-DECKEL -> GANZE KOPIEN (Nutzer 19.09.2026: "Bei fertig
+        # geforschten Blueprints moechte man moeglichst alle Blueprints am
+        # Ende verbraucht haben, nicht dass Blueprints mit angefangenen Runs
+        # stehen bleiben"). Ein Item mit Deckel m wird in EINHEITEN von m
+        # Runs geplant (330 Runs / 10 = 33 Jobs a 10) - die Einheiten werden
+        # auf Charaktere und Slots verteilt, nie die Runs einzeln. Nur die
+        # letzte Einheit ist kleiner (Rest). Preis: ein Slot kann statt 17
+        # Runs (10 + 7) 20 Runs (10 + 10) bekommen - dafuer bleibt keine
+        # halbe Kopie liegen. Die Job-Rechnung unten arbeitet mit
+        # `runs` = Einheiten und `base_time` = m x Zeit je Run; erst
+        # _place_on_tracks rechnet in Runs zurueck.
+        _unit = {}                                   # tid -> (m, Runs gesamt)
+        _jl = []
+        for j in jlist:
+            _m = _rcap_for(j["tid"])
+            _R0 = int(j["runs"])
+            if _m and _R0 >= 1:
+                # auch unter dem Deckel: 8 Runs = EINE Kopie mit 8 Runs,
+                # nicht 8 Kopien mit je 1 Run (jede davon bliebe angefangen).
+                _unit[j["tid"]] = (_m, _R0)
+                _jl.append({**j, "runs": -(-_R0 // _m), "base_time": j["base_time"] * _m})
+            else:
+                _jl.append(j)
+        jlist = _jl
+        tr_chunks = {}                               # (track, tid, name) → Runs je Job
 
         def _place_on_tracks(track_ids, tid, name, R, tbase):
             """Verteilt R Runs eines Items auf die gegebenen Tracks (Wasserfüllung),
-            aktualisiert load/tr_runs. Gibt die Dauer (max belegte Zeit) zurück."""
+            aktualisiert load/tr_runs. Gibt die Dauer (max belegte Zeit) zurück.
+            Bei einem Item mit Runs-Deckel ist R die Zahl der EINHEITEN (ganze
+            Kopien) und tbase die Zeit je Einheit."""
             P = len(track_ids)
             if P < 1:
                 return 0.0
@@ -4688,16 +5364,37 @@ def schedule_build(jobs, chars, te_factor=1.0, mfg_bp=1, react_bp=1, end_bp=None
             ri = [int(x) for x in rf]
             for k in sorted(range(P), key=lambda k: -(rf[k] - ri[k]))[:R - sum(ri)]:
                 ri[k] += 1
+            _um = _unit.get(tid)
+            if _um:
+                # Einheiten -> Runs: jede Einheit ist eine volle Kopie (m
+                # Runs); der Rest (letzte Einheit) liegt auf dem Slot, der
+                # am spaetesten fertig wuerde - dort spart er am meisten.
+                _m, _R0 = _um
+                _rem = _R0 % _m
+                runs_k = [ri[k] * _m for k in range(P)]
+                chunks_k = [[_m] * ri[k] for k in range(P)]
+                if _rem and sum(ri) > 0:
+                    _kr = max((k for k in range(P) if ri[k] >= 1),
+                              key=lambda k: (load[track_ids[k]] + ri[k] * tv[k], -k))
+                    runs_k[_kr] -= (_m - _rem)
+                    chunks_k[_kr][-1] = _rem
+                tv_run = [x / _m for x in tv]
+            else:
+                runs_k = list(ri)
+                chunks_k = [[ri[k]] for k in range(P)]
+                tv_run = tv
             dur = 0.0
             for k, ti in enumerate(track_ids):
                 if ri[k] < 1:
                     continue
-                load[ti] += ri[k] * tv[k]
-                tr_runs[(ti, tid, name)] += ri[k]
-                tv_by_track[(ti, tid, name)] = tv[k]
+                _d = runs_k[k] * tv_run[k]
+                load[ti] += _d
+                tr_runs[(ti, tid, name)] += runs_k[k]
+                tr_chunks[(ti, tid, name)] = list(chunks_k[k])
+                tv_by_track[(ti, tid, name)] = tv_run[k]
                 key = (tracks[ti], tid, name)
-                item_dur[key] = max(item_dur.get(key, 0.0), ri[k] * tv[k])
-                dur = max(dur, ri[k] * tv[k])
+                item_dur[key] = max(item_dur.get(key, 0.0), _d)
+                dur = max(dur, _d)
             return dur
 
         jobs_sorted = sorted(jlist, key=lambda x: -(x["runs"] * x["base_time"]
@@ -4738,12 +5435,20 @@ def schedule_build(jobs, chars, te_factor=1.0, mfg_bp=1, react_bp=1, end_bp=None
             # verteilen zu müssen).
             max_char_slots = max((s for _c, _n, s in machines), default=1)
             max_reasonable = max(1, 2 * max_char_slots)
+
+            def _deckel_slots(tid):
+                # GANZE KOPIEN (Nutzer 19.09.2026: "ich kann nicht 18
+                # Blueprints laufen lassen ... auf andere Charaktere
+                # verteilen"): ein Item mit Runs-Deckel darf ALLE Slots aller
+                # angekreuzten Charaktere nutzen - die Kopien liegen ohnehin
+                # getrennt vor, der 2-Charaktere-Deckel gilt hier nicht.
+                return R if tid in _unit else max_reasonable
             budget = {}
             for j in jobs_sorted:
                 R = int(j["runs"])
                 if R < 1:
                     continue
-                cap_i = min(int(_cap_for(j["tid"])), R, max_reasonable)
+                cap_i = min(int(_cap_for(j["tid"])), R, _deckel_slots(j["tid"]))
                 want = max(1, round(total_slots * work_of[j["tid"]] / total_w))
                 budget[j["tid"]] = min(want, cap_i)
             # Rest-Slots (falls Summe < total_slots) an die Items mit der höchsten
@@ -4760,7 +5465,7 @@ def schedule_build(jobs, chars, te_factor=1.0, mfg_bp=1, react_bp=1, end_bp=None
                     if R < 1:
                         continue
                     s = budget[j["tid"]]
-                    if s >= min(int(_cap_for(j["tid"])), R, max_reasonable):
+                    if s >= min(int(_cap_for(j["tid"])), R, _deckel_slots(j["tid"])):
                         continue
                     tb = j["base_time"] * j.get("te_factor", te_factor)
                     t_per = (R * tb) / s
@@ -4954,20 +5659,43 @@ def schedule_build(jobs, chars, te_factor=1.0, mfg_bp=1, react_bp=1, end_bp=None
             _place_on_tracks(picks, j["tid"], j["name"], R, tbase)
         stage_times[stage] = max(load) if load else 0.0
         agg = defaultdict(lambda: [0.0, 0])          # (cid, tid, name) → [runs, #jobs]
+        agg_parts = {}                               # (cid, tid, name) → Runs je Job (nur mit Deckel)
         # Einzelne Job-Dauern je Track sammeln (für die Wellen-Berechnung: jeder
         # Job belegt einen Slot für seine Dauer). tv_by_track = Zeit/Run je Track.
         for (ti, tid, nm), r in tr_runs.items():
             a = agg[(tracks[ti], tid, nm)]
-            a[0] += r; a[1] += 1
             cid = tracks[ti]
-            dur = r * (tv_by_track.get((ti, tid, nm), 0.0))
-            if dur > 0:
-                job_durs.setdefault((cid, stage), []).append(dur)
+            _tv = tv_by_track.get((ti, tid, nm), 0.0)
+            # RUNS-DECKEL JE JOB (BPC-Runs / maxProductionLimit): die Runs
+            # dieses Slots sind Jobs von hoechstens `_m` Runs (ganze Kopien,
+            # s. _unit), die NACHEINANDER auf demselben Slot laufen - jede
+            # Kopie ist ein Start und zaehlt bei den Wellen mit.
+            _chunks = [c for c in tr_chunks.get((ti, tid, nm), [int(round(r))]) if c >= 1]
+            if not _chunks:
+                _chunks = [int(round(r))]
+            a[0] += r; a[1] += len(_chunks)
+            if _rcap_for(tid):
+                agg_parts.setdefault((cid, tid, nm), []).extend(_chunks)
+            for _ch in _chunks:
+                dur = _ch * _tv
+                if dur > 0:
+                    job_durs.setdefault((cid, stage), []).append(dur)
         for (cid, tid, nm), (r, njobs) in agg.items():
-            assignments.append({"char_id": cid, "char_name": name_of.get(cid, str(cid)),
-                                 "tid": tid, "name": nm, "runs": int(round(r)),
-                                 "jobs": njobs, "seconds": item_dur.get((cid, tid, nm), 0.0),
-                                 "activity": act, "stage": stage})
+            _asg = {"char_id": cid, "char_name": name_of.get(cid, str(cid)),
+                    "tid": tid, "name": nm, "runs": int(round(r)),
+                    "jobs": njobs, "seconds": item_dur.get((cid, tid, nm), 0.0),
+                    "activity": act, "stage": stage}
+            _m = _rcap_for(tid)
+            if _m:
+                _asg["max_runs"] = _m
+                # Runs je Job, groesste zuerst (10 + 7 statt 9 + 8): so, wie
+                # die Slots sie wirklich fahren - die Anzeige uebernimmt das.
+                _asg["parts"] = sorted(agg_parts.get((cid, tid, nm), []), reverse=True)
+                # Sekunden je Run (laengster Slot) - fuer die Wellen-Zeilen
+                # im Runplaner (Zeit einer Welle = groesste Kopie x tv).
+                _asg["tv"] = max((tv_by_track.get((ti, tid, nm), 0.0)
+                                  for ti in range(len(tracks)) if tracks[ti] == cid), default=0.0)
+            assignments.append(_asg)
         char_load = defaultdict(float)               # Char-Zeit = max seiner Tracks
         for ti, cid in enumerate(tracks):
             char_load[cid] = max(char_load[cid], load[ti])
@@ -4987,7 +5715,9 @@ def schedule_build(jobs, chars, te_factor=1.0, mfg_bp=1, react_bp=1, end_bp=None
     waves_by_char_stage = {}
     for (cid, stage), durs in job_durs.items():
         mfg_c, react_c = slots_lookup.get(cid, (1, 1))
-        cslots = react_c if stage.startswith("reaction") else mfg_c
+        # "unrefined" ist eine Reaktionsstufe (siehe is_reaction oben).
+        cslots = (react_c if (stage.startswith("reaction") or stage == "unrefined")
+                  else mfg_c)
         ds = sorted(durs, reverse=True)
         waves = []
         for i in range(0, len(ds), cslots):
@@ -4996,7 +5726,7 @@ def schedule_build(jobs, chars, te_factor=1.0, mfg_bp=1, react_bp=1, end_bp=None
                 waves.append(max(batch))    # Runde dauert wie ihr längster Job
         waves_by_char_stage[f"{cid}|{stage}"] = waves
 
-    total = (stage_times["fuel"] + stage_times["reaction_1"]
+    total = (stage_times["fuel"] + stage_times["unrefined"] + stage_times["reaction_1"]
             + stage_times["reaction_2"]
             + stage_times["component"] + stage_times["end"])
     return {"assignments": assignments, "stage_times": stage_times,

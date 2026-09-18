@@ -60,6 +60,122 @@ class MainWindowHelpers:
                 out[t] = int(_n)
         return out
 
+    @staticmethod
+    def _bpc_runs_by_tid(owned_bp, build_runs, product_to_bp):
+        """{type_id: Runs der KLEINSTEN eigenen BPC} fuer Items, die der Plan
+        baut und von denen NUR Kopien (keine BPO) im ESI-Cache liegen. Eine
+        BPC hat nur so viele Runs - mehr passen nicht in EINEN Job. Die
+        kleinste Kopie zaehlt (Regel 3: lieber ein Job zu viel als einer,
+        der im Spiel nicht startet). Liegt eine BPO dabei, gibt es KEINEN
+        Eintrag (unbegrenzt)."""
+        _runs = build_runs or {}
+        _p2b = product_to_bp or {}
+        bpo = set()
+        min_runs = {}
+        for b in (owned_bp or []):
+            _bid = b.get("type_id")
+            if _bid is None:
+                continue
+            if b.get("is_bpo"):
+                bpo.add(_bid)
+                continue
+            try:
+                _r = int(b.get("runs", 0) or 0)
+            except (TypeError, ValueError):
+                _r = 0
+            if _r >= 1:
+                min_runs[_bid] = min(min_runs.get(_bid, _r), _r)
+        out = {}
+        for t, r in _runs.items():
+            try:
+                if int(r) < 1:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            _bp = _p2b.get(t)
+            if not _bp or _bp[0] in bpo:
+                continue
+            _m = min_runs.get(_bp[0])
+            if _m:
+                out[t] = int(_m)
+        return out
+
+    @staticmethod
+    def _bp_teile(R, njobs, max_runs=None, parts=None):
+        """Aufteilung einer Runplaner-Zeile in Blaupausen-Jobs: (njobs, Teile).
+        Ohne Deckel wie bisher gleichmaessig ueber die geplanten Jobs (divmod).
+        Mit `max_runs` (Runs je BPC / maxProductionLimit) GANZE Kopien
+        (Nutzer 19.09.2026: "moeglichst alle Blueprints am Ende verbraucht
+        haben, nicht dass Blueprints mit angefangenen Runs stehen bleiben"):
+        `parts` = die Jobs, wie schedule_build sie gelegt hat, solange ihre
+        Summe noch zur Zeile passt; sonst (nach ESI-Fortschritt, R kleiner)
+        neu: volle Kopien, der Rest als letzter Job (23 -> 10 + 10 + 3)."""
+        R = max(0, int(R or 0))
+        try:
+            m = int(max_runs or 0)
+        except (TypeError, ValueError):
+            m = 0
+        if R < 1:
+            return 1, [0]
+        try:
+            _p = [int(x) for x in (parts or ()) if int(x) >= 1]
+        except (TypeError, ValueError):
+            _p = []
+        if _p and sum(_p) == R and (m < 1 or max(_p) <= m):
+            return len(_p), sorted(_p, reverse=True)
+        if m >= 1:
+            parts = [m] * (R // m) + ([R % m] if R % m else [])
+            return len(parts), parts
+        try:
+            njobs = max(1, int(njobs or 1))
+        except (TypeError, ValueError):
+            njobs = 1
+        njobs = max(1, min(njobs, R))
+        base, extra = divmod(R, njobs)
+        return njobs, [base + 1] * extra + [base] * (njobs - extra)
+
+    def _resolve_per_item_runs_cap(self, end_tid=None):
+        """{type_id: max Runs je JOB} fuer schedule_build's per_item_runs_cap
+        (Nutzer-Befund 19.09.2026, Einherji II: "Der Runplaner denkt ich kann
+        17 Stueck mit einem Blueprint bauen ... gibts maximal 10 runs").
+        Drei Quellen, je Item die KLEINSTE (Regel 3):
+          1. SDE maxProductionLimit (`activity_max_runs`) - der Blueprints-
+             Tab rechnet damit schon seine Kopien-Empfehlung;
+          2. eigene BPCs aus dem ESI-Cache (kleinste Kopie, ohne BPO);
+          3. das Endprodukt aus `_bd_bp["end"]` (Invention: Runs je
+             erfundener BPC; eigene BPC: ESI oder "Runs/BPC") - nur wenn
+             `runs_known` gesetzt ist, der Platzhalter 1x1 vor dem ersten
+             rebuild() zaehlt NICHT."""
+        out = {}
+        _rec = getattr(self, "_bd_recipes", None)
+        _p2b = getattr(_rec, "product_to_bp", None) or {}
+        _plan = (getattr(self, "_bd_plan_ref", None) or {}).get("plan") or {}
+        _runs = _plan.get("build_runs") or {}
+        _amr = getattr(_rec, "activity_max_runs", None) or {}
+        for t in _runs:
+            _bp = _p2b.get(t)
+            if not _bp:
+                continue
+            try:
+                _m = int(_amr.get((_bp[0], _bp[1]), 0) or 0)
+            except (TypeError, ValueError):
+                _m = 0
+            if _m >= 1:
+                out[t] = _m
+        _cache = getattr(self, "_bd_owned_bp_cache", None)
+        if _cache:
+            for t, _m in self._bpc_runs_by_tid(_cache, _runs, _p2b).items():
+                out[t] = min(out.get(t, _m), _m)
+        _end = (getattr(self, "_bd_bp", None) or {}).get("end") or {}
+        if end_tid is not None and _end.get("runs_known") and not _end.get("bpo"):
+            try:
+                _m = int(_end.get("runs", 0) or 0)
+            except (TypeError, ValueError):
+                _m = 0
+            if _m >= 1:
+                out[end_tid] = min(out.get(end_tid, _m), _m)
+        return out
+
     def _resolve_per_item_bp_cap(self):
         """{type_id: Kopien} für schedule_build's per_item_cap - für JEDES
         Item, das der aktuelle Plan baut und von dem eigene Blaupausen im

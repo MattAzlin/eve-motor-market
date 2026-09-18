@@ -49,10 +49,10 @@ changed version has to come with its own source under the same licence.
 Numbers are what the tool is for, so the calculations are guarded rather than
 trusted. The repository ships the check tooling alongside the program:
 
-- two test suites, 3'598 and 996 checks, run with `python pruefe.py`
-- a mutation harness (`rotprobe.py`) that breaks the code on purpose, 827
+- two test suites, 3'941 and 1'307 checks, run with `python pruefe.py`
+- a mutation harness (`rotprobe.py`) that breaks the code on purpose, 1006
   mutations, to prove the checks actually catch a regression
-- source-order lint, `pyflakes`, and four scanners that keep the English and
+- source-order lint, `pyflakes`, and six scanners that keep the English and
   German texts in step
 
 `bash start.sh` runs the lot and prints the expected result at the end.

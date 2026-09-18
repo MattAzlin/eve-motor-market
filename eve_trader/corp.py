@@ -71,6 +71,31 @@ def wurzel_ort(a, by_id, max_tiefe=32):
     return 0
 
 
+def orte(assets) -> set:
+    """Alle Stationen/Strukturen, an denen die Corp Assets hat - die WURZEL
+    jedes Items (ueber Buero und Division hochgelaufen, s. wurzel_ort).
+    Rein: {location_id}. Tester-Befund 19.09.2026 (Discord, Mike Jag): "Find
+    locations and link all" fand seine Citadel nicht - die Suche sah nur
+    Charakter-Assets/-Orders, der Corp-Hangar war unsichtbar, und damit
+    liess sich die Bau-Struktur nie verknuepfen."""
+    by_id = {}
+    for a in assets or []:
+        try:
+            by_id[int(a.get("item_id"))] = a
+        except (TypeError, ValueError):
+            continue
+    out = set()
+    for a in assets or []:
+        loc = wurzel_ort(a, by_id)
+        try:
+            loc = int(loc or 0)
+        except (TypeError, ValueError):
+            continue
+        if loc > 0:
+            out.add(loc)
+    return out
+
+
 def corp_bestand(assets, divisions, location_ids=None, container_typen=None,
                  ist_behaelter=None):
     """{type_id: Menge} aus den gewaehlten Hangar-Divisions einer Corp.
@@ -173,8 +198,9 @@ def abrufplan(charaktere, corp_von, rollen_von, rolle):
 
 def division_namen(esi_antwort, gewaehlt=None) -> dict:
     """{1..7: Name} - ESI liefert NUR die umbenannten Divisions; die
-    uebrigen bekommen "Division N". Mit `gewaehlt` nur diese."""
-    namen = {i: f"Division {i}" for i in ALLE_DIVISIONS}
+    uebrigen bekommen "Corp-Hangar N" (Nutzer 19.09.2026). Mit `gewaehlt`
+    nur diese."""
+    namen = {i: f"Corp-Hangar {i}" for i in ALLE_DIVISIONS}
     for eintrag in ((esi_antwort or {}).get("hangar") or []):
         try:
             n = int(eintrag.get("division"))

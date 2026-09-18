@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout,
                                QScrollArea, QSpinBox, QSplitter, QTableWidget,
                                QTabWidget, QVBoxLayout, QWidget)
 
-from .. import config, esi, industry, store
+from .. import config, esi, industry, reprocess, store
 from ..workers import Worker
 from . import icons
 from ..sprache import t
@@ -172,7 +172,11 @@ class BauplanFenster:
         from .. import corp as _corp
         leer = {"summe": {}, "blueprints": [], "jobs": {}, "corps": [],
                 "ohne_rolle": [], "relink": [], "keine_division": False,
-                "failed": [], "aktiv": False, "bp_ok": True}
+                "failed": [], "aktiv": False, "bp_ok": True,
+                # {location_id: character_id} - Orte mit Corp-Assets (unge-
+                # filtert) und der Charakter, der sie aufloesen kann; fuer
+                # "Find locations and link all" (Tester-Befund 19.09.2026).
+                "orte": {}}
         if not self.settings.get("use_corp"):
             return leer
         out = dict(leer)
@@ -217,6 +221,8 @@ class BauplanFenster:
             cname = esi.fetch_corporation_name(corp_id)
             try:
                 assets = esi.fetch_corporation_assets(client_id, cid, corp_id)
+                for _o in _corp.orte(assets):
+                    out["orte"].setdefault(int(_o), cid)
                 summe, je_div = _corp.corp_bestand(assets, divisions, loc_ids, _ctypes)
                 for _t, _q in summe.items():
                     out["summe"][int(_t)] = out["summe"].get(int(_t), 0) + int(_q)
@@ -252,6 +258,334 @@ class BauplanFenster:
                 self._log_exception(f"Corp: Jobs {cname}", str(_je))
                 out["failed"].append(t("Corp jobs: {name}").format(name=cname))
         return out
+
+    # ---- Reprocessing im Bauplan (1.0.9, Weg B) ----------------------------
+    # Compressed Ore statt Minerale kaufen - NUR mit dem Schalter in der
+    # Rezeptstruktur (Standard aus). Aus: kein Rechenpfad beruehrt. Die
+    # Logik liegt in eve_trader/reprocess.py, die Ausbeute-Formel in industry
+    # (gegen die Messung vom 18.09.2026 geprueft).
+
+    def _reprocess_struktur(self):
+        """Die Struktur, an der reprocesst wird: die gewaehlte, sonst die
+        erste Refinery der Liste, sonst eine NPC-Station (50 %)."""
+        structs = self.settings.get("bau_structures", []) or []
+        wahl = self.settings.get("bau_reprocess_struct")
+        npc = {"type": "npc", "name": t("NPC station"), "id": "npc", "rigs": []}
+        if wahl == "npc":
+            return npc
+        for s in structs:
+            if wahl and s.get("id") == wahl:
+                return s
+        for s in structs:
+            if (s.get("type") or "").lower() in reprocess.REFINERY_NAMEN:
+                return s
+        return npc
+
+    def _reprocess_implants_map(self):
+        """{cid(int): prozent} der erkannten Reprocessing-Implantate aus
+        settings["bau_char_reproc_implant"] ({str(cid): {"tid","pct","name"}})."""
+        out = {}
+        for k, v in (self.settings.get("bau_char_reproc_implant", {}) or {}).items():
+            try:
+                pct = float((v or {}).get("pct") or 0.0)
+                if pct > 0.0:
+                    out[int(k)] = pct
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def _reprocess_implants_text(self):
+        """Eine Zeile fuer die Karte: "Peanut Motor RX-804 +4 %, ..." oder "".
+        """
+        m = self.settings.get("bau_char_reproc_implant", {}) or {}
+        if not m:
+            return ""
+        namen = {int(c["character_id"]): (c.get("character_name") or str(c["character_id"]))
+                 for c in store.list_characters()}
+        teile = []
+        for k, v in sorted(m.items(), key=lambda kv: namen.get(int(kv[0]), str(kv[0]))):
+            try:
+                pct = float((v or {}).get("pct") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if pct <= 0.0:
+                continue
+            # de_scan6: aus - Item-NAME aus der SDE (Praefix kuerzen), kein Anzeigetext
+            kurz = str((v or {}).get("name") or "").replace("Zainou 'Beancounter' Reprocessing ", "")
+            # de_scan6: an
+            teile.append(f"{namen.get(int(k), k)} {kurz} +{pct:g} %")
+        return ", ".join(teile)
+
+    def _load_reproc_implants(self, fertig=None):
+        """Reprocessing-Implantate (Zainou 'Beancounter' Reprocessing RX-80X)
+        aller verknuepften Charaktere per ESI erkennen und speichern
+        (Nutzer 18.09.2026: "Implantate muessen erkannt werden ... direkt im
+        Bauplan unter Reprocessing"). Gleicher Scope wie das Fertigungs-
+        Implantat (esi-clones.read_implants.v1). Erkennung ueber die SDE-
+        Tabelle reprocess_implant - keine hartkodierte ID. `fertig()` wird
+        nach dem Speichern gerufen (Karte + Plan nachziehen)."""
+        client_id = self.settings.get("client_id")
+        chars = store.list_characters()
+        if not client_id or not chars:
+            self._flash_tip(t("No characters/client ID linked."))
+            return
+        bekannt = industry.reprocess_implants()
+        if not bekannt:
+            self._flash_tip(t("No reprocessing implant data – run „Load recipes“ once."))
+            return
+
+        def job():
+            out, errors = {}, []
+            for ch in chars:
+                cid = int(ch["character_id"])
+                try:
+                    implants = esi.fetch_character_implants(client_id, cid)
+                except Exception as fehler:
+                    errors.append(f"{ch.get('character_name', cid)}: {fehler}")
+                    continue
+                best = None
+                for tid in implants:
+                    eintrag = bekannt.get(int(tid))
+                    if eintrag and (best is None
+                                    or float(eintrag.get("value") or 0) > best["pct"]):
+                        best = {"tid": int(tid), "pct": float(eintrag.get("value") or 0),
+                                "name": eintrag.get("name") or ""}
+                if best:
+                    out[str(cid)] = best
+            return out, errors
+
+        def done(res):
+            out, errors = res
+            self.settings["bau_char_reproc_implant"] = out
+            config.save_settings(self.settings)
+            msg = t("{n} reprocessing implant(s) detected ✓").format(n=len(out))
+            if errors:
+                msg += "  ·  " + t("{n} error(s) (missing scope? re-link)").format(
+                    n=len(errors))
+            self._flash_tip(msg)
+            if fertig is not None:
+                try:
+                    fertig()
+                except Exception as _fe:
+                    self._log_exception("Reprocessing: Implantate nachziehen", str(_fe))
+        self._run(Worker(job), done, label=t("Implants …"), overlay=False)
+
+    def _reprocess_opts(self):
+        """opts["reprocess"] fuer den Plan - oder None, wenn beide Schalter
+        aus sind. "on" = Weg B (Erz statt Minerale), "unrefined" = Weg A
+        (Unrefined-Reaktionen). Enthaelt die Struktur-Basis und einen
+        Fingerabdruck der Skills, damit der Plan-Cache bei neuen Skills
+        nicht weiterrechnet."""
+        weg_b = bool(self.settings.get("bau_reprocess_on"))
+        weg_a = bool(self.settings.get("bau_unrefined_on"))
+        if not weg_b and not weg_a:
+            return None
+        s = self._reprocess_struktur()
+        basis, info = reprocess.struktur_basis(s, industry.reprocess_struktur_sde())
+        skills = self.settings.get("bau_char_skills", {}) or {}
+        fp = repr(sorted((str(k), sorted((str(a), int(b or 0))
+                                         for a, b in (v or {}).items()))
+                         for k, v in skills.items()))
+        imps = self._reprocess_implants_map()
+        return {"on": weg_b, "unrefined": weg_a, "basis": basis, "info": info,
+                "struct": s.get("name"), "sid": s.get("id"),
+                "skills_fp": hash(fp), "implants": tuple(sorted(imps.items()))}
+
+    def _bp_basisname(self, tid, name):
+        """Item-Name, aus dem der Blaupausen-Name gebildet wird. Weg A: wird
+        X ueber seine Unrefined-Formel gebaut, heisst die Blaupause
+        "Unrefined X Reaction Formula" - der Name des Unrefined-Produkts
+        ist die Basis, nicht X selbst. Sonst der uebergebene Name."""
+        try:
+            _uw = (getattr(self, "_bd_unrefined", None) or {}).get(int(tid))
+        except (TypeError, ValueError):
+            _uw = None
+        if not _uw:
+            return name
+        _nm = (getattr(self, "_bd_names_ref", None) or {}).get(int(_uw.get("u") or 0))
+        return _nm if _nm else name
+
+    def _unrefined_overlay(self, type_id, recipes_basis, price_fn, opts, kredit_pfn=None,
+                           fest=None):
+        """Weg A: (Rezepte, Wahl). Ist der Schalter aus, fehlt die Struktur-
+        Basis oder gibt es nichts zu tauschen, kommen die Basis-Rezepte
+        unveraendert zurueck und die Wahl ist leer. Sonst eine Rezept-KOPIE,
+        in der jedes gewaehlte Zwischenmaterial ueber seine Unrefined-Formel
+        laeuft - Plan, Baum, Runplaner, Blueprint-Tab und Zeiten folgen dann
+        von selbst. Merkt sich Wahl und Ablehnungen fuer die Anzeige.
+        `fest` (eingefrorener Plan): die gespeicherte Wahl gilt unveraendert,
+        auch wenn Schalter oder Preise inzwischen anders sind."""
+        self._bd_unrefined = {}
+        self._bd_unrefined_abgelehnt = {}
+        if fest is not None:
+            wahl = {}
+            for _x, _k in (fest or {}).items():
+                try:
+                    if int(_k["bp"]) > 0 and int(_k["out_je_run"]) > 0:
+                        wahl[int(_x)] = dict(_k)
+                except (KeyError, TypeError, ValueError):
+                    continue
+            self._bd_unrefined = wahl
+            return reprocess.rezepte_mit_unrefined(recipes_basis, wahl), wahl
+        ro = (opts or {}).get("reprocess") or {}
+        if not ro.get("unrefined"):
+            return recipes_basis, {}
+        try:
+            karte = industry.reprocess_map()
+            kand = reprocess.unrefined_kandidaten(recipes_basis, karte)
+            if not kand:
+                return recipes_basis, {}
+            # SCRAPMETAL-PFAD (gemessen 19.09.2026): 50 % x Scrapmetal
+            # Processing - Struktur, Rig, Implantat und Erz-Skill zaehlen
+            # hier nicht, deshalb keine Struktur-Basis noetig.
+            af = reprocess.scrap_ausbeute_funktion(
+                self.settings.get("bau_char_skills", {}) or {},
+                industry.reprocess_skill_ids())
+            kand = reprocess.unrefined_ausbeute(kand, af)
+            ids = set(industry.alle_items_der_kette(type_id, recipes_basis)) | {int(type_id)}
+            res = reprocess.unrefined_wahl(kand, ids, price_fn, recipes_basis, opts,
+                                           kredit_pfn=kredit_pfn)
+        except Exception as _ue:
+            self._log_exception("Reprocessing: Unrefined-Wahl", str(_ue))
+            return recipes_basis, {}
+        self._bd_unrefined = dict(res.get("wahl") or {})
+        self._bd_unrefined_abgelehnt = dict(res.get("abgelehnt") or {})
+        # DIAGNOSE-DATEI (Nutzer-Befund 19.09.2026: Plan mit Unrefined
+        # teurer als ohne): jede Zahl der Entscheidung, nachlesbar.
+        try:
+            import os as _os
+            _pfad = _os.path.join(config.app_data_dir(), "unrefined_diagnose.txt")
+            with open(_pfad, "w", encoding="utf-8") as _fh:
+                _fh.write(reprocess.unrefined_diagnose_text(
+                    res, getattr(self, "_bd_names_ref", None) or {},
+                    # de_scan5: aus - Diagnose-Datei, nicht Oberflaeche
+                    titel=f"(Plan {type_id}, Fracht in Preisen: "
+                          f"{'ja' if kredit_pfn is not price_fn else 'nein'})"))
+                # de_scan5: an
+        except Exception as _ud:
+            self._log_exception("Reprocessing: Unrefined-Diagnose", str(_ud))
+        return reprocess.rezepte_mit_unrefined(recipes_basis, self._bd_unrefined), self._bd_unrefined
+
+    def _reprocess_erz_ids(self, price_fn):
+        """Kandidaten-Erze (Kategorie 25 mit Reprocessing-Ausgang und Preis)
+        - fuer die Namensaufloesung, damit `kandidaten()` sie erkennt."""
+        try:
+            karte = industry.reprocess_map()
+            cats = industry.item_category_map()
+        except Exception:
+            return set()
+        out = set()
+        for tid in karte:
+            info = cats.get(tid)
+            if info and info[0] == 25:
+                try:
+                    if float(price_fn(tid) or 0.0) > 0.0:
+                        out.add(int(tid))
+                except (TypeError, ValueError):
+                    continue
+        return out
+
+    def _reprocess_anwenden(self, plan, price_fn, names, ro, kredit_pfn=None):
+        """Wendet Weg B auf einen fertigen Plan an: Erz-Kaeufe statt
+        Mineral-Kaeufe, wo guenstiger. Gibt eine KOPIE zurueck; ohne
+        Schalter oder ohne Struktur-Basis bleibt der Plan unveraendert (nur
+        plan["reprocess"] traegt dann den Grund). total_cost/mat_cost werden
+        um die Ersparnis gesenkt - dieselbe Zahl, die die Schritte nennen.
+        Danach Weg A (Unrefined-Schritte + Ruecklaeufer-Gutschrift zum
+        reinen Hub-Preis `kredit_pfn`), wenn dessen Schalter an ist."""
+        if not plan or not ro or not (ro.get("on") or ro.get("unrefined")):
+            return plan
+        neu = dict(plan)
+        basis = ro.get("basis")
+        if basis is None:
+            neu["reprocess"] = {"schritte": [], "ersparnis": 0.0, "ueberschuss": {},
+                                "grund": ((ro.get("info") or {}).get("grund") or "none")
+                                if ro.get("on") else None,
+                                "struct": ro.get("struct")}
+            # Weg A braucht keine Struktur-Basis (Scrapmetal-Pfad).
+            return self._unrefined_anwenden(neu, ro, kredit_pfn or price_fn)
+        if not ro.get("on"):
+            # Nur Weg A: leerer Weg-B-Rahmen, damit die Anzeige einen Block hat.
+            neu["reprocess"] = {"schritte": [], "ersparnis": 0.0, "ueberschuss": {},
+                                "abgelehnt": {}, "basis": basis, "struct": ro.get("struct"),
+                                "info": ro.get("info") or {}}
+            return self._unrefined_anwenden(neu, ro, kredit_pfn or price_fn)
+        try:
+            karte = industry.reprocess_map()
+            cats = industry.item_category_map()
+            # BLACKLIST GILT AUCH FUER ERZ (Nutzer 19.09.2026: "wir rechnen
+            # damit, es zu reprocessen, ABER es kommt weder in die Einkaufs-
+            # liste noch in den Runplaner - man bekommt es z. B. von einem
+            # Kollegen"). Gruppe "Compressed ore" oder ein Erz-Name im
+            # Textfeld: das Erz ist GRATIS - deckt seine Minerale, wird nicht
+            # gekauft, Stufe 0 zeigt es nicht.
+            _erz_alle = [int(_t) for _t, _i in (cats or {}).items()
+                         if _i and _i[0] == 25 and _t in karte]
+            try:
+                _gratis = self._bau_never_build(_erz_alle, {}, set(), names or {})
+            except Exception:
+                _gratis = set()
+            kand = reprocess.kandidaten(karte, names or {}, cats, price_fn, gratis=_gratis)
+            af = reprocess.ausbeute_funktion(
+                basis, self.settings.get("bau_char_skills", {}) or {},
+                self._reprocess_implants_map(),
+                industry.reprocess_skill_ids(), industry.reprocess_erz_skill())
+            res = reprocess.plane_erz_einkauf(plan.get("buy") or {}, price_fn, kand, af,
+                                              gratis=_gratis)
+            # EIN CHARAKTER FUER ALLES (Nutzer 19.09.2026): stehen mehrere
+            # Charaktere in den Schritten (je Erz der beste), noch einmal
+            # mit dem einen planen, der ueber alle Erze am meisten holt.
+            _chars_rp = {_s.get("char") for _s in (res.get("schritte") or [])}
+            if len(_chars_rp) > 1:
+                _skills_rp = self.settings.get("bau_char_skills", {}) or {}
+                _einer = reprocess.ein_charakter(
+                    res.get("schritte"), price_fn, _skills_rp, self._reprocess_implants_map(),
+                    industry.reprocess_skill_ids(), industry.reprocess_erz_skill())
+                if _einer is not None:
+                    af = reprocess.ausbeute_funktion(
+                        basis, _skills_rp, self._reprocess_implants_map(),
+                        industry.reprocess_skill_ids(), industry.reprocess_erz_skill(),
+                        fest=_einer)
+                    res = reprocess.plane_erz_einkauf(plan.get("buy") or {}, price_fn,
+                                                      kand, af, gratis=_gratis)
+        except Exception as _re:
+            self._log_exception("Reprocessing: Erz statt Mineral", str(_re))
+            neu["reprocess"] = {"schritte": [], "ersparnis": 0.0, "ueberschuss": {},
+                                "grund": "fehler", "struct": ro.get("struct")}
+            return neu
+        res["basis"] = basis
+        res["struct"] = ro.get("struct")
+        res["info"] = ro.get("info") or {}
+        res["erz_on"] = True
+        neu["reprocess"] = res
+        if res["schritte"]:
+            neu["buy"] = res["buy"]
+            ersp = float(res.get("ersparnis") or 0.0)
+            for key in ("total_cost", "mat_cost"):
+                if isinstance(plan.get(key), (int, float)):
+                    neu[key] = float(plan[key]) - ersp
+            surplus = dict(plan.get("surplus") or {})
+            for mat, q in (res.get("ueberschuss") or {}).items():
+                surplus[int(mat)] = surplus.get(int(mat), 0) + int(q)
+            neu["surplus"] = surplus
+        return self._unrefined_anwenden(neu, ro, kredit_pfn or price_fn)
+
+    def _unrefined_anwenden(self, plan, ro, kredit_pfn):
+        """Weg A auf den Plan: Schritte fuer jedes ueber die Unrefined-Formel
+        gebaute X (aus self._bd_unrefined, gesetzt von _unrefined_overlay)."""
+        if not ro.get("unrefined"):
+            return plan
+        wahl = getattr(self, "_bd_unrefined", None) or {}
+        try:
+            neu = reprocess.unrefined_anwenden(plan, wahl, kredit_pfn)
+        except Exception as _ua:
+            self._log_exception("Reprocessing: Unrefined anwenden", str(_ua))
+            return plan
+        if isinstance(neu.get("reprocess"), dict):
+            neu["reprocess"]["unrefined_abgelehnt"] = dict(
+                getattr(self, "_bd_unrefined_abgelehnt", None) or {})
+            neu["reprocess"]["unrefined_on"] = True
+        return neu
 
     def _show_build_detail(self, type_id, name, res):
         from ..sprache import t as _txt   # `t` ist hier lokal belegt
@@ -295,6 +629,9 @@ class BauplanFenster:
                 pass                    # Nach-vorn-Holen ist Komfort
             return
         tree = res["tree"]; names = res["names"]; sell = res["sell"]
+        # Fuer Helfer ausserhalb dieses Rahmens (Blaupausen-Name bei Weg A):
+        # dasselbe dict, das rebuild() nachfuellt - keine Kopie.
+        self._bd_names_ref = names
         # DER BAUM MUSS MITWACHSEN (Sitzung 20). `tree` kam bisher EINMAL beim
         # Oeffnen aus res["tree"] und wurde nie wieder gerechnet - `rebuild()`
         # erneuerte nur den Plan. Deshalb als veraenderliche Referenz, genau
@@ -1716,6 +2053,7 @@ class BauplanFenster:
                         ("Job-Kosten", "Job cost"),
                         ("Invention (\u00d8)", "Invention (\u00d8)"),
                         ("Bestand (Ersatzkosten)", "Stock (replacement cost)"),
+                        ("\u2212 R\u00fcckl\u00e4ufer", "\u2212 Returned (reprocessing)"),
                         ("= Baukosten gesamt", "= Total build cost"),
                         ("\u00f7 St\u00fcck", "\u00f7 units"),
                         ("Einkaufsliste (Jita Sell)", "Shopping list (Jita sell)"),
@@ -1734,6 +2072,7 @@ class BauplanFenster:
                         ("Verlustschwelle / Stk", "Break-even / unit")]
         # de_scan2: an
         _detail_val_lbls = {}
+        self._bd_detail_val_lbls = _detail_val_lbls   # fuer die Waechter (b7v)
         _detail_caps = {}     # Beschriftungen, damit eine Zeile als GANZES
                               # ausgeblendet werden kann (Reaktionen: Invention)
         for _ri, (_rlabel, _rtext) in enumerate(_detail_rows):
@@ -1758,6 +2097,16 @@ class BauplanFenster:
                             "datacores.")
                 _cap.setToolTip(_tt9)
                 _val.setToolTip(_tt9)
+            # de_scan4: aus - interner Dict-Schluessel (siehe _detail_rows)
+            if _rlabel.startswith("\u2212 R\u00fcckl"):
+            # de_scan4: an
+                # WEG A: nur sichtbar, wenn es einen Ruecklaeufer gibt (rebuild).
+                _ttr = _txt("Input material that comes back when the unrefined "
+                            "products are reprocessed \u2013 credited at the hub price. "
+                            "It stays on the shopping list because it returns only "
+                            "after the reaction.")
+                _cap.setToolTip(_ttr); _val.setToolTip(_ttr)
+                _cap.setVisible(False); _val.setVisible(False)
             _detail_val_lbls[_rlabel] = _val
             _detail_caps[_rlabel] = _cap
         _profit_val_lbls = {}
@@ -1992,11 +2341,260 @@ class BauplanFenster:
             _txt("Build or buy?"),
             _strat_panel, expanded=True, accent=theme.CYAN)
         _rcv.addWidget(self._bd_karte_bauenkaufen)   # Nutzer, Sitzung 17: standard offen
-        _rcv.addWidget(self._collapsible(
+        # AN self MERKEN (18.09.2026): das Tutorial laesst beide Karten blinken.
+        self._bd_karte_tiefe = self._collapsible(
             _txt("Production depth"),   # ohne Zahnrad (Nutzer, Sitzung 17)
             self._build_depth_panel(), expanded=True, accent=theme.AMBER,   # standard offen
             tip=_txt("From which stage of the chain do you build yourself? Sets the "
-                     "category ticks below \u2013 a shortcut, not a second setting.")))
+                     "category ticks below \u2013 a shortcut, not a second setting."))
+        _rcv.addWidget(self._bd_karte_tiefe)
+        # REPROCESSING (1.0.9, Weg B; Nutzer 17./18.09.2026): Compressed Ore
+        # statt Minerale kaufen, wenn es am Hub guenstiger ist. Opt-in -
+        # Standard aus und eingeklappt, ohne Schalter aendert sich nichts am
+        # Plan. Zweite Frage: WO wird reprocesst (Struktur bestimmt Basis).
+        _rp_panel = QWidget()
+        _rpv = QVBoxLayout(_rp_panel)
+        _rpv.setContentsMargins(10, 4, 6, 4); _rpv.setSpacing(6)
+        rp_cb = _QCheckBox(_txt("Buy compressed ore instead of minerals"))
+        rp_cb.setIcon(icons.icon("package"))
+        rp_cb.setToolTip(_txt(
+            "Buys compressed ore instead of a mineral when the ore is cheaper \u2013 "
+            "with your yield (structure, rig, skills). By-products count as far as "
+            "the plan needs them. Batches of 100.\nNeeds: hub scan + \u201eLoad skills\u201c."))
+        rp_cb.setChecked(bool(self.settings.get("bau_reprocess_on")))
+        _rpv.addWidget(rp_cb)
+        # WEG A (Nutzer 19.09.2026: "erraten und einfuegen"): Unrefined-
+        # Reaktionen, wo sie je Stueck guenstiger sind als normale Reaktion
+        # und Kauf. Die Ausbeute-Annahme (Skills ohne Erz-Skill) ist noch
+        # nicht gemessen - das steht sichtbar dabei, bis die Vorschau da ist.
+        ru_cb = _QCheckBox(_txt("Use unrefined reactions where cheaper"))
+        ru_cb.setIcon(icons.icon("package"))
+        ru_cb.setToolTip(_txt(
+            "Builds intermediates via their \u201eUnrefined \u2026 Reaction Formula\u201c "
+            "when that is cheaper per unit than the normal reaction or buying.\n"
+            "Yield: 50 % \u00d7 Scrapmetal Processing. The returned input is credited "
+            "but stays on the shopping list.\nNeeds: hub scan + \u201eLoad skills\u201c."))
+        ru_cb.setChecked(bool(self.settings.get("bau_unrefined_on")))
+        _rpv.addWidget(ru_cb)
+        ru_lbl = QLabel(""); ru_lbl.setObjectName("Muted"); ru_lbl.setWordWrap(True)
+        ru_lbl.setStyleSheet("font-size:11px;")
+        _rpv.addWidget(ru_lbl)
+        _rp_row = QHBoxLayout()
+        _rp_row.setSpacing(6)
+        _rp_at = QLabel(_txt("Reprocess at")); _rp_at.setObjectName("Muted")
+        _rp_row.addWidget(_rp_at)
+        rp_struct_cb = QComboBox()
+        for _s_rp in (self.settings.get("bau_structures", []) or []):
+            rp_struct_cb.addItem(" " + str(_s_rp.get("name") or _s_rp.get("id")),
+                                 _s_rp.get("id"))
+        rp_struct_cb.addItem(" " + _txt("NPC station (50 %)"), "npc")
+        _ix_rp = rp_struct_cb.findData(self._reprocess_struktur().get("id"))
+        rp_struct_cb.setCurrentIndex(_ix_rp if _ix_rp >= 0 else rp_struct_cb.count() - 1)
+        rp_struct_cb.setToolTip(_txt(
+            "Where the ore is reprocessed. Refineries (Athanor/Tatara) get their "
+            "bonus and reprocessing rig from the structure list; an NPC station "
+            "has a flat 50 % base."))
+        rp_struct_cb.setEnabled(rp_cb.isChecked() or ru_cb.isChecked())
+        _rp_row.addWidget(rp_struct_cb, 1)
+        _rpv.addLayout(_rp_row)
+        rp_lbl = QLabel(""); rp_lbl.setObjectName("Muted"); rp_lbl.setWordWrap(True)
+        rp_lbl.setStyleSheet("font-size:11px;")
+        _rpv.addWidget(rp_lbl)
+        # IMPLANTATE (Nutzer 18.09.2026): Knopf + Zeile direkt unter der
+        # Struktur. Erkennung per ESI gegen die SDE-Tabelle, Ergebnis geht in
+        # Ausbeute und Charakterwahl ein.
+        _rp_imp_row = QHBoxLayout()
+        _rp_imp_row.setSpacing(6)
+        rp_imp_btn = QPushButton(" " + _txt("Load implants"))
+        rp_imp_btn.setIcon(icons.icon("trend_up"))
+        rp_imp_btn.setStyleSheet("padding:4px 10px; font-size:11px;")
+        rp_imp_btn.setToolTip(_txt(
+            "Detects the reprocessing implants (Zainou 'Beancounter' Reprocessing "
+            "RX-801/802/804) of all linked characters via ESI. Needs the implant "
+            "scope (Settings \u2192 \u201eImplant manufacturing bonus\u201c \u2192 On + "
+            "relink). The bonus goes into the yield and the character choice."))
+        _rp_imp_row.addWidget(rp_imp_btn)
+        rp_imp_lbl = QLabel(""); rp_imp_lbl.setObjectName("Muted"); rp_imp_lbl.setWordWrap(True)
+        rp_imp_lbl.setStyleSheet("font-size:11px;")
+        _rp_imp_row.addWidget(rp_imp_lbl, 1)
+        _rpv.addLayout(_rp_imp_row)
+
+        def _rp_imp_lbl_refresh():
+            _tx = self._reprocess_implants_text()
+            rp_imp_lbl.setText(_tx if _tx else _txt("no reprocessing implant detected"))
+        _rp_imp_lbl_refresh()
+
+        def _rp_lbl_refresh():
+            _ro = self._reprocess_opts()
+            if not _ro:
+                rp_lbl.setText("")
+                rp_lbl.setStyleSheet("font-size:11px;")
+                return
+            if _ro.get("basis") is None:
+                if not _ro.get("on"):
+                    rp_lbl.setText("")          # nur Weg A: Struktur ohne Belang
+                    rp_lbl.setStyleSheet("font-size:11px;")
+                    return
+                rp_lbl.setText("\u26a0 " + _txt(
+                    "No reprocessing data for this structure – run "
+                    "„Load recipes“ once (Setup)."))
+                rp_lbl.setStyleSheet(f"font-size:11px; color:{theme.AMBER};")
+                return
+            _inf = _ro.get("info") or {}
+            _teile = [str(_ro.get("struct") or "")]
+            if _inf.get("rig"):
+                _teile.append(str(_inf["rig"]).replace("Standup ", ""))
+            rp_lbl.setText(_txt("Structure base {pct} %").format(
+                pct=f"{float(_ro['basis']) * 100.0:.1f}") + " \u00b7 " + " \u00b7 ".join(
+                _x for _x in _teile if _x))
+            rp_lbl.setStyleSheet("font-size:11px;")
+        _rp_lbl_refresh()
+
+        def _rp_karte_nachziehen(_plan):
+            """Ergebnis-Zeilen in der Karte (Nutzer 19.09.2026: der Textblock
+            ueber der Materialliste war "komisch und ueberladen"): Weg B -
+            Ersparnis und Anzahl Erze; Weg A - wie viele Zwischenmaterialien
+            den Unrefined-Weg gehen, "warum nicht" im Tooltip."""
+            _rpp = (_plan or {}).get("reprocess") or {}
+            _sch = _rpp.get("schritte") or []
+            _erz = [_s for _s in _sch if _s.get("art") != "unrefined"]
+            _unr = [_s for _s in _sch if _s.get("art") == "unrefined"]
+            _rp_lbl_refresh()
+            if rp_cb.isChecked() and _rpp.get("basis") is not None:
+                if _erz:
+                    _z = "\u267b " + _txt("saves {isk} \u00b7 {n} ores").format(
+                        isk=isk(_rpp.get("ersparnis") or 0.0), n=len(_erz))
+                    if _rpp.get("mit_fracht"):
+                        _z += " \u00b7 " + _txt("incl. freight")
+                elif _rpp.get("erz_on"):
+                    _z = "\u267b " + _txt("no compressed ore is cheaper")
+                else:
+                    _z = ""
+                if _z:
+                    rp_lbl.setText((rp_lbl.text() + "\n" if rp_lbl.text() else "") + _z)
+            _ru_lbl_refresh()
+            if ru_cb.isChecked():
+                _abg = _rpp.get("unrefined_abgelehnt") or {}
+                if _unr:
+                    ru_lbl.setText(ru_lbl.text() + "\n\u267b " + _txt(
+                        "{n} intermediates via unrefined reaction").format(n=len(_unr)))
+                elif _rpp.get("unrefined_on"):
+                    ru_lbl.setText(ru_lbl.text() + "\n\u267b " + _txt(
+                        "no unrefined reaction is cheaper"))
+                if _abg:
+                    ru_lbl.setToolTip(_txt("Unrefined reaction not cheaper for: {liste}").format(
+                        liste=", ".join(
+                            "{m} ({pct} %)".format(m=str(names.get(_m) or _m),
+                                                   pct=f"{float(_e['aufpreis_pct']):+.0f}")
+                            for _m, _e in sorted(_abg.items())
+                            if _e.get("aufpreis_pct") is not None)))
+                else:
+                    ru_lbl.setToolTip("")
+        self._bd_rp_karte_nachziehen = _rp_karte_nachziehen
+
+        def _rp_namen_nachziehen():
+            # `kandidaten()` erkennt komprimierte Erze am NAMEN. Wurde der
+            # Schalter erst im offenen Dialog gesetzt, sind die Erz-Namen
+            # noch nicht aufgeloest - einmal nachziehen (ESI cacht sie).
+            try:
+                _oids = self._reprocess_erz_ids(self._bd_pricemap.get)
+                _fehlt = [_i for _i in _oids if _i not in names]
+                if _fehlt:
+                    names.update(esi.resolve_names(_fehlt))
+            except Exception as _ne:
+                self._log_exception("Reprocessing: Erz-Namen", str(_ne))
+
+        def _rp_opts_setzen():
+            _ro = self._reprocess_opts()
+            if _ro:
+                self._bd_opts["reprocess"] = _ro
+            else:
+                self._bd_opts.pop("reprocess", None)
+            _rp_lbl_refresh()
+
+        def _rp_imp_fertig():
+            _rp_imp_lbl_refresh()
+            if rp_cb.isChecked() or ru_cb.isChecked():
+                _rp_opts_setzen()
+                rebuild()
+        rp_imp_btn.clicked.connect(lambda: self._load_reproc_implants(_rp_imp_fertig))
+        self._bd_reprocess_imp_btn = rp_imp_btn
+        self._bd_reprocess_imp_lbl = rp_imp_lbl
+
+        def _rp_toggle(checked=False):
+            self.settings["bau_reprocess_on"] = bool(checked)
+            config.save_settings(self.settings)
+            rp_struct_cb.setEnabled(bool(checked) or ru_cb.isChecked())
+            if checked:
+                _rp_namen_nachziehen()
+            _rp_opts_setzen()
+            rebuild()
+            _rp_ladder_nachziehen()
+        rp_cb.clicked.connect(_rp_toggle)
+
+        def _rp_ladder_nachziehen():
+            # NACH DEM SCHALTER DIE ORDERBUCH-PREISE NACHHOLEN (Nutzer
+            # 19.09.2026: "ich moechte nicht Recalculate druecken"). Die
+            # Einkaufsliste aendert sich mit dem Schalter grundlegend (Erz
+            # statt Minerale, andere Inputs) - die gecachten Buecher kennen
+            # die neuen Positionen nicht. Nur wenn es schon Orderbuch-Preise
+            # gibt (sonst rechnet der Plan ohnehin mit Flachpreisen, wie
+            # jeder andere Schalter auch) und der Plan nicht eingefroren ist.
+            if (self._bd_ladder_ctx(qty_spin.value()) is not None
+                    and not getattr(self, "_bd_frozen", None)):
+                try:
+                    _ladder_refresh()
+                except Exception as _lr:
+                    self._log_exception("Reprocessing: Orderbuch nach Schalter", str(_lr))
+
+        def _ru_lbl_refresh():
+            # SCRAPMETAL-PFAD (gemessen 19.09.2026): 50 % x Scrapmetal Processing
+            # des besten Charakters - die Struktur oben spielt hier keine Rolle.
+            if not ru_cb.isChecked():
+                ru_lbl.setText("")
+                return
+            _cid_s, _f_s = industry.bester_scrap_char(
+                self.settings.get("bau_char_skills", {}) or {},
+                industry.reprocess_skill_ids())
+            if _f_s is None:
+                ru_lbl.setText(_txt("Unrefined: 50 % \u00d7 Scrapmetal Processing \u2013 "
+                                    "no skills loaded"))
+                return
+            _nm_s = {int(_ch["character_id"]): (_ch.get("character_name")
+                                                or str(_ch["character_id"]))
+                     for _ch in store.list_characters()}.get(_cid_s, str(_cid_s))
+            ru_lbl.setText(_txt("Unrefined: {pct} % \u00b7 {char} (50 % \u00d7 Scrapmetal "
+                                "Processing, structure does not apply)").format(
+                pct=f"{industry.scrap_ausbeute(_f_s) * 100.0:.1f}", char=_nm_s))
+
+        def _ru_toggle(checked=False):
+            self.settings["bau_unrefined_on"] = bool(checked)
+            config.save_settings(self.settings)
+            rp_struct_cb.setEnabled(bool(checked) or rp_cb.isChecked())
+            _ru_lbl_refresh()
+            _rp_opts_setzen()
+            rebuild()
+            _rp_ladder_nachziehen()
+        ru_cb.clicked.connect(_ru_toggle)
+        _ru_lbl_refresh()
+        self._bd_unrefined_cb = ru_cb
+        self._bd_unrefined_lbl = ru_lbl
+
+        def _rp_struct_changed(_i=0):
+            self.settings["bau_reprocess_struct"] = rp_struct_cb.currentData()
+            config.save_settings(self.settings)
+            if rp_cb.isChecked() or ru_cb.isChecked():
+                _rp_opts_setzen()
+                rebuild()
+        rp_struct_cb.currentIndexChanged.connect(_rp_struct_changed)
+        self._bd_reprocess_cb = rp_cb
+        self._bd_reprocess_struct_cb = rp_struct_cb
+        self._bd_reprocess_lbl = rp_lbl
+        _rcv.addWidget(self._collapsible(
+            _txt("Reprocessing"), _rp_panel,
+            expanded=False, accent=theme.AMBER))   # Nutzer: zugeklappt
+        # DIREKT UNTER PRODUCTION DEPTH (Nutzer 18.09.2026: "schieb das
+        # bitte hoeher, da wo man es sieht"), zugeklappt als Standard.
         # BLACKLIST DIREKT UNTER DIE FERTIGUNGSTIEFE (Nutzer, Sitzung 20).
         # Beide beantworten "was soll gar nicht erst im Plan auftauchen" -
         # die Fertigungstiefe grob nach Stufe, die Blacklist nach Gruppe und
@@ -2853,8 +3451,11 @@ class BauplanFenster:
                 # Zwischenstufe UND ihre Rohstoffe, also doppelt.
                 if _rest:
                     return _rest_kaufmenge(r)
+                # Durch Reprocessing gedeckte Minerale werden wie Gebautes
+                # NICHT gekauft - das Erz steht als eigene Zeile drin.
                 return max(0, int(r.get("total", 0) or 0)
-                           - int(r.get("built", 0) or 0))
+                           - int(r.get("built", 0) or 0)
+                           - int(r.get("reprocessed", 0) or 0))
 
             _items = [(int(r["tid"]), r.get("name") or f"#{r['tid']}")
                       for r in _rows if _menge(r) > 0]
@@ -2912,7 +3513,8 @@ class BauplanFenster:
                                      "built": int(r.get("built", 0) or 0),
                                      "vollkauf": max(0,
                                          int(r.get("total", 0) or 0)
-                                         - int(r.get("built", 0) or 0))}
+                                         - int(r.get("built", 0) or 0)
+                                         - int(r.get("reprocessed", 0) or 0))}
                      for r in _rows}
             self._cart_conflict_filter(
                 _items, needed=_needed,
@@ -3461,7 +4063,15 @@ class BauplanFenster:
                 _cid_b = int(comp["type_id"])
                 _su_b = getattr(self, "_bd_plan_stock", None) or set()
                 _by_b = getattr(self, "_bd_plan_buy", None)
-                if (aq > 0 and _cid_b in _su_b and _by_b is not None
+                _rp_b = (getattr(self, "_bd_plan_repro", None) or {}).get(_cid_b)
+                if aq > 0 and _rp_b and _by_b is not None and _cid_b not in _by_b:
+                    # AUS KOMPRIMIERTEM ERZ (1.0.9, Weg B): der Plan kauft das
+                    # Erz, nicht das Mineral - die Zeile nennt das Erz.
+                    act = _txt("from compressed ore \u267b \u00b7 {ore}").format(
+                        ore=", ".join(_rp_b))
+                elif aq > 0 and _rp_b and _by_b is not None and _cid_b in _by_b:
+                    act = _txt("buy \u00b7 partly from compressed ore \u267b")
+                elif (aq > 0 and _cid_b in _su_b and _by_b is not None
                         and _cid_b not in _by_b):
                     act = _txt("covered from stock")
                 elif (aq > 0 and _cid_b in _su_b and _by_b is not None
@@ -3502,6 +4112,15 @@ class BauplanFenster:
                 if not locals().get("_act_fixed", False) and aq > 0:
                     act = (_txt("BUILD \u00b7 {n} run") if runs == 1
                            else _txt("BUILD \u00b7 {n} runs")).format(n=runs)
+                    # WEG A (1.0.9): gebaut ueber die Unrefined-Formel - die
+                    # Zeile nennt sie, sonst passen Runs und Materialien
+                    # nicht zur normalen Formel, die man im Kopf hat.
+                    _uw_t = (getattr(self, "_bd_unrefined", None) or {}).get(
+                        int(comp["type_id"]))
+                    if _uw_t:
+                        act += "  \u00b7  " + _txt("via {formula} \u267b").format(
+                            formula=names.get(int(_uw_t.get("u") or 0),
+                                              f"#{_uw_t.get('u')}"))
             # Transparenz: welcher Struktur-Rig wirkt (kategorie-spezifisch)?
             rmpct = (getattr(self, "_bd_rig_me_map", {}) or {}).get(comp["type_id"], 0)
             # Rig-Bonus wird weiter GERECHNET, nur nicht mehr angezeigt
@@ -3620,6 +4239,47 @@ class BauplanFenster:
             # gehoert sie hier hinein - sonst rechnet der Dialog mit einem
             # veralteten Plan weiter, und das ist der Fehler, der hier schon
             # zweimal Zeit gekostet hat (s. _depth_fingerprint).
+            # REPROCESSING WEG A: die Rezept-Kopie jedes Mal neu aus den
+            # Basis-Rezepten ableiten (Schalter, Struktur, Skills oder
+            # Fracht koennen sich seit dem Oeffnen geaendert haben) - MIT
+            # derselben Preisfunktion wie der Plan, Gutschrift zum reinen
+            # Hub-Preis. Eingefroren: die Wahl kommt aus dem Schnappschuss,
+            # damit Runs und Stueck je Run zu den eingefrorenen Zahlen passen.
+            _fz_fuer_uo = self._frozen_snapshot_plan()
+            _rec_basis = getattr(self, "_bd_recipes_basis", None) or self._bd_recipes
+            _uw_vorher = set((getattr(self, "_bd_unrefined", None) or {}).keys())
+            self._bd_recipes, _uw = self._unrefined_overlay(
+                type_id, _rec_basis, _pfn, self._bd_opts,
+                kredit_pfn=self._bd_pricemap.get,
+                fest=((_fz_fuer_uo or {}).get("unrefined") or {})
+                if _fz_fuer_uo is not None else None)
+            if set(_uw.keys()) != _uw_vorher:
+                self._bd_reaction_stages = None     # Stufen-Karte haengt an den Rezepten
+                self._bd_plan_cache = None
+                self._bd_tree_cache = None
+            if _uw:
+                try:
+                    _u_ids = set()
+                    for _uk in _uw.values():
+                        _u_ids.add(int(_uk["u"]))
+                        _u_ids |= {int(_m) for _m, _q in _uk["mats"]}
+                        _u_ids |= {int(_m) for _m in (_uk.get("zurueck_je_run") or {})}
+                    _u_fehlt = [_i for _i in _u_ids if _i not in names]
+                    if _u_fehlt:
+                        names.update(esi.resolve_names(_u_fehlt))
+                    # _bd_groups setzt open_build_detail; wird der Detail-
+                    # Aufbau frueher erreicht (b-Suite, gespeicherter Plan),
+                    # fehlt das Attribut - dann leer anlegen statt Ausnahme
+                    # ("'MainWindow' object has no attribute '_bd_groups'",
+                    # fehler.log 18.09.2026, sechsmal je Prueflauf).
+                    _gm_u = getattr(self, "_bd_groups", None)
+                    if _gm_u is None:
+                        _gm_u = self._bd_groups = {}
+                    _g_fehlt = [_i for _i in _u_ids if _i not in _gm_u]
+                    if _g_fehlt:
+                        _gm_u.update(industry.group_names(_g_fehlt))
+                except Exception as _un:
+                    self._log_exception("Reprocessing: Unrefined-Namen", str(_un))
             _plan_fp = (int(type_id), int(qty),
                         repr(sorted((str(k), repr(v))
                                     for k, v in self._bd_opts.items())))
@@ -3640,8 +4300,23 @@ class BauplanFenster:
                                                     self._bd_recipes, self._bd_opts)
                 except Exception:
                     plan = plan_ref["plan"]
+                # REPROCESSING (Weg B) mit DERSELBEN Preisfunktion wie der
+                # Plan - mit Frachtaufschlag, wenn er mitentscheidet: genau
+                # dort zahlt sich das kleine Volumen des Erzes aus.
+                if self._bd_opts.get("reprocess"):
+                    plan = self._reprocess_anwenden(plan, _pfn, names,
+                                                    self._bd_opts["reprocess"],
+                                                    kredit_pfn=self._bd_pricemap.get)
+                    # Die Ersparnis ist mit DIESER Preisfunktion gerechnet -
+                    # steckt die Fracht drin, soll die Zeile das sagen.
+                    if isinstance(plan.get("reprocess"), dict):
+                        plan["reprocess"]["mit_fracht"] = bool(_fr_rate > 0)
                 self._bd_plan_cache = (_plan_fp, plan)
             plan_ref["plan"] = plan
+            try:
+                _rp_karte_nachziehen(plan)
+            except Exception as _rk:
+                self._log_exception("Reprocessing: Karte nachziehen", str(_rk))
             # Fuer den Rezept-Baum: WAS baut der Plan wirklich, und was deckt
             # der Bestand? Der Baum kennt nur die Entscheidung bauen/kaufen -
             # ohne diese beiden Mengen zeigt er "BAUEN" fuer Dinge, die der
@@ -3653,6 +4328,15 @@ class BauplanFenster:
             # Zukauf unterscheiden - und ein beruhigendes Wort ueber einem
             # Einkauf waere dieselbe Fehlerklasse mit umgekehrtem Vorzeichen.
             self._bd_plan_buy = set((plan.get("buy") or {}).keys())
+            # REPROCESSING (1.0.9, Weg B): welches Mineral kommt aus welchem
+            # Erz - fuer die Aktionsspalte des Rezept-Baums (Nutzer 18.09.2026:
+            # "im Rezeptbaum noch keine Beschreibung fuer compressed Ores").
+            _repro_von = {}
+            for _st_r in ((plan.get("reprocess") or {}).get("schritte") or []):
+                _erz_nm = str(names.get(_st_r.get("erz")) or _st_r.get("erz"))
+                for _m_r in (_st_r.get("deckt") or {}):
+                    _repro_von.setdefault(int(_m_r), []).append(_erz_nm)
+            self._bd_plan_repro = _repro_von
             # ---- DEN BAUM MITRECHNEN (Sitzung 20) --------------------------
             # NUTZER-BEFUND: Fermionic Condensates stand in der Rezept-Struktur
             # auf "kaufen", obwohl 10.2k im Hangar lagen und "Kosten ignorieren
@@ -3786,7 +4470,8 @@ class BauplanFenster:
                         _target_runs_e = max(1, int(qty_spin.value()))
                         _copies_needed_e = -(-_target_runs_e // _runs_per_bpc_e)  # ceil
                         self._bd_bp["end"] = {"copies": _copies_needed_e,
-                                              "runs": _runs_per_bpc_e, "bpo": False}
+                                              "runs": _runs_per_bpc_e, "bpo": False,
+                                              "runs_known": True}
                     self._bd_refresh_bp_stage_info()
                 elif _inv0 and self._bd_opts.get("invention", True):
                     _dv0 = (self._bd_opts.get("inv_decryptor_map") or {}).get(_bp0[0])
@@ -3829,7 +4514,8 @@ class BauplanFenster:
                     _target_runs = max(1, int(qty_spin.value()))
                     _successes_needed = -(-_target_runs // _runs_per_bpc)  # ceil
                     self._bd_bp["end"] = {"copies": _successes_needed,
-                                          "runs": _runs_per_bpc, "bpo": False}
+                                          "runs": _runs_per_bpc, "bpo": False,
+                                          "runs_known": True}
                     self._bd_refresh_bp_stage_info()
                 else:
                     if not me_spin.isEnabled():
@@ -3884,10 +4570,57 @@ class BauplanFenster:
             # Orderbücher des letzten Abrufs vorliegen - Gültigkeit
             # entscheidet _bd_ladder_ctx (eine Stelle, auch fürs
             # Decryptor-Ranking).
+            # FRACHT VOR DER LADDER (18.09.2026, Befund am Compressed-Ore-
+            # Vergleich): mit "Fracht entscheidet mit" und aktiver Orderbuch-
+            # Ladder fehlte der Frachtdienst in Gesamtkosten und Gewinn - die
+            # Ladder rechnet reine Orderbuchpreise, der Abzug unten nahm aber
+            # an, die Fracht stecke im Materialpreis. Deshalb steht der
+            # Frachtanteil jetzt VOR der Ladder fest und wird dort addiert.
+            # --- Transportvolumen & -kosten der Einkaufsliste (Punkt B) ---
+            buy_map = (plan or {}).get("buy", {}) or {}
+            buy_surplus = {t: self._buy_surplus_qty(q) for t, q in buy_map.items()}
+            vols, _unpkg_ships = self._item_volumes_with_esi_fix(buy_surplus.keys())
+            # Steckt der m3-Satz schon im Kaufpreis (Frachtaufschlag aktiv),
+            # darf er hier NICHT nochmal berechnet werden - sonst zahlt man
+            # ihn zweimal. Die Pauschale pro Fahrt bleibt in jedem Fall hier.
+            tinfo = industry.transport_estimate(
+                buy_surplus, vols, capacity_m3=transport_ref["cap"],
+                mode=None,
+                rate_per_m3=(0.0 if _fr_rate > 0 else transport_ref["rate"]),
+                trip_cost=transport_ref["trip"])
+            tinfo["rate_in_price"] = bool(_fr_rate > 0)
+            # WIEVIEL VOM MATERIALPREIS IST FRACHT? Aus DERSELBEN Einkaufsliste
+            # und denselben Volumen, aus denen auch die Materialkosten
+            # entstanden sind (buy_map x vols x Satz) - keine Nebenrechnung.
+            # Nur zum AUSWEISEN: der Betrag steckt bereits in mc und wird
+            # nirgends zusaetzlich abgezogen.
+            # DREI ZEILEN, DREI EINGABEFELDER (Nutzer: "eine Kost ist zu viel"
+            # - es war eine Zeile ZU VIEL BENANNT). transport_estimate liefert
+            # beide Anteile schon getrennt; vorher wurden sie als eine Zahl
+            # "Transport" angezeigt, fuer die es kein Eingabefeld gibt:
+            #   Frachtdienst  <- Feld "Frachtdienst" (ISK/m3) x Volumen
+            #   Eigene Fahrt  <- Feld "Eigene Fahrt"  (Pauschale) x Fahrten
+            _eigene_fahrt = float((tinfo or {}).get("cost_trip", 0) or 0)
+            _fr_in_mat = 0.0
+            if _fr_rate > 0:
+                try:
+                    _fr_in_mat = _fr_rate * sum(
+                        float(vols.get(_t, 0) or 0) * float(_q)
+                        for _t, _q in buy_map.items())
+                except Exception as _fr_err:
+                    # de_scan4: aus - Beschriftung fuer fehler.log, nicht Oberflaeche
+                    self._log_exception("Bauplan: Frachtanteil", str(_fr_err))
+                    # de_scan4: an
+            # Der Frachtdienst zaehlt entweder im Materialpreis ODER in der
+            # Transportsumme - nie in beiden. Fuer die ANZEIGE ist es dieselbe
+            # Zeile; wo er verrechnet wird, sagt der Tooltip.
+            _fracht_dienst = _fr_in_mat or float(
+                (tinfo or {}).get("cost_m3", 0) or 0)
             _lctx = self._bd_ladder_ctx(qty)
             ladder = (_lctx or {}).get("ladder")
             ladder_active = _lctx is not None
             ladder_shorts = []
+            self._bd_ladder_shorts = []
             ladder_no_book = []
             # Vorbelegen, damit der Tooltip-Zweig sie IMMER kennt - auch wenn
             # die Ladder gar nicht aktiv ist. Ein NameError haette hier die
@@ -3923,6 +4656,20 @@ class BauplanFenster:
                 else:
                     mat_ladder = float(ladder.get("mat_cost_ladder", 0.0) or 0.0)
                     ladder_shorts = list(ladder.get("short_materials") or [])
+                # Orderbuchpreise sind OHNE Fracht - mit "Fracht entscheidet
+                # mit" gehoert der Frachtanteil dazu, sonst fehlt er in
+                # Gesamtkosten und Gewinn (Material-Zeile zieht ihn unten ab).
+                if _fr_rate > 0:
+                    mat_ladder += _fr_in_mat
+                # FUER DEN MATERIALIEN-TAB (Nutzer 18.09.2026: "was passiert,
+                # wenn in Jita etwas ausverkauft ist?"): die Knappheit stand
+                # nur als Zahl im Tooltip der Baukosten. Der Tab nennt jetzt
+                # die Materialien mit "da / gebraucht".
+                self._bd_ladder_shorts = list(ladder_shorts or [])
+                try:
+                    self._knappheit_nachziehen(names)
+                except Exception as _kn_err:
+                    self._log_exception("Bauplan: Knappheitszeile", str(_kn_err))
                 live_job = float((plan or {}).get("job_cost", 0.0) or 0.0)
                 live_inv = float((plan or {}).get("inv_cost", 0.0) or 0.0)
                 # WICHTIG: der Bestand darf hier NICHT fehlen - dieser Zweig
@@ -3930,6 +4677,13 @@ class BauplanFenster:
                 # stillschweigend auf 0 setzen. Dieselbe Bewertung wie oben:
                 # Ersatzkosten aus dem Plan, nicht der Kaufpreis.
                 total = mat_ladder + live_job + live_inv + stock_cost
+                # RUECKLAEUFER-GUTSCHRIFT (Weg A) auch hier abziehen - dieser
+                # Zweig baut `total` neu auf und liess sie weg (Nutzer-Befund
+                # 19.09.2026: Plan mit Unrefined 139.8 statt 127.6 M je Stueck,
+                # obwohl jede Wahl in der Diagnose guenstiger war; die 435 M
+                # Gutschrift fehlten nur in der Summe nach "Recalculate").
+                total -= float(((plan or {}).get("reprocess") or {}).get(
+                    "ruecklaeufer_wert") or 0.0)
                 per = total / qty if qty else total
             # Aufklapp-Zustand merken, damit er bei Mengen-Änderung erhalten bleibt
             _was_exp = set()
@@ -4055,6 +4809,47 @@ class BauplanFenster:
                 # dahintersteckt.
                 _hdr.setText(0, f"{_hdr.text(0)}   ({_hdr.childCount()})")
                 _hdr.setExpanded(True)
+            # KOMPRIMIERTES ERZ (1.0.9, Weg B; Nutzer 19.09.2026: "Rezept-
+            # Struktur hat keine Eintragsmoeglichkeit fuer Ore"): das Erz ist
+            # kein Rezept-Bestandteil, deshalb stand es nirgends im Baum. Ein
+            # eigener Kopf unter den Kategorien: je Erz Menge, was es liefert,
+            # Ausbeute. Zeilen sind Anzeige, kein Haken (nichts zu "erledigen").
+            _rp_tree = (plan_ref.get("plan") or {}).get("reprocess") or {}
+            _erz_steps = [_s for _s in (_rp_tree.get("schritte") or [])
+                          if _s.get("art") != "unrefined"]
+            if _erz_steps:
+                # de_scan5: aus - Kategorie-SCHLUESSEL, Anzeige via _kategorie_anzeige
+                _ehdr = QTreeWidgetItem([self._kategorie_anzeige("Erz")
+                                         + f"   ({len(_erz_steps)})", "", ""])
+                # de_scan5: an
+                root.addChild(_ehdr)
+                _ehf = _ehdr.font(0); _ehf.setBold(True); _ehdr.setFont(0, _ehf)
+                _ehdr.setForeground(0, QColor(theme.GREEN))
+                _ehdr.setFlags(_ehdr.flags() & ~Qt.ItemIsUserCheckable)
+                _ehdr.setToolTip(0, _txt("Compressed ore the plan buys instead of "
+                                         "minerals \u2013 reprocessed at {struct}.").format(
+                    struct=str(_rp_tree.get("struct") or "")))
+                for _s in _erz_steps:
+                    _eid = int(_s.get("erz") or 0)
+                    _eact = "\u267b " + _txt("reprocess \u2192 {out} \u00b7 {pct} %").format(
+                        out=", ".join(
+                            f"{int(_q):,}".replace(",", "'") + " " + names.get(_m, f"#{_m}")
+                            for _m, _q in sorted((_s.get("deckt") or {}).items())),
+                        pct=f"{float(_s.get('ausbeute') or 0) * 100.0:.1f}")
+                    if _s.get("gratis"):
+                        _eact = _txt("on blacklist \u2013 provided, not bought") + "  \u00b7  " + _eact
+                    _eit = QTreeWidgetItem([names.get(_eid, f"#{_eid}"),
+                                            fmt(int(_s.get("menge") or 0)), _eact])
+                    _eit.setData(0, Qt.UserRole, _eid)
+                    _eic = self._table_icon(_eid)
+                    if _eic:
+                        _eit.setIcon(0, _eic)
+                    _eit.setFlags(_eit.flags() & ~Qt.ItemIsUserCheckable)
+                    _eit.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+                    _eit.setForeground(0, QColor(_TIER_COLORS[1]))
+                    _eit.setForeground(2, QColor(theme.GREEN))
+                    _ehdr.addChild(_eit)
+                _ehdr.setExpanded(True)
             # STANDARD-AUFKLAPPZUSTAND, explizit und in EINER Richtung gesetzt
             # (Nutzer: "so standardmaessig ausgeklappt wie im Bild"):
             #   Endprodukt auf  ->  Kategorie-Koepfe auf  ->  alles darunter zu.
@@ -4275,6 +5070,12 @@ class BauplanFenster:
             _tt.append("  " + _txt("Job cost: ") + isk(_jc))
             if _ic:
                 _tt.append("  " + _txt("Invention: ") + isk(_ic))
+            # WEG A: der Ruecklaeufer senkt die Gesamtkosten, nicht die
+            # Einkaufsliste - als eigener Posten sichtbar, nie still.
+            _rlw = float(((plan or {}).get("reprocess") or {}).get("ruecklaeufer_wert") or 0.0)
+            if _rlw:
+                _tt.append("  " + _txt("Returned after reprocessing (credit): ")
+                           + "\u2212" + isk(_rlw))
             if _sc:
                 _tt += ["",
                         _txt("The stock deliberately counts - it once cost you ISK. "
@@ -4349,46 +5150,6 @@ class BauplanFenster:
                 _cost_src_tip = _txt("Flat price (current market scan) \u2013 for order-"
                                      "book-exact numbers click \u201eRecalculate\u201c (hub "
                                      "selectable next to it).")
-            # --- Transportvolumen & -kosten der Einkaufsliste (Punkt B) ---
-            buy_map = (plan or {}).get("buy", {}) or {}
-            buy_surplus = {t: self._buy_surplus_qty(q) for t, q in buy_map.items()}
-            vols, _unpkg_ships = self._item_volumes_with_esi_fix(buy_surplus.keys())
-            # Steckt der m3-Satz schon im Kaufpreis (Frachtaufschlag aktiv),
-            # darf er hier NICHT nochmal berechnet werden - sonst zahlt man
-            # ihn zweimal. Die Pauschale pro Fahrt bleibt in jedem Fall hier.
-            tinfo = industry.transport_estimate(
-                buy_surplus, vols, capacity_m3=transport_ref["cap"],
-                mode=None,
-                rate_per_m3=(0.0 if _fr_rate > 0 else transport_ref["rate"]),
-                trip_cost=transport_ref["trip"])
-            tinfo["rate_in_price"] = bool(_fr_rate > 0)
-            # WIEVIEL VOM MATERIALPREIS IST FRACHT? Aus DERSELBEN Einkaufsliste
-            # und denselben Volumen, aus denen auch die Materialkosten
-            # entstanden sind (buy_map x vols x Satz) - keine Nebenrechnung.
-            # Nur zum AUSWEISEN: der Betrag steckt bereits in mc und wird
-            # nirgends zusaetzlich abgezogen.
-            # DREI ZEILEN, DREI EINGABEFELDER (Nutzer: "eine Kost ist zu viel"
-            # - es war eine Zeile ZU VIEL BENANNT). transport_estimate liefert
-            # beide Anteile schon getrennt; vorher wurden sie als eine Zahl
-            # "Transport" angezeigt, fuer die es kein Eingabefeld gibt:
-            #   Frachtdienst  <- Feld "Frachtdienst" (ISK/m3) x Volumen
-            #   Eigene Fahrt  <- Feld "Eigene Fahrt"  (Pauschale) x Fahrten
-            _eigene_fahrt = float((tinfo or {}).get("cost_trip", 0) or 0)
-            _fr_in_mat = 0.0
-            if _fr_rate > 0:
-                try:
-                    _fr_in_mat = _fr_rate * sum(
-                        float(vols.get(_t, 0) or 0) * float(_q)
-                        for _t, _q in buy_map.items())
-                except Exception as _fr_err:
-                    # de_scan4: aus - Beschriftung fuer fehler.log, nicht Oberflaeche
-                    self._log_exception("Bauplan: Frachtanteil", str(_fr_err))
-                    # de_scan4: an
-            # Der Frachtdienst zaehlt entweder im Materialpreis ODER in der
-            # Transportsumme - nie in beiden. Fuer die ANZEIGE ist es dieselbe
-            # Zeile; wo er verrechnet wird, sagt der Tooltip.
-            _fracht_dienst = _fr_in_mat or float(
-                (tinfo or {}).get("cost_m3", 0) or 0)
             plan_ref["transport"] = tinfo
             # Fuer die Kapazitaets-Warnung beim Einkaufswagen: die
             # Transportzeile verschwindet aus der Anzeige, die WARNUNG darf
@@ -4898,6 +5659,20 @@ class BauplanFenster:
                     # de_scan2: an
                     isk(total / max(1, int(qty or 1)), suffix=False))
                 _detail_val_lbls["Invention (\u00d8)"].setText(isk(ico, suffix=False))
+                # WEG A: Ruecklaeufer-Gutschrift als eigene Zeile, sonst weg.
+                # de_scan4: aus - interner Dict-Schluessel; die Beschriftung kommt uebersetzt aus _detail_rows
+                _rl_lbl = _detail_val_lbls.get("\u2212 R\u00fcckl\u00e4ufer")
+                _rl_cap = _detail_caps.get("\u2212 R\u00fcckl\u00e4ufer")
+                # de_scan4: an
+                _rl_w = float(((plan or {}).get("reprocess") or {}).get(
+                    "ruecklaeufer_wert") or 0.0)
+                if _rl_lbl is not None:
+                    _rl_lbl.setText("\u2212" + isk(_rl_w, suffix=False) if _rl_w else "\u2013")
+                    _rl_lbl.setStyleSheet(
+                        f"font-size:11px; font-weight:700; color:{theme.GREEN};")
+                    _rl_lbl.setVisible(bool(_rl_w))
+                    if _rl_cap is not None:
+                        _rl_cap.setVisible(bool(_rl_w))
                 # --- EINKAUFSLISTE ZU JITA SELL (Nutzer, Sitzung 14) ---
                 # Was er JETZT ausgeben muss - im Unterschied zu "Material",
                 # das den Bestandsanteil nicht enthaelt, und zu "Baukosten
@@ -6459,6 +7234,14 @@ class BauplanFenster:
             # Overlay IM Dialog (Spinner + Tipp, wie gewohnt), statt des
             # großen Haupt-Overlays, das hinterm modalen Dialog nicht sichtbar
             # wäre.
+            _ladder_refresh()
+
+        def _ladder_refresh():
+            """Orderbuch-Abruf im Hintergrund, danach rebuild() - der Teil von
+            "Recalculate", der die Preise holt. Eigene Funktion, damit ihn
+            auch die Reprocessing-Schalter ausloesen koennen (Nutzer
+            19.09.2026: "es soll automatisch nach dem Anhaken das selber
+            machen")."""
             _qty_now = qty_spin.value()
             _dlg_overlay_show()
 
@@ -6806,7 +7589,7 @@ class BauplanFenster:
             label, ok = QInputDialog.getText(
                 dlg, _txt("Save build plan"),
                 _txt("Name of the build plan:"), text=default)
-            label = (label or "").strip()
+            label = config.plan_name_bereinigen(label)
             if not ok or not label:
                 return
             plans = self.settings.setdefault("bau_saved_plans", [])
@@ -6888,7 +7671,8 @@ class BauplanFenster:
             new_entry = {"id": overwrite_id if overwrite_id is not None
                                 else int(_t.time() * 1000),
                           "label": label,
-                          "type_id": type_id, "item_name": name,
+                          "type_id": type_id,
+                          "item_name": config.plan_name_bereinigen(name),
                           "qty": qty_spin.value(), "me": me_spin.value(),
                           "te": te_spin.value(), "checked": checked,
                           # PLAN-EIGENE EINSTELLUNGEN MITSICHERN (Nutzer,
@@ -6907,6 +7691,8 @@ class BauplanFenster:
                               self.settings.get("bau_buy_datacores", True)),
                           "buy_decryptors": bool(
                               self.settings.get("bau_buy_decryptors", True)),
+                          "reprocess_on": bool(self.settings.get("bau_reprocess_on")),
+                          "unrefined_on": bool(self.settings.get("bau_unrefined_on")),
                           "bp": getattr(self, "_bd_bp", None),
                           # Verbrauchs-Map fuer die 🔒-Reservierung (Toggle in
                           # "Meine Bauplaene"): was DIESER Plan aus dem

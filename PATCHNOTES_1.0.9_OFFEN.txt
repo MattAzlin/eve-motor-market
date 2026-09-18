@@ -1,0 +1,5 @@
+PATCHNOTES 1.0.9 - LEER
+Der gesamte Inhalt (Reprocessing: Compressed Ore, Unrefined Reactions,
+ganze Kopien, EC-Bonus, Ortssuche) ist am 19.09.2026 in 1.0.8 aufgegangen
+(RELEASE_1.0.8.txt / PATCHNOTES_1.0.8_DISCORD.txt). Neues sammelt sich in
+PATCHNOTES_OFFEN.txt.

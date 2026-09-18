@@ -198,16 +198,23 @@ DEFAULT_SETTINGS = {
     # Schalter schon gespeichert hat, behaelt seinen Wert.
     "use_structures": True,   # player-structure markets (needs structure scopes)
     "use_ui": True,           # opening items in the game client on by default (needs ui scope)
-    # CORP-HANGAR ALS BAU-BESTAND (1.0.8). STANDARD AUS (Entscheid 14.09.2026,
-    # Regel 3): ein Plan, der ploetzlich weniger einkauft, faellt erst im
-    # Spiel vor dem leeren Job auf. Nur fuers Bauen (Bauplan, Runplaner,
-    # Blueprints) - nicht Portfolio, nicht Profits (Nutzer, 16.09.2026).
-    "use_corp": False,
-    # Welche der sieben Hangar-Divisions zaehlen (1..7). LEER = keine: der
-    # Nutzer waehlt sie an, nicht pauschal alle sieben (Entscheid 14.09.2026:
-    # Material einer Division, die der Corp-Verkauf nutzt, darf nicht
-    # ungefragt in die Bauplanung wandern).
-    "corp_divisions": [],
+    # IMPLANTAT-ERKENNUNG STANDARD AN (Nutzer, 19.09.2026: "genau so wie es
+    # bei mir ist als Standard fuer alle Nutzer"). Der Implantat-Scope wird
+    # beim Verlinken mit angefragt. Gilt fuer NEUE Installationen.
+    "use_implants": True,
+    # CORP-HANGAR ALS BAU-BESTAND (1.0.8). War STANDARD AUS (Entscheid
+    # 14.09.2026, Regel 3). STANDARD AN seit 19.09.2026 (Nutzer-Entscheid,
+    # s. oben) - ohne gewaehlte Division zaehlt trotzdem nichts, die Karte
+    # sagt das ("Corp hangars are ON, but no division is selected"). Nur
+    # fuers Bauen (Bauplan, Runplaner, Blueprints) - nicht Portfolio, nicht
+    # Profits (Nutzer, 16.09.2026).
+    "use_corp": True,
+    # Welche der sieben Corp-Hangars (Divisions 1..7) zaehlen. STANDARD
+    # ALLE SIEBEN (Nutzer-Entscheid 19.09.2026: "alle Corp Divisions auf
+    # Standard ON") - ersetzt den Entscheid vom 14.09.2026 (leer, einzeln
+    # anwaehlen). Wer einen Hangar fuer den Corp-Verkauf nutzt, nimmt ihn
+    # in den Einstellungen raus. Gilt fuer NEUE Installationen.
+    "corp_divisions": [1, 2, 3, 4, 5, 6, 7],
     "bau_me": 10,             # assumed blueprint material efficiency % (BPO research)
     "bau_te": 0,              # assumed blueprint time efficiency % (0..20)
     # ---- ME/TE je Item-Kategorie (Punkt: "wir kaufen sonst zu viel Material") ----
@@ -262,6 +269,14 @@ DEFAULT_SETTINGS = {
     "bau_parallel_chars": 1,   # build characters working in parallel (time estimate)
     "bau_buy_surplus": 0,      # extra % of materials to buy (safety, rounded up)
     "bau_blacklist_names": [],  # exact item names to never build (paste list)
+    # REPROCESSING-SCHALTER (1.0.9) - plan-eigen wie die Blacklist: ein
+    # neuer, ungespeicherter Bauplan oeffnet mit BEIDEN AUS (Nutzer
+    # 19.09.2026), ein gespeicherter Plan bringt seinen Stand mit.
+    "bau_reprocess_on": False,   # Weg B: Compressed Ore statt Minerale
+    "bau_unrefined_on": False,   # Weg A: Unrefined-Reaktionen
+    # Preisverlauf: zuletzt angesehenes Item [type_id, Name] - beim Oeffnen
+    # des Tabs steht sofort ein Graph (18.09.2026).
+    "mk_last_item": None,
     # GANZE GRUPPEN nie bauen und nie kaufen (Nutzer, Sitzung 20).
     # Werte = die Gruppen des Materialien-Reiters, s. _MATERIAL_GRUPPEN.
     "bau_blacklist_gruppen": [],
@@ -440,6 +455,14 @@ def _rette_defekte_settings(path):
         defekte_settings_kopie = path
 
 
+_PLAN_NAME_SCHMUTZ = "\U0001F9EA\u2697\ufe0f \t"
+
+
+def plan_name_bereinigen(name: str) -> str:
+    """Emoji-Vorsatz (Reagenzglas u.ae.) und Leerraum vom Plan-Namen."""
+    return (name or "").strip(_PLAN_NAME_SCHMUTZ).strip()
+
+
 def _nach_migrationen(data: dict) -> dict:
     # Migration: tx_cache_minutes war nie über die UI einstellbar - jeder
     # gespeicherte Wert von genau 30 ist also der alte hartkodierte Default,
@@ -507,6 +530,17 @@ def _nach_migrationen(data: dict) -> dict:
                     data[_k] = list(_cids)
         data["bau_rollen_vorbelegt"] = True
         _migrated = True
+    # REAGENZGLAS-EMOJI AUS ALTEN PLAN-NAMEN (Nutzer 18.09.2026: "diese
+    # Reagenzglas-Emojis im Profit-Tab muessen weg"). Eine fruehere Fassung
+    # nannte erfindbare T2-Zeilen "\U0001F9EA Name"; gespeicherte Plaene
+    # tragen das Zeichen bis heute in label und item_name. Hier einmalig
+    # abstreifen - im Code entsteht es nicht mehr.
+    for _p in (data.get("bau_saved_plans") or []):
+        for _k in ("label", "item_name"):
+            _v = _p.get(_k)
+            if isinstance(_v, str) and plan_name_bereinigen(_v) != _v:
+                _p[_k] = plan_name_bereinigen(_v)
+                _migrated = True
     if _migrated:
         try:
             save_settings(data)   # Marker muss ueberleben, sonst Endlos-Lauf
