@@ -11,7 +11,7 @@ WARUM ZUSAMMEN: jede findet etwas, das die anderen NICHT finden.
                    und beide Suiten waren dabei gruen.
 
 Die Rotprobe laeuft hier NICHT mit (--check dauert 2 Min, der volle Lauf
-Stunden). Sie ist eine eigene Runde: `python rotprobe.py --check`.
+Stunden). Sie ist eine eigene Runde: `python tests\\rotprobe.py --check`.
 """
 import os
 import subprocess
@@ -22,7 +22,7 @@ PY = sys.executable
 
 
 class _Doppelt:
-    """Alles, was auf dem Bildschirm steht, auch in pruefe_bericht.txt.
+    """Alles, was auf dem Bildschirm steht, auch in berichte\\pruefe_bericht.txt.
 
     18.09.2026: das Fenster schloss sich beim Nutzer sofort nach dem
     Lauf, er konnte NICHTS lesen. Der Nutzer hat keine Shell - eine
@@ -53,11 +53,13 @@ class _Doppelt:
                 pass
 
 
-_BERICHT = open("pruefe_bericht.txt", "w", encoding="utf-8", errors="replace")
+os.makedirs("berichte", exist_ok=True)
+_BERICHT = open(os.path.join("berichte", "pruefe_bericht.txt"), "w",
+                encoding="utf-8", errors="replace")
 sys.stdout = _Doppelt(sys.stdout, _BERICHT)
 sys.stderr = _Doppelt(sys.stderr, _BERICHT)
 import datetime as _dt
-print(f"pruefe.py Fassung 2 - {_dt.datetime.now():%Y-%m-%d %H:%M:%S} - "
+print(f"pruefe.py Fassung 3 - {_dt.datetime.now():%Y-%m-%d %H:%M:%S} - "
       f"Python {sys.version.split()[0]}")
 
 
@@ -133,10 +135,10 @@ def _suite_ok(aus):
 
 
 ergebnis["Bestand-Herkunft (aa)"] = lauf(
-    "Bestand-Herkunft", [PY, "test_bestand_herkunft.py"],
+    "Bestand-Herkunft", [PY, os.path.join("tests", "test_bestand_herkunft.py")],
     muster_ok=_suite_ok)
 ergebnis["Bauplan-Aufbau (b)"] = lauf(
-    "Bauplan-Aufbau", [PY, "test_bauplan_aufbau.py"],
+    "Bauplan-Aufbau", [PY, os.path.join("tests", "test_bauplan_aufbau.py")],
     umgebung={"QT_QPA_PLATFORM": "offscreen", "PYTHONPATH": os.getcwd()},
     muster_ok=_suite_ok)
 
@@ -144,7 +146,7 @@ _dateien = []
 for wurzel, _d, _f in os.walk("eve_trader"):
     _dateien += [os.path.join(wurzel, n) for n in _f if n.endswith(".py")]
 ergebnis["Lint (Reihenfolge)"] = lauf(
-    "Lint", [PY, "lint_order.py"] + _dateien + ["main.py"],
+    "Lint", [PY, os.path.join("tests", "lint_order.py")] + _dateien + ["main.py"],
     muster_ok=lambda a: "0 Befund" in a)
 
 try:

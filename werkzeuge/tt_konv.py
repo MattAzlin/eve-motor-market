@@ -20,6 +20,8 @@ Was das Skript tut (und was nicht):
   noch nicht existiert.
 """
 import ast
+import os as _os_wurzel
+_os_wurzel.chdir(_os_wurzel.path.dirname(_os_wurzel.path.dirname(_os_wurzel.path.abspath(__file__))))   # Projektwurzel (werkzeuge\ -> ..)
 import json
 import sys
 

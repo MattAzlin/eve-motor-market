@@ -34,7 +34,7 @@ import sys
 
 def main():
     try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # Projektwurzel
         from eve_trader import config
     except Exception as _e:
         print(f"FEHLER: eve_trader nicht importierbar ({_e}).")
@@ -87,8 +87,8 @@ def main():
               f"{str(raus[-1]['label'])[:34]:<34} "
               f"{_n:>4} Material-Typen reserviert  {_fr}")
 
-    ziel = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "reservierungen.json")
+    ziel = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "berichte", "reservierungen.json")
     with open(ziel, "w", encoding="utf-8") as f:
         json.dump(raus, f, indent=1, ensure_ascii=False)
     print(f"\nFERTIG: {ziel}")

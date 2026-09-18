@@ -27,6 +27,7 @@ PROMPT_NAECHSTER_CHAT.md
 START_SITZUNG_*.txt
 PATCHNOTES_OFFEN.txt
 CLAUDE.md
+MEMORY.md
 rotprobe_stand.json
 
 # Release-Dateien (gehoeren ans Release auf Github, nicht ins Repo;
@@ -37,6 +38,10 @@ README_*.txt
 eve-motor-market-source-*.zip
 mache_source_zip_*.bat
 source_zip_*_bericht.txt
+
+# Ordnerstruktur 18.09.2026: Berichte und Release-Dateien bleiben lokal
+berichte/
+release/
 
 # Sitzungs-Helfer und Archiv (19.09.2026)
 _archiv/
@@ -63,3 +68,4 @@ LIESMICH_LOGO.txt
 logo_bericht.txt
 veroeffentliche_*.bat
 veroeffentliche_bericht.txt
+ordne_projekt.bat

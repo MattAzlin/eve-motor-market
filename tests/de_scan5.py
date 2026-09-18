@@ -47,6 +47,8 @@ AUFRUF:  python de_scan5.py            -> Fundstellen je Datei
          python de_scan5.py --kurz     -> nur die Zaehlung
 """
 import ast
+import os as _os_wurzel
+_os_wurzel.chdir(_os_wurzel.path.dirname(_os_wurzel.path.dirname(_os_wurzel.path.abspath(__file__))))   # Projektwurzel (tests\ -> ..)
 import glob
 import os
 import re
@@ -75,7 +77,7 @@ def _nur_deutsche_woerter():
     Aus dem Katalog, nicht aus einer Handliste: deutsche Uebersetzungen
     liefern die Kandidaten, die englischen Schluessel ziehen alles ab, was
     auch englisch ist ("Portfolio", "Standard", "Total", "parallel")."""
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from eve_trader.sprache import KATALOG
     deutsch, englisch = set(), set()
     for en, de in KATALOG.get("de", {}).items():

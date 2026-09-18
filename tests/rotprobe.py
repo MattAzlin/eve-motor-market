@@ -19,7 +19,9 @@ import tempfile
 import subprocess
 import sys
 
-SRC = os.path.dirname(os.path.abspath(__file__))
+# PROJEKTWURZEL (Ordnerstruktur 18.09.2026): die Rotprobe liegt in tests\,
+# kopiert wird das ganze Projekt, die Mutationspfade sind wurzel-relativ.
+SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = os.path.join(tempfile.gettempdir(), "rotprobe_arbeitskopie")
 
 # NICHT in die Arbeitskopie (Sitzung 10, Nutzer-Befund): auf dem Rechner des
@@ -30,8 +32,8 @@ TMP = os.path.join(tempfile.gettempdir(), "rotprobe_arbeitskopie")
 # faehrt, und ruehrt die Kopie des venv nie an. `.smoke_home` MUSS bleiben -
 # die b-Suite legt ihr Arbeitsverzeichnis dorthin.
 _nicht_kopieren = shutil.ignore_patterns(
-    ".venv", "build", "dist", "__pycache__", "*.pyc",
-    "rotprobe_komplett.txt", "fehler.log")
+    ".venv", "build", "dist", "__pycache__", "*.pyc", ".git", "_archiv",
+    "berichte", "rotprobe_komplett.txt", "fehler.log")
 
 # (Name, Datei, alt, neu, erwartete Teilzeichenkette in einem FEHLER-Label)
 MUTATIONEN = [
@@ -96,7 +98,7 @@ MUTATIONEN = [
      '"profit": net_sell_total - total_cost}',
      'Schnellschaetzung zieht die Zusatzkosten ab'),
     ('Messskript baut die Optionen selbst nach',
-     'messung_bau_vs_bauplan.py',
+     'werkzeuge/messung_bau_vs_bauplan.py',
      '    opts = win._bau_scan_build_opts(recipes)',
      '    opts = {}   # MUTATION',
      'Messskript nutzt die Scan-Optionen'),
@@ -1936,19 +1938,19 @@ MUTATIONEN = [
      'der Build packt den assets-Ordner mit ein'),
 
     ('Waechter uebersieht einen ganzen Projektordner',
-     'test_bestand_herkunft.py',
+     'tests/test_bestand_herkunft.py',
      '        [q for q in _q if q in (".", "./", "..", "eve_trader", "*")],',
      '        [],   # MUTATION',
      'Waechter faengt: spec mit ganzem Projektordner (ganzer Ordner)'),
 
     ('Waechter liest .spec-datas nicht mehr mit',
-     'test_bestand_herkunft.py',
+     'tests/test_bestand_herkunft.py',
      '            quellen.append(_q)',
      '            pass   # MUTATION',
      'Waechter faengt: spec mit dem Datenverzeichnis (fremde Quelle)'),
 
     ('Waechter liest --add-data nicht mehr mit',
-     'test_bestand_herkunft.py',
+     'tests/test_bestand_herkunft.py',
      '''    for _m in _re222.findall(r'--add-data\\s+"([^"]+)"', _t):
         quellen.append(_m)''',
      '''    for _m in []:
@@ -1956,7 +1958,7 @@ MUTATIONEN = [
      'Waechter faengt: add-data mit dem ganzen Paket (fremde Quelle)'),
 
     ('Waechter meldet alles als Verstoss (waere abgeschaltet worden)',
-     'test_bestand_herkunft.py',
+     'tests/test_bestand_herkunft.py',
      '        [n for n in _verboten222 if n in _t],',
      '        list(_verboten222),   # MUTATION',
      'Waechter laesst einen sauberen Build durch'),
@@ -2785,7 +2787,7 @@ MUTATIONEN = [
      'keine persoenliche Angabe sichtbar: A-DDGY'),
 
     ('Waechter zaehlt Docstrings faelschlich als sichtbar',
-     'test_bestand_herkunft.py',
+     'tests/test_bestand_herkunft.py',
      '        and id(_n) not in _doc_ids)',
      '        )',
      'keine persoenliche Angabe sichtbar: Peanut Motor'),
@@ -4062,7 +4064,7 @@ Source: "settings.json"; DestDir: "{app}"''',
     # jedes uebrige modale Fenster ab (b59) - ein Fehler wird rot, statt die
     # Rotprobe eine Stunde bis zum Notausstieg warten zu lassen.
     ('Das Einrichtungsfenster wird nicht mehr an der Klasse stillgelegt',
-     'test_bauplan_aufbau.py',
+     'tests/test_bauplan_aufbau.py',
      '\nMainWindow._erste_einrichtung_pruefen = _einrichtung_still\n',
      '\npass   # MUTATION\n',
      'b59 das Einrichtungsfenster ist fuer JEDES Hauptfenster stillgelegt'),
@@ -4417,7 +4419,7 @@ Source: "settings.json"; DestDir: "{app}"''',
      '    _BP_STUFEN_FOLGE = ("Endprodukt", "Komponente", "Reaktion"); _x = ("Fuel", "Tools",   # MUTATION',
      'aa296 Reihenfolge wie im Blaupausen-Reiter'),
     ('Die Rezeptfrage wird im Testlauf nicht mehr stillgelegt',
-     'test_bauplan_aufbau.py',
+     'tests/test_bauplan_aufbau.py',
      '\nMainWindow._erststart_rezepte_anbieten = _einrichtung_still\n',
      '\npass   # MUTATION\n',
      'b59 auch die drei Erststart-Fragen'),
@@ -4479,7 +4481,7 @@ Source: "settings.json"; DestDir: "{app}"''',
      '        head.addWidget(QLabel("Zeitraum:"))   # MUTATION',
      'b62 keiner der gemeldeten deutschen Texte'),
     ('de_scan3 haelt Beschriftungen wieder fuer CSS',
-     'de_scan3.py',
+     'tests/de_scan3.py',
      '    r"\\b(?:color|background',
      '    r"(?:[A-Za-z-]+)|(?:color|background',
      'aa271 de_scan3: eine Beschriftung mit Doppelpunkt'),
@@ -5545,7 +5547,7 @@ Source: "settings.json"; DestDir: "{app}"''',
     # und die Rotprobe meldet BLIND fuer etwas, das sauber ROT ist - der
     # gefaehrlichste Ausfall, den dieses Werkzeug haben kann.
     ('Die Suiten-Zuordnung geht wieder nach dem Anfangsbuchstaben',
-     'rotprobe.py',
+     'tests/rotprobe.py',
      '    if _re_suite.match(_e):\n'
      '        return "aa" if _e.startswith("aa") else "b"\n',
      '    if _e.startswith("aa"):\n'
@@ -6578,7 +6580,7 @@ Source: "settings.json"; DestDir: "{app}"''',
     # b76 hinterliess "profitable only" AUS (18.09.2026, beim Nutzer b46 rot
     # ab dem zweiten Lauf). Das Aufraeumen muss die Haken selbst setzen.
     ('b76 raeumt die Haken nicht mehr selbst zurueck',
-     'test_bauplan_aufbau.py',
+     'tests/test_bauplan_aufbau.py',
      '            if _v76 is None:\n                continue\n',
      '            continue   # MUTATION\n',
      'b76 Aufraeumen: die Haken stehen wieder wie vorher'),
@@ -6674,7 +6676,7 @@ def lauf(erwartet=None):
     r = None
     fehler = []
     if _welche in ("aa", "beide"):
-        r = subprocess.run([sys.executable, "test_bestand_herkunft.py"], cwd=TMP,
+        r = subprocess.run([sys.executable, "tests/test_bestand_herkunft.py"], cwd=TMP,
                            capture_output=True, text=True, timeout=_NOTAUS)
         fehler = [l.strip() for l in r.stdout.splitlines() if "FEHLER" in l]
     # DIE b-SUITE LAEUFT SEIT SITZUNG 8 MIT. Vorher fuhr die Rotprobe NUR
@@ -6688,7 +6690,7 @@ def lauf(erwartet=None):
         _umg = dict(os.environ)
         _umg["QT_QPA_PLATFORM"] = "offscreen"
         _umg["PYTHONPATH"] = TMP
-        rb = subprocess.run([sys.executable, "test_bauplan_aufbau.py"], cwd=TMP,
+        rb = subprocess.run([sys.executable, "tests/test_bauplan_aufbau.py"], cwd=TMP,
                             capture_output=True, text=True, timeout=_NOTAUS,
                             env=_umg)
         fehler += [l.strip() for l in rb.stdout.splitlines() if "FEHLER" in l]

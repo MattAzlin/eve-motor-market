@@ -22,6 +22,8 @@ Die Ausgabe hier hereinkopieren - sie enthaelt keine Kontodaten, nur
 Item-Namen, Gruppen und Stufen.
 """
 import sys
+import os as _os_wurzel
+_os_wurzel.chdir(_os_wurzel.path.dirname(_os_wurzel.path.dirname(_os_wurzel.path.abspath(__file__))))   # Projektwurzel (werkzeuge\ -> ..)
 import traceback
 from collections import defaultdict
 

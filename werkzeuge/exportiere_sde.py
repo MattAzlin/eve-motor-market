@@ -39,7 +39,7 @@ TABELLEN = [
 
 def main():
     try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # Projektwurzel
         from eve_trader import config
         quelle = os.path.join(config.app_data_dir(), "industry.db")
     except Exception as _e:
@@ -55,8 +55,8 @@ def main():
     print(f"Quelle : {quelle}")
     print(f"Groesse: {os.path.getsize(quelle) / 1024 / 1024:.1f} MB")
 
-    ziel = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "sde_kompakt.db")
+    ziel = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "sde_kompakt.db")   # Projektwurzel
     for _alt in (ziel, ziel + ".zip"):
         if os.path.exists(_alt):
             os.remove(_alt)

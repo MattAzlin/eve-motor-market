@@ -192,7 +192,7 @@ def auswerten(txs):
 
 def main():
     try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # Projektwurzel
         from eve_trader import config
     except Exception as _e:
         print(f"FEHLER: eve_trader nicht importierbar ({_e}).")
@@ -321,8 +321,8 @@ def main():
             print(f"  {r['name'][:37]:<38}{_stk(r['zugeordnet_stk'], 10)} Stk"
                   + f"{r['brutto_marge_pct']:>10.1f} %")
 
-    ziel = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "handel_zuordnung.json")
+    ziel = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "berichte", "handel_zuordnung.json")
     with open(ziel, "w", encoding="utf-8") as f:
         json.dump({
             "transaktionen": len(txs),

@@ -36,11 +36,13 @@ AUFRUF:  python de_scan6.py            -> Fundstellen je Datei
          python de_scan6.py --kurz     -> nur die Zaehlung
 """
 import ast
+import os as _os_wurzel
+_os_wurzel.chdir(_os_wurzel.path.dirname(_os_wurzel.path.dirname(_os_wurzel.path.abspath(__file__))))   # Projektwurzel (tests\ -> ..)
 import glob
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import de_scan3 as _d3                                       # noqa: E402
 
 # EIGENE ANZEIGE-HELFER, die de_scan3 (noch) nicht kennt. Alle drei sind

@@ -64,7 +64,13 @@ _ast_speicher.parse = _parse_gespeichert
 # Windows die ECHTEN Programmdaten des Nutzers - also seine richtige
 # industry.db und ledger.db mit Jahren an Einstands-Daten. Ein Testlauf hat
 # dort nichts verloren, weder lesend noch schreibend.
-_HOME = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".smoke_home")
+# PROJEKTWURZEL (Ordnerstruktur 18.09.2026): die Suite liegt in tests\,
+# alles, was sie liest, relativ zur Wurzel (eve_trader\, pruefe.py, ...).
+# Deshalb: Wurzel bestimmen, dorthin wechseln, auf den Importpfad legen.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(_ROOT)
+sys.path.insert(0, _ROOT)
+_HOME = os.path.join(_ROOT, ".smoke_home")
 os.makedirs(_HOME, exist_ok=True)
 for _k in ("HOME", "APPDATA", "USERPROFILE"):
     os.environ[_k] = _HOME
@@ -1288,7 +1294,7 @@ for _u in ("market_sell=_sell_eff", "gross = _sell_eff * qty",
     check(f"aa32 konsequent benutzt: {_u}", _u in _src_txt)
 # lint_order.py muss diese Fehlerklasse ab jetzt FINDEN - sie war der Grund,
 # warum es den Linter ueberhaupt gibt, und sie ist ihm durchgerutscht.
-_lint = open("lint_order.py", encoding="utf-8").read()
+_lint = open("tests/lint_order.py", encoding="utf-8").read()
 check("aa32 Linter kennt Closure-Shadowing (Regel D)",
       "CLOSURE-SHADOWING" in _lint and "UnboundLocalError" in _lint)
 check("aa32 Regel D ignoriert eigene Scopes (Comprehensions/Lambdas)",
@@ -3840,7 +3846,7 @@ check("aa92 nichts wird ausgefiltert",
       "fallback_pct" not in _fn_src("compute_build"))
 
 # --- Das Messskript muss die ECHTEN Scan-Optionen benutzen.
-_ms92 = open("messung_bau_vs_bauplan.py", encoding="utf-8").read()
+_ms92 = open("werkzeuge/messung_bau_vs_bauplan.py", encoding="utf-8").read()
 # Auch hier AST statt Textsuche - der Docstring des Skripts NENNT die beiden
 # Methoden (er erklaert ja, warum es sie aufruft). Ein Textvergleich waere
 # blind gegen "Optionen doch selbst zusammengebaut".
@@ -9637,7 +9643,7 @@ check("aa221 ... und danach EINMAL uebernommen",
 # HINTERGRUND-SCHREIBEN (config.py). Der teure Teil - Platte + fsync - darf
 # die Oberflaeche nicht mehr aufhalten; der Stand muss aber SOFORT
 # eingefroren werden, sonst schreibt der Faden einen halb geaenderten Stand.
-_cfg221 = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+_cfg221 = open(os.path.join(_ROOT,
                             "eve_trader", "config.py"),
                encoding="utf-8").read()
 
@@ -9689,7 +9695,7 @@ check("aa221 beim Schliessen geht die entprellte Auswahl nicht verloren",
 #       Build BRAUCHT ein --add-data fuer die SVGs (Checkbox-Haken,
 #       Spinner-Pfeile), sonst fehlen sie in der EXE. Ab da ist es eine
 #       unachtsame Zeile bis zum Datenleck.
-_here222 = os.path.dirname(os.path.abspath(__file__))
+_here222 = _ROOT
 _bat222 = open(os.path.join(_here222, "build.bat"), encoding="utf-8").read()
 # .spec UND .iss: PyInstaller und der Inno-Setup-Installer sind ZWEI Wege,
 # auf denen Dateien in die Auslieferung kommen. Der Installer war beim
@@ -12604,7 +12610,9 @@ import sys as _sys271
 
 
 def _scan271(skript):
-    _r = _sp271.run([_sys271.executable, skript, "--kurz"], cwd=_here222,
+    # Die Scanner liegen in tests\ und wechseln selbst zur Projektwurzel.
+    _r = _sp271.run([_sys271.executable, os.path.join(_ROOT, "tests", skript),
+                     "--kurz"], cwd=_here222,
                     capture_output=True, text=True, encoding="utf-8",
                     errors="replace", timeout=120)
     for _z in (_r.stdout or "").splitlines():
@@ -14034,7 +14042,7 @@ check("aa292 der Erststart-Zeitgeber bindet spaet",
       in _src_txt)
 # UND DIE b-SUITE MACHT VON DER MOEGLICHKEIT GEBRAUCH - sonst waere die
 # spaete Bindung folgenlos.
-_b292 = open("test_bauplan_aufbau.py", encoding="utf-8").read()
+_b292 = open("tests/test_bauplan_aufbau.py", encoding="utf-8").read()
 # Sitzung 17: an der KLASSE statt nur an `win` - b23 baut zwei weitere
 # Hauptfenster, an denen die alte Einzelzeile nicht wirkte (Suite hing).
 check("aa292 die b-Suite legt das Einrichtungsfenster still",
@@ -15282,7 +15290,7 @@ eq("aa336 alles andere bleibt unveraendert",
 # Reiter zeigt es falsch, beides aus derselben Quelle.
 import sqlite3 as _sq337
 import os as _os337
-_db337 = _os337.path.join(_os337.path.dirname(_os337.path.abspath(__file__)),
+_db337 = _os337.path.join(_ROOT,
                           "sde_kompakt.db")
 if _os337.path.exists(_db337) and _os337.path.getsize(_db337) > 0:
     _c337 = _sq337.connect(_db337)
@@ -17408,7 +17416,7 @@ check("aa369 industry liest ec_me_map an allen drei invented-Stellen",
 # Wachhund, der falschen Alarm schlaegt, wird abgeschaltet.
 import importlib.util as _ilu359
 _spec359 = _ilu359.spec_from_file_location(
-    "_rp359", os.path.join(_here222, "rotprobe.py"))
+    "_rp359", os.path.join(_ROOT, "tests", "rotprobe.py"))
 _rp359 = _ilu359.module_from_spec(_spec359)
 _spec359.loader.exec_module(_rp359)
 eq("aa359 eine aa-Pruefung fuehrt zur aa-Suite",
@@ -17436,9 +17444,9 @@ check("aa359 die Zuordnung wird ueberhaupt genutzt", len(_zu359) > 100)
 # formal stimmen und trotzdem auf die falsche Datei zeigen - dann liefe die
 # falsche Suite, die erwartete Pruefung waere nicht dabei, und die Rotprobe
 # meldete BLIND fuer eine Mutation, die in Wahrheit sauber ROT ist.
-_aa359 = open(os.path.join(_here222, "test_bestand_herkunft.py"),
+_aa359 = open(os.path.join(_ROOT, "tests", "test_bestand_herkunft.py"),
               encoding="utf-8").read()
-_b359 = open(os.path.join(_here222, "test_bauplan_aufbau.py"),
+_b359 = open(os.path.join(_ROOT, "tests", "test_bauplan_aufbau.py"),
              encoding="utf-8").read()
 # WAS HIER GEPRUEFT WIRD - UND WAS NICHT.
 # Ein Teil der Pruefnamen entsteht ERST BEIM LAUFEN, aus f-Strings

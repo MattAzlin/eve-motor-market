@@ -24,6 +24,8 @@ AUFRUF:  python de_scan4.py            -> Fundstellen je Datei
          python de_scan4.py --kurz     -> nur die Zaehlung
 """
 import ast
+import os as _os_wurzel
+_os_wurzel.chdir(_os_wurzel.path.dirname(_os_wurzel.path.dirname(_os_wurzel.path.abspath(__file__))))   # Projektwurzel (tests\ -> ..)
 import glob
 import re
 import sys
@@ -65,7 +67,7 @@ NUR_PROTOKOLL = {"_log_exception"}
 def _deutsche_katalogtexte():
     try:
         import sys as _s, os as _o
-        _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__)))
+        _s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))
         from eve_trader.sprache import KATALOG
     except Exception:
         return set()

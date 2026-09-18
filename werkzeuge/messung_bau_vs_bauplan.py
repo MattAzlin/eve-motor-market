@@ -27,6 +27,8 @@ genommen. Voraussetzung: SDE geladen und einmal "Markt-Scan" gelaufen (das
 Skript liest denselben Snapshot wie der Bauen-Tab, es holt keine Preise neu).
 """
 import argparse
+import os as _os_wurzel
+_os_wurzel.chdir(_os_wurzel.path.dirname(_os_wurzel.path.dirname(_os_wurzel.path.abspath(__file__))))   # Projektwurzel (werkzeuge\ -> ..)
 import os
 import sys
 

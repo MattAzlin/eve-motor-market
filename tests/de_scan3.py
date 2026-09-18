@@ -24,6 +24,8 @@ AUFRUF:  python de_scan3.py            -> Fundstellen je Datei
          python de_scan3.py --kurz     -> nur die Zaehlung
 """
 import ast
+import os as _os_wurzel
+_os_wurzel.chdir(_os_wurzel.path.dirname(_os_wurzel.path.dirname(_os_wurzel.path.abspath(__file__))))   # Projektwurzel (tests\ -> ..)
 import glob
 import sys
 

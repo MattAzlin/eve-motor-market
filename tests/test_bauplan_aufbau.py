@@ -25,7 +25,13 @@ import os
 import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-_HOME = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".smoke_home")
+# PROJEKTWURZEL (Ordnerstruktur 18.09.2026): die Suite liegt in tests\,
+# alles, was sie liest, relativ zur Wurzel (eve_trader\, pruefe.py, ...).
+# Deshalb: Wurzel bestimmen, dorthin wechseln, auf den Importpfad legen.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(_ROOT)
+sys.path.insert(0, _ROOT)
+_HOME = os.path.join(_ROOT, ".smoke_home")
 os.makedirs(_HOME, exist_ok=True)
 for _k in ("HOME", "APPDATA", "USERPROFILE"):
     os.environ[_k] = _HOME
@@ -42,7 +48,7 @@ _app = QApplication.instance() or QApplication([])
 # am Ende gelesen - ein AttributeError in einem try/except ist sonst unsichtbar
 # (18.09.2026: "'MainWindow' object has no attribute '_bd_groups'" sechsmal je
 # Prueflauf, nur in fehler.log des Nutzers zu sehen).
-_FLOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fehler.log")
+_FLOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fehler.log")   # neben argv[0]
 try:
     _FLOG_START = os.path.getsize(_FLOG)
 except OSError:
@@ -152,7 +158,7 @@ import glob as _glob8b
 # Sitzung 8: alle UI-Dateien zusammenhaengen (nicht nur main_window.py) -
 # sonst wird jede Text-Pruefung blind, sobald Code in ein Mixin wandert.
 # main_window.py bleibt vorne (siehe test_bestand_herkunft.py).
-_ui8b = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+_ui8b = os.path.join(_ROOT,
                      "eve_trader", "ui")
 _mw8b = os.path.join(_ui8b, "main_window.py")
 _src_mw = "\n".join(
@@ -276,7 +282,7 @@ for _i in range(win.b_stack.count()):
 check("b1b alle Seiten bleiben schaltbar", _pages_ok)
 # Rail-Ordnung (Nutzer): "Neuer Bauplan" steht unter PRODUKTION, ueber
 # "Meine Bauplaene" - unter PLANEN bleiben nur Scanner + Meine Blueprints.
-_src_rail = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+_src_rail = open(os.path.join(_ROOT,
                               "eve_trader", "ui", "main_window.py"),
                  encoding="utf-8").read()
 # .find() statt .index(): ein fehlender Anker soll die PRUEFUNG rot machen,
@@ -1921,7 +1927,7 @@ if _dlg is not None:
 # ---------------------------------------------------------------- (b7c)
 # SCHRIFTART der Item-Listen (Nutzer: "etwas weniger roboterisch"). Vorher
 # Consolas/monospace - das las sich wie ein Terminal.
-_theme_src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+_theme_src = open(os.path.join(_ROOT,
                                "eve_trader", "ui", "theme.py"),
                   encoding="utf-8").read()
 # theme.py ist ein f-String-Template ({{ }}), deshalb kein Klammer-Regex,
@@ -5974,7 +5980,7 @@ import inspect as _insp50
 _src50 = _insp50.getsource(type(win)._bd_recalc) \
     if hasattr(type(win), "_bd_recalc") else ""
 if not _src50:
-    _src50 = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+    _src50 = open(os.path.join(_ROOT,
                                "eve_trader", "ui", "main_window.py"),
                   encoding="utf-8").read()
 # FUEHRENDES LEERZEICHEN IST PFLICHT: weiter unten steht
@@ -6064,7 +6070,7 @@ check("b51 leere Historie stuerzt nicht ab",
       _hb51.bewerte_leeren_markt(1, 500.0, [], _T51, _B51) is None)
 # DIE ANZEIGE MUSS DIE SCHAETZUNG KENNZEICHNEN - sonst sieht sie aus wie ein
 # abgelesener Preis. Auf die ZUWEISUNG geprueft, nicht auf den Namen.
-_srcrg51 = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+_srcrg51 = open(os.path.join(_ROOT,
                              "eve_trader", "ui", "main_window.py"),
                 encoding="utf-8").read()
 check("b51 die Tabelle markiert geschaetzte Zielpreise mit einer Tilde",
@@ -6156,7 +6162,7 @@ check("b52 beide zurueck auf leer heisst wieder alle",
       win._handels_charaktere() == set())
 # DAS ORDER-UPDATE MUSS DIE MENGE AUCH BENUTZEN. Auf die ZUWEISUNG geprueft:
 # eine Mutation koennte den Aufruf stehen lassen und das Ergebnis verwerfen.
-_src52 = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+_src52 = open(os.path.join(_ROOT,
                            "eve_trader", "ui", "main_window.py"),
               encoding="utf-8").read()
 check("b52 das Order-Update fragt die Handels-Menge ab",
@@ -6232,7 +6238,7 @@ except Exception:
     _robust53 = False
 check("b53 unbrauchbare Eintraege im Paar aendern nichts", _robust53)
 # UND DER PROFITS-TAB MUSS ES BENUTZEN. Auf die ZUWEISUNG geprueft.
-_srcp53 = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+_srcp53 = open(os.path.join(_ROOT,
                             "eve_trader", "ui", "main_window.py"),
                encoding="utf-8").read()
 check("b53 der Profits-Tab reicht das Paar weiter",
@@ -6260,7 +6266,7 @@ check("b53 bei einem einzelnen Charakter wird NICHT gepaart",
 # Container keinen ESI-Bestand, mit dem sich "live < eingefroren"
 # nachstellen liesse. Was sich messen laesst, wird gemessen (unten die
 # Reservierungs-Richtung), der Rest auf die ZUWEISUNG.
-_srcm54 = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+_srcm54 = open(os.path.join(_ROOT,
                             "eve_trader", "ui", "mw_bauplan_tabs.py"),
                encoding="utf-8").read()
 check("b54 der Fehlbedarf-Banner nennt ALLE Namen (kein [:3] mehr)",

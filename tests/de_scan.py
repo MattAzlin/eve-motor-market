@@ -1,4 +1,6 @@
 import ast, re, sys, glob
+import os as _os_wurzel
+_os_wurzel.chdir(_os_wurzel.path.dirname(_os_wurzel.path.dirname(_os_wurzel.path.abspath(__file__))))   # Projektwurzel (tests\ -> ..)
 DE=re.compile(r'[äöüÄÖÜß]|\b(und|nicht|der|die|das|wird|werden|für|fuer|oder|mit|bei|nur|wenn|dann|kein|keine|ohne|wieder|auch|noch|nach|von|zum|zur|des|dem|ein|eine|ist|sind|dieser|diese|dieses|Bitte|bitte)\b')
 UI_ATTRS={"setToolTip","setText","showMessage","setWindowTitle","addItem","setPlaceholderText","setStatusTip","setWhatsThis","setTitle","setHeaderLabels","setHorizontalHeaderLabels","addTab","setTabText","information","warning","critical","question","about","setLabelText","addAction","setDescription"}
 UI_NAMES={"QLabel","QPushButton","QCheckBox","QGroupBox","QAction","QRadioButton","QMessageBox","QTreeWidgetItem","QTableWidgetItem","QListWidgetItem","_QCheckBox","QMenu","QInputDialog","QToolButton","QDialog"}
