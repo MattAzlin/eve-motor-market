@@ -13,12 +13,12 @@ import collections
 import pathlib
 import sys
 
-WURZEL = pathlib.Path(__file__).parent
+WURZEL = pathlib.Path(__file__).parent.parent   # Projektwurzel
 ANWENDUNG = sorted(
     [p for p in (WURZEL / "eve_trader").rglob("*.py") if "__pycache__" not in str(p)]
 ) + [WURZEL / "main.py"]
 DRUMHERUM = sorted(
-    list(WURZEL.glob("test_*.py")) + list(WURZEL.glob("messung_*.py"))
+    list((WURZEL / "tests").glob("test_*.py")) + list((WURZEL / "werkzeuge").glob("messung_*.py"))
     + [WURZEL / "rotprobe.py", WURZEL / "lint_order.py", WURZEL / "repro_bpc_te.py"]
 )
 

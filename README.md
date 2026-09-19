@@ -44,13 +44,26 @@ The full source is in this repository, and is also attached to every release as
 a zip, under the GPL-3.0 licence. You may read it, change it and pass it on; a
 changed version has to come with its own source under the same licence.
 
+Where to look:
+
+| Folder / file | What it is |
+|---|---|
+| `eve_trader/` | **the program** – all the Python code (`industry.py` = build math, `reprocess.py` = ore and reaction yields, `ui/` = the windows) |
+| `main.py`, `run.bat` | start it from source (`run.bat` sets up a venv on first run) |
+| `build.bat`, `installer.iss` | build the Windows `.exe` and the optional installer |
+| `tests/` | the test suites, the mutation harness and the language scanners |
+| `werkzeuge/` | small helper scripts used during development |
+| `docs/` | the screenshots in this README |
+
+`python main.py` needs Python 3.12 or newer and `pip install -r requirements.txt`.
+
 ## Checks
 
 Numbers are what the tool is for, so the calculations are guarded rather than
 trusted. The repository ships the check tooling alongside the program:
 
 - two test suites, 3'941 and 1'307 checks, run with `python pruefe.py`
-- a mutation harness (`rotprobe.py`) that breaks the code on purpose, 1006
+- a mutation harness (`tests/rotprobe.py`) that breaks the code on purpose, 1006
   mutations, to prove the checks actually catch a regression
 - source-order lint, `pyflakes`, and six scanners that keep the English and
   German texts in step
