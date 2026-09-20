@@ -675,6 +675,12 @@ KATALOG = {
             'Öffnen',
         'Order update':
             'Order-Update',
+        "? unknown":
+            "? unbekannt",
+        "The market lookup for this item failed \u2013 its current price is unknown, so the status cannot be judged. Press \u201e{button}\u201c again.":
+            "Der Marktabruf f\u00fcr dieses Item ist fehlgeschlagen \u2013 der aktuelle Preis ist unbekannt, der Status l\u00e4sst sich nicht beurteilen. \u201e{button}\u201c erneut dr\u00fccken.",
+        ", {n} could not be checked":
+            ", {n} nicht pr\u00fcfbar",
         'Check orders':
             'Orders prüfen',
         'Next ▶':

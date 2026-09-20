@@ -156,9 +156,33 @@ def _get_with_retry(url, headers=None, params=None, timeout=30, retries=2):
         if r.status_code >= 500 and attempt < retries:
             time.sleep(1.5 * (attempt + 1))
             continue
+        if r.status_code in (420, 429) and attempt < retries:
+            # ESI rate limit / error limit: wait it out instead of failing at
+            # once. Six parallel order-book fetches hit this on long lists, and
+            # the caller then had no book for the item.
+            time.sleep(_rate_limit_wait(r, attempt))
+            continue
         r.raise_for_status()   # 4xx (oder erschöpfte 5xx-Retries) -> sofort raus
         return r
     raise last_exc
+
+
+# Longest pause before retrying a rate-limited request (seconds).
+_RATE_LIMIT_WAIT_MAX = 10.0
+
+
+def _rate_limit_wait(r, attempt) -> float:
+    """Seconds to wait after a 420/429: what ESI asks for (Retry-After, or the
+    time until the error limit resets), capped at _RATE_LIMIT_WAIT_MAX; without
+    a usable header a short back-off."""
+    for name in ("Retry-After", "X-Esi-Error-Limit-Reset"):
+        try:
+            wait = float(r.headers.get(name))
+        except (TypeError, ValueError):
+            continue
+        if wait > 0:
+            return min(wait, _RATE_LIMIT_WAIT_MAX)
+    return 1.5 * (attempt + 1)
 
 
 def fetch_wallet_transactions(client_id: str, character_id: int,
