@@ -19605,6 +19605,13 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         min_margin = filters["min_margin"]
         min_profit = filters["min_profit_isk"]
         tgt_region = tgt.get("region_id")   # None for player structures
+        # BROKER FEE OF THE DESTINATION, not the shared setting: that one
+        # follows the last SCAN hub's standings (_sync_fees_to_hub), so an
+        # Amarr -> Jita route was priced with Amarr's fee. Read here, in the
+        # UI thread, and handed to the worker as a copy.
+        dest_broker = self._broker_pct_for(tgt)
+        self._rg_dest_broker = dest_broker          # the ladder cutoff uses it too
+        arb_settings = dict(self.settings, broker_fee_pct=dest_broker)
         self.rg_status.setText(_txt("Loading order books …"))
 
         def job(progress=None, status=None):
@@ -19620,7 +19627,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             # und Feinfilter sofort auf die Tabelle wirken (ohne Neu-Laden).
             raw_filters = dict(filters, min_margin=0, min_profit_isk=0,
                                min_liquidity=0, price_min=0, price_max=0)
-            deals = hubs.arbitrage(so, to, self.settings, raw_filters, mode,
+            deals = hubs.arbitrage(so, to, arb_settings, raw_filters, mode,
                                    target_is_structure=(tgt.get("kind") == "structure"))
             ids = [d["type_id"] for d in deals]
             if status:
@@ -19692,9 +19699,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     if status:
                         status(_txt("Searching empty destination markets with sales \u2026"))
                     _tax = self.settings["sales_tax_pct"] / 100.0
-                    _brk = (self.settings.get("structure_broker_pct", 1.0) / 100.0
-                            if tgt.get("kind") == "structure"
-                            else self.settings["broker_fee_pct"] / 100.0)
+                    _brk = dest_broker / 100.0
                     import concurrent.futures as _cf2
 
                     def _leer(tid):
@@ -20159,6 +20164,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
     def _ladder_cutoff(self, key, d):
         tax = self.settings["sales_tax_pct"] / 100.0
         broker = self.settings["broker_fee_pct"] / 100.0
+        if key == "region" and getattr(self, "_rg_dest_broker", None) is not None:
+            broker = self._rg_dest_broker / 100.0     # the destination's fee
         m = self._ladder_min_margin(key) / 100.0
         if key == "day":
             # Daytrade is always FLIP = Buy → Sell: you ACQUIRE via a buy order and
@@ -25509,13 +25516,32 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             region = region if region is not None else store.get_scan_region()
         except Exception:
             return
-        key = hubs.hub_key_for_region(region)
-        st = (self.settings.get("hub_standings", {}) or {}).get(key, {})
         self.settings["sales_tax_pct"] = config.effective_sales_tax(
             self.settings.get("skill_accounting", 4))
-        self.settings["broker_fee_pct"] = config.effective_broker_fee(
+        self.settings["broker_fee_pct"] = self._hub_broker_fee(region)
+
+    def _hub_broker_fee(self, region):
+        """Skill-based broker fee (%) at the NPC hub of `region`, from THAT
+        hub's standings. Pure: it does not touch the settings."""
+        key = hubs.hub_key_for_region(region)
+        st = (self.settings.get("hub_standings", {}) or {}).get(key, {})
+        return config.effective_broker_fee(
             self.settings.get("skill_broker_relations", 5),
             st.get("faction", 0.0), st.get("corp", 0.0))
+
+    def _broker_pct_for(self, loc):
+        """Broker fee (%) for SELLING at a Regional Trading location.
+
+        `settings["broker_fee_pct"]` is one shared value that
+        `_sync_fees_to_hub` overwrites with the SCAN hub's standings, so it is
+        only right for whichever hub was scanned last. A structure has its own
+        fee; with "fees from skills" off the value the user typed applies."""
+        loc = loc or {}
+        if loc.get("kind") == "structure":
+            return float(self.settings.get("structure_broker_pct", 1.0))
+        if self.settings.get("fees_from_skills") and loc.get("region_id") is not None:
+            return self._hub_broker_fee(loc["region_id"])
+        return float(self.settings["broker_fee_pct"])
 
     def createPopupMenu(self):
         """Qt-Override: das Fenster bietet KEIN Rechtsklick-Menue mehr an.
