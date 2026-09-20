@@ -9389,6 +9389,103 @@ check("b84 der Handler merkt sich weiter code und state des Rueckrufs",
       _au84._CallbackHandler.result == {"code": "abc", "state": "xyz"})
 
 
+# ---------------------------------------------------------------- (b85)
+# REGIONAL RECHNET MIT DER MAKLERGEBUEHR DES ZIEL-HUBS (Issue #4).
+# `broker_fee_pct` ist EINE globale Einstellung; `_sync_fees_to_hub` ueber-
+# schreibt sie bei jedem Scan mit den Standings des SCAN-Hubs. Wer in Amarr
+# gescannt hatte und dann Amarr -> Jita rechnete, bekam Amarrs Gebuehr statt
+# der von Jita (Broker Relations V, Jita 5/5 -> 1.25 %, Amarr 0/0 -> 1.5 %).
+# Jetzt gilt fuer den Verkauf am Ziel `_broker_pct_for(ziel)`: Skill-Gebuehr
+# des Ziel-Hubs, bei Struktur ihre eigene, ohne "Gebuehren aus Skills" der
+# eingestellte Wert. Betrifft Tabelle, Leer-Markt-Schaetzung und Leiter-Grenze.
+import eve_trader.scanner as _sc85
+import eve_trader.config as _cfg85
+
+_KEYS85 = ("fees_from_skills", "skill_broker_relations", "hub_standings",
+           "sales_tax_pct", "broker_fee_pct", "structure_broker_pct")
+_LEER85 = object()
+_alt85 = {k: win.settings.get(k, _LEER85) for k in _KEYS85}
+_hub85 = lambda rid: {"kind": "hub", "name": "x", "region_id": rid, "station_id": 1}
+_JITA85, _AMARR85 = 10000002, 10000043
+try:
+    win.settings.update({
+        "fees_from_skills": True, "skill_broker_relations": 5,
+        "hub_standings": {"jita": {"corp": 5.0, "faction": 5.0},
+                          "amarr": {"corp": 0.0, "faction": 0.0}},
+        "sales_tax_pct": 3.375, "broker_fee_pct": 9.99, "structure_broker_pct": 0.7})
+    _jita_fee85 = _cfg85.effective_broker_fee(5, 5.0, 5.0)        # 1.25
+    _amarr_fee85 = _cfg85.effective_broker_fee(5, 0.0, 0.0)       # 1.5
+    eq("b85 Ziel Jita: Skill-Gebuehr mit Jitas Standings (nicht der geteilte Wert)",
+       win._broker_pct_for(_hub85(_JITA85)), _jita_fee85)
+    eq("b85 Ziel Amarr: Skill-Gebuehr mit Amarrs Standings",
+       win._broker_pct_for(_hub85(_AMARR85)), _amarr_fee85)
+    eq("b85 Ziel Struktur: die eigene Struktur-Gebuehr",
+       win._broker_pct_for({"kind": "structure", "region_id": None,
+                            "structure_id": 5}), 0.7)
+    eq("b85 die Abfrage ist rein: der geteilte Wert bleibt unberuehrt",
+       win.settings["broker_fee_pct"], 9.99)
+    win.settings["fees_from_skills"] = False
+    eq("b85 ohne 'Gebuehren aus Skills' gilt der eingestellte Wert",
+       win._broker_pct_for(_hub85(_JITA85)), 9.99)
+    win.settings["fees_from_skills"] = True
+
+    # ---- Ende-zu-Ende: compute_arbitrage Amarr -> Jita, Amarr war zuletzt
+    # der Scan-Hub (geteilte Gebuehr = Amarrs 1.5 %).
+    win.settings["broker_fee_pct"] = _amarr_fee85
+    _hist85 = [{"volume": 50, "average": 200.0, "highest": 210.0, "lowest": 190.0}
+               for _ in range(30)]
+    _books85 = {
+        _AMARR85: {1: {"sell_min": 100, "sell_qty": 5000, "buy_max": 0, "buy_qty": 0,
+                       "sell_orders": [(100, 5000)], "buy_ladder": []},
+                   2: {"sell_min": 100, "sell_qty": 1000, "buy_max": 0, "buy_qty": 0,
+                       "sell_orders": [(100, 1000)], "buy_ladder": []}},
+        _JITA85: {1: {"sell_min": 130, "sell_qty": 100, "buy_max": 90, "buy_qty": 5,
+                      "sell_orders": [(130, 100)], "buy_ladder": [(90, 5)]}}}
+    _orig85 = (_hb82.load_location_orders, _esi83.resolve_names,
+               _esi83.resolve_volumes, _sc85.history_cached, win._run,
+               win._apply_rg_view)
+    _hb82.load_location_orders = lambda loc, settings, progress=None: _books85[loc["region_id"]]
+    _esi83.resolve_names = lambda ids: {}
+    _esi83.resolve_volumes = lambda ids: {i: 1.0 for i in ids}
+    _sc85.history_cached = lambda tid, region, *a, **k: _hist85
+    win._run = lambda w, done, fail_cb=None, **k: done(w._fn(*w._args, **w._kwargs))
+    win._apply_rg_view = lambda: None            # kein Zeichnen, keine Icon-Abrufe
+    try:
+        for _combo85, _rid85 in ((win.rg_src, _AMARR85), (win.rg_tgt, _JITA85)):
+            for _i85 in range(_combo85.count()):
+                _dd85 = _combo85.itemData(_i85) or {}
+                if _dd85.get("kind") == "hub" and _dd85.get("region_id") == _rid85:
+                    _combo85.setCurrentIndex(_i85)
+        for _i85 in range(win.rg_mode.count()):
+            if win.rg_mode.itemData(_i85) == "relist":
+                win.rg_mode.setCurrentIndex(_i85)
+        win._rg_raw = None
+        win._rg_last_key = None
+        win.compute_arbitrage()
+        _dl85 = {d["type_id"]: d for d in (win._rg_raw or [])}
+    finally:
+        (_hb82.load_location_orders, _esi83.resolve_names, _esi83.resolve_volumes,
+         _sc85.history_cached, win._run, win._apply_rg_view) = _orig85
+    _tax85 = 0.03375
+    check("b85 compute_arbitrage: Verkauf in Jita rechnet mit Jitas Gebuehr (1.25 %)",
+          1 in _dl85 and abs(_dl85[1]["profit_unit"]
+                             - (130 * (1 - _tax85 - _jita_fee85 / 100.0) - 100)) < 1e-9)
+    check("b85 compute_arbitrage: auch die Leer-Markt-Schaetzung nimmt Jitas Gebuehr",
+          2 in _dl85 and abs(_dl85[2]["profit_unit"]
+                             - (200 * (1 - _tax85 - _jita_fee85 / 100.0) - 100)) < 1e-9)
+    # ---- die Leiter-Grenze (welcher Einkaufspreis lohnt noch) gleich mit
+    _m85 = win._ladder_min_margin("region") / 100.0
+    _grenze85 = win._ladder_cutoff("region", {"target_sell": 130.0})
+    check("b85 die Leiter-Grenze im Regional nimmt dieselbe Ziel-Gebuehr",
+          abs(_grenze85 - 130 * (1 - _tax85 - _jita_fee85 / 100.0) / (1 + _m85)) < 1e-9)
+finally:
+    for _k85, _v85 in _alt85.items():
+        if _v85 is _LEER85:
+            win.settings.pop(_k85, None)
+        else:
+            win.settings[_k85] = _v85
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.
