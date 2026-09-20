@@ -2952,8 +2952,10 @@ KATALOG = {
             "\uff0b Andere Struktur (Ingame-Link einf\u00fcgen) \u2026",
         "Choose a structure (found from your orders) \u2013 or \u201ePaste in-game link\u201c below for another one (e.g. your Azbel):":
             "Struktur w\u00e4hlen (aus deinen Orders gefunden) \u2013 oder unten \u201eIngame-Link einf\u00fcgen\u201c f\u00fcr eine andere (z. B. deine Azbel):",
-        "\n\u26a0 Current book spread is WIDER than what the item historically yields daily (throwaway-order suspicion) - the rating uses the realistic profit.":
-            "\n\u26a0 Aktueller Buch-Spread ist BREITER als das, was das Item historisch t\u00e4glich hergibt (Wegwerf-Order-Verdacht) - Wertung nutzt den realistischen Gewinn.",
+        "\n\u26a0 Current book spread is WIDER than what the item historically yields daily (throwaway-order suspicion) - profit, ROI and profit/day use the realistic profit.":
+            "\n\u26a0 Aktueller Buch-Spread ist BREITER als das, was das Item historisch t\u00e4glich hergibt (Wegwerf-Order-Verdacht) - Gewinn, ROI und Gewinn/Tag nutzen den realistischen Gewinn.",
+        "\u2248 Realistic figure: the current order-book spread is wider than what the item yields per day, so the median daily spread of the history is used. Order-book figure: {paper}.":
+            "\u2248 Realistischer Wert: der aktuelle Buch-Spread ist breiter als das, was das Item pro Tag hergibt, deshalb gilt der Median-Tagesspread der Historie. Wert aus dem Orderbuch: {paper}.",
         "Searching your structures (assets + orders) \u2026 may take 10\u201320 s":
             "Suche deine Strukturen (Assets + Orders) \u2026 kann 10\u201320 s dauern",
         "Resolving names & volumes \u2026":
