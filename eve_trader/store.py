@@ -1055,11 +1055,14 @@ def init_volumes():
 
 
 def cached_volumes(type_ids) -> dict:
+    """Cached volumes. A stored 0 counts as "not cached": older versions saved
+    0 for failed lookups, and those rows must be fetched again, not trusted."""
     init_volumes()
     if not type_ids:
         return {}
     with _conn() as c:
-        q = "SELECT type_id, volume FROM type_volumes WHERE type_id IN (%s)" % \
+        q = ("SELECT type_id, volume FROM type_volumes "
+             "WHERE volume > 0 AND type_id IN (%s)") % \
             ",".join("?" * len(type_ids))
         return {r["type_id"]: r["volume"] for r in c.execute(q, list(type_ids))}
 
