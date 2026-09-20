@@ -10187,6 +10187,257 @@ finally:
     win._ord_laeuft = False
 
 
+# ---------------------------------------------------------------- (b92)
+# ALTERS-SPALTE (Issue #21) UND DIE UNDO-SPALTE (Issue #28). Nirgends stand,
+# WIE ALT die Daten hinter einer Zeile sind - dabei haelt ESI die eigenen Orders
+# bis ~20 Min und Marktdaten ~5 Min im Cache, "Check orders" kann also
+# rechtmaessig Altes liefern. Jetzt: Spalte "Age" in Kauf- UND Verkaufs-
+# Tabelle des Order update und in der Einkaufsliste, aus dem Last-Modified des
+# ESI-Antwortkopfs (schliesst ESIs Cache ein; ohne Kopf: Abrufzeit), als
+# "45 s" / "3 min" / "1 h 5 min", alle 10 s neu; ab 5 Min bernstein, ab 20 Min
+# rot. Zeile = das AELTERE von "deine Orders" und "Marktpreise". Ausserdem: das
+# Zaehler-Feld ("Redo") wurde per Undo immer in Spalte 5 geschrieben - in der
+# Verkaufs-Tabelle ist das der Status.
+import time as _tm92
+from eve_trader.ui import theme as _th92
+import email.utils as _eu92
+try:
+    import eve_trader.ui.dataage as _da92
+except ImportError:                                   # vor der Umsetzung
+    _da92 = None
+_f92 = lambda name, *a: getattr(_da92, name)(*a) if _da92 else "n/a"
+for _s92, _w92 in ((0, "0 s"), (45, "45 s"), (59.9, "59 s"), (60, "1 min"), (200, "3 min"),
+                   (3599, "59 min"), (3600, "1 h"), (3900, "1 h 5 min"), (None, "—")):
+    eq(f"b92 format_age({_s92})", _f92("format_age", _s92), _w92)
+for _s92, _w92 in ((None, "unknown"), (0, "ok"), (300, "ok"), (300.1, "amber"),
+                   (1200, "amber"), (1200.1, "red")):
+    eq(f"b92 level({_s92}): bernstein NACH 5 Min, rot NACH 20 Min", _f92("level", _s92), _w92)
+eq("b92 age_seconds: Uhr-Abweichung (Zukunft) wird auf 0 geklemmt",
+   _f92("age_seconds", 110.0, 100.0), 0.0)
+eq("b92 age_seconds ohne Zeitstempel: None", _f92("age_seconds", None, 100.0), None)
+eq("b92 oldest: der aeltere Stempel, None wird uebergangen",
+   _f92("oldest", 50.0, None, 30.0), 30.0)
+eq("b92 oldest ohne jeden Stempel: None", _f92("oldest", None, None), None)
+
+# ---- ESI: Last-Modified -> as_of
+_HTTP92 = "Mon, 21 Sep 2026 10:00:00 GMT"
+_T92 = _eu92.parsedate_to_datetime(_HTTP92).timestamp()
+
+
+class _Antw92:
+    def __init__(self, daten, kopf, seiten=1):
+        self._d, self.headers = daten, dict(kopf, **{"X-Pages": str(seiten)})
+
+    def json(self):
+        return self._d
+
+    def raise_for_status(self):
+        pass
+
+
+_dt92 = getattr(_esi83, "_data_time", None)
+check("b92 _data_time liest Last-Modified", _dt92 is not None
+      and _dt92(_Antw92([], {"Last-Modified": _HTTP92})) == _T92)
+check("b92 ... ohne Kopf gilt die Abrufzeit (jetzt)",
+      _dt92 is not None and abs(_dt92(_Antw92([], {})) - _tm92.time()) < 5)
+_alt_g92 = (_esi83._get_with_retry, _esi83._auth_headers)
+try:
+    _esi83._auth_headers = lambda c, cid: {}
+    _esi83._get_with_retry = lambda *a, **k: _Antw92([{"order_id": 1}],
+                                                     {"Last-Modified": _HTTP92})
+    _l92 = _esi83.fetch_character_orders("c", 1)
+    check("b92 fetch_character_orders: Liste UND as_of (Inhalt unveraendert)",
+          list(_l92) == [{"order_id": 1}] and getattr(_l92, "as_of", None) == _T92)
+    _seite92 = [0]
+
+    def _zwei92(*a, **k):
+        _seite92[0] += 1
+        _k = {"Last-Modified": "Mon, 21 Sep 2026 10:00:%02d GMT" % (30 if _seite92[0] == 1 else 0)}
+        return _Antw92([{"location_id": 60003760, "is_buy_order": False,
+                         "price": 5.0 * _seite92[0], "volume_remain": 1}], _k, seiten=2)
+    _esi83._get_with_retry = _zwei92
+    _b92 = _esi83.fetch_type_orders(34, station=60003760, region=10000002)
+    check("b92 fetch_type_orders: as_of ist der AELTESTE Stempel der Seiten",
+          _b92.get("as_of") == _T92 and len(_b92["sell"]) == 2)
+    _seite92[0] = 0
+    _esi83._get_with_retry = lambda *a, **k: _Antw92(
+        [{"type_id": 34, "is_buy_order": False, "price": 9.0, "volume_remain": 1}],
+        {"Last-Modified": _HTTP92})
+    _s92 = _esi83.fetch_structure_orders_full("c", 1, 5)
+    check("b92 fetch_structure_orders_full: das Buch traegt as_of, bleibt ein dict",
+          getattr(_s92, "as_of", None) == _T92 and 34 in _s92)
+finally:
+    _esi83._get_with_retry, _esi83._auth_headers = _alt_g92
+
+# ---- Order update: Kauf- UND Verkaufs-Tabelle
+_alt92 = (_st89.list_characters, _esi83.fetch_character_orders,
+          _esi83.fetch_type_orders, _esi83.resolve_names, win._run,
+          win._table_icon, _sp87._aktuell)
+def _tick92(jetzt):
+    _f = getattr(win, "_age_tick", None)
+    if _f is not None:
+        _f(now=jetzt)
+
+
+_TL92 = getattr(_esi83, "TimedList", type("_Liste92", (list,), {}))
+
+
+def _txt92(tabelle, zeile, spalte):
+    _i = tabelle.item(zeile, spalte) if zeile is not None else None
+    return _i.text() if _i is not None else None
+
+
+def _farbe92(tabelle, zeile, spalte):
+    _i = tabelle.item(zeile, spalte) if zeile is not None else None
+    return _i.foreground().color().name().lower() if _i is not None else None
+
+
+def _lade92(orders_alter, markt_alter, fehl=()):
+    _jetzt = _tm92.time()
+    _o = _TL92([_order89(34, 1000.0, 1),
+                {"type_id": 35, "price": 100.0, "is_buy_order": True, "order_id": 2,
+                 "volume_remain": 5, "location_id": _stat89}])
+    _o.as_of = _jetzt - orders_alter
+    _esi83.fetch_character_orders = lambda c, cid: _o
+
+    def _buch(tid, s, r):
+        if tid in fehl:
+            raise RuntimeError("420")
+        return {"sell": [(900.0, 5)], "buy": [(120.0, 5)], "as_of": _jetzt - markt_alter}
+    _esi83.fetch_type_orders = _buch
+    win._load_order_mods()
+    return _jetzt
+
+
+def _zeile92(tabelle, name):
+    for _r in range(tabelle.rowCount()):
+        if tabelle.item(_r, 0).text() == name:
+            return _r
+    return None
+
+
+try:
+    _st89.list_characters = lambda: [{"character_id": 1, "character_name": "T"}]
+    _esi83.resolve_names = lambda ids: {i: f"Item{i}" for i in ids}
+    win._run = lambda w, done, fail_cb=None, **k: done(w._fn(*w._args, **w._kwargs))
+    win._table_icon = lambda *a, **k: None
+    _sp87.sprache_setzen("en")
+    _lade92(100, 400)                       # Orders 100 s alt, Markt 400 s alt
+    _rb92 = _zeile92(win.buyord_table, "Item35")
+    _rs92 = _zeile92(win.sellord_table, "Item34")
+    eq("b92 Kauf-Tabelle: Spalte 4 heisst 'Age'",
+       win.buyord_table.horizontalHeaderItem(4).text(), _t4("Age"))
+    eq("b92 Verkaufs-Tabelle: Spalte 6 heisst 'Age'",
+       win.sellord_table.horizontalHeaderItem(6).text(), _t4("Age"))
+    eq("b92 Kauf-Tabelle: das AELTERE zaehlt (Markt 400 s = 6 min)",
+       _txt92(win.buyord_table, _rb92, 4), "6 min")
+    eq("b92 Verkaufs-Tabelle: dasselbe (6 min)",
+       _txt92(win.sellord_table, _rs92, 6), "6 min")
+    eq("b92 Farbe ab 5 Min: bernstein (Kauf)",
+       _farbe92(win.buyord_table, _rb92, 4), _th92.AMBER.lower())
+    eq("b92 Farbe ab 5 Min: bernstein (Verkauf)",
+       _farbe92(win.sellord_table, _rs92, 6), _th92.AMBER.lower())
+    _tip92 = win.sellord_table.item(_rs92, 6).toolTip() if _rs92 is not None else ""
+    check("b92 Tooltip nennt beide Alter getrennt (Orders 1 min, Markt 6 min)",
+          "Your orders: 1 min" in _tip92 and "Market prices: 6 min" in _tip92)
+    check("b92 die Status-Spalten bleiben, wo sie waren (Kauf 3, Verkauf 5)",
+          _txt92(win.buyord_table, _rb92, 3) == _t4("⚠ outbid")
+          and _txt92(win.sellord_table, _rs92, 5) == _t4("⚠ undercut"))
+    _jetzt92 = _tm92.time()
+    _tick92(_jetzt92 + 900)
+    eq("b92 Zaehler tickt: nach 15 weiteren Minuten (Markt 1300 s) = 21 min",
+       _txt92(win.sellord_table, _rs92, 6), "21 min")
+    eq("b92 ... und ist jetzt rot (ueber 20 Min)",
+       _farbe92(win.sellord_table, _rs92, 6), _th92.RED.lower())
+    eq("b92 ... auch in der Kauf-Tabelle", _txt92(win.buyord_table, _rb92, 4), "21 min")
+    check("b92 der Zeit-Takt laeuft (10 s)",
+          getattr(win, "_age_cell_timer", None) is not None
+          and win._age_cell_timer.isActive() and win._age_cell_timer.interval() == 10000)
+    _lade92(10, 20)
+    _rs92 = _zeile92(win.sellord_table, "Item34")
+    eq("b92 frische Daten: '20 s', normale Textfarbe",
+       (_txt92(win.sellord_table, _rs92, 6), _farbe92(win.sellord_table, _rs92, 6)),
+       ("20 s", _th92.TEXT.lower()))
+    _lade92(10, 20, fehl=(34,))
+    _rs92 = _zeile92(win.sellord_table, "Item34")
+    eq("b92 gescheiterter Marktabruf (unknown): kein Alter erfunden, '—'",
+       _txt92(win.sellord_table, _rs92, 6), "—")
+    _sp87.sprache_setzen("de")
+    win._fill_order_table(win.sellord_table, win._ordmod_sell, False)
+    eq("b92 deutsch: der Spaltenkopf heisst 'Alter'", _t4("Age"), "Alter")
+    _sp87.sprache_setzen("en")
+
+    # ---- Undo-Zaehler (Issue #28): richtige Spalte je Tabelle
+    _lade92(10, 20)
+    _rs92 = _zeile92(win.sellord_table, "Item34")
+    _rb92 = _zeile92(win.buyord_table, "Item35")
+    win._set_order_mod_cell(win.sellord_table, 1, 3)
+    eq("b92 Undo an einer Verkaufs-Order: der ZAEHLER (Spalte 8) zeigt 3",
+       _txt92(win.sellord_table, _rs92, 8), "3")
+    eq("b92 ... und der Status (Spalte 5) bleibt unangetastet",
+       _txt92(win.sellord_table, _rs92, 5), _t4("⚠ undercut"))
+    win._set_order_mod_cell(win.buyord_table, 2, 2)
+    eq("b92 Undo an einer Kauf-Order: Zaehler in Spalte 6", _txt92(win.buyord_table, _rb92, 6), "2")
+    eq("b92 ... Status (Spalte 3) unangetastet",
+       _txt92(win.buyord_table, _rb92, 3), _t4("⚠ outbid"))
+finally:
+    (_st89.list_characters, _esi83.fetch_character_orders, _esi83.fetch_type_orders,
+     _esi83.resolve_names, win._run, win._table_icon, _sp87._aktuell) = _alt92
+    win._ordmod_sell = []
+    win._ordmod_buy = []
+    win.sellord_table.setRowCount(0)
+    win.buyord_table.setRowCount(0)
+    win._ord_laeuft = False
+
+# ---- Einkaufsliste
+_alt_sh92 = (_st89.list_shopping, win._table_icon, getattr(win, "_sh_ladders", {}),
+             getattr(win, "_sh_sort", (None, True)), _sp87._aktuell)
+try:
+    _st89.list_shopping = lambda: [
+        {"id": 1, "type_id": 34, "name": "Item34", "qty": 5, "source": "manual"},
+        {"id": 2, "type_id": 35, "name": "Item35", "qty": 2, "source": "manual"}]
+    win._table_icon = lambda *a, **k: None
+    _sp87.sprache_setzen("en")
+    win._sh_sort = (None, True)
+    _jetzt92 = _tm92.time()
+    win._sh_ladders = {34: {"sell": [(900.0, 5)], "buy": [(800.0, 5)],
+                            "as_of": _jetzt92 - 400}}
+    win._render_shopping()
+    eq("b92 Einkaufsliste: 11 Spalten, Alter vor dem Loeschen-Knopf",
+       (win.sh_table.columnCount(), win.sh_table.horizontalHeaderItem(9).text()),
+       (11, _t4("Age")))
+    check("b92 ... der Loeschen-Knopf sitzt jetzt in Spalte 10",
+          win.sh_table.cellWidget(0, 10) is not None)
+    _r34 = next((r for r in range(win.sh_table.rowCount())
+                 if "Item34" in win.sh_table.item(r, 0).text()), None)
+    _r35 = next((r for r in range(win.sh_table.rowCount())
+                 if "Item35" in win.sh_table.item(r, 0).text()), None)
+    eq("b92 Einkaufsliste: Alter der geladenen Preise (6 min), bernstein",
+       (_txt92(win.sh_table, _r34, 9), _farbe92(win.sh_table, _r34, 9)),
+       ("6 min", _th92.AMBER.lower()))
+    eq("b92 ... ohne geladene Preise: '—' (nichts erfunden)",
+       _txt92(win.sh_table, _r35, 9), "—")
+    _tick92(_jetzt92 + 1000)
+    eq("b92 ... tickt mit (1400 s = 23 min, rot)",
+       (_txt92(win.sh_table, _r34, 9), _farbe92(win.sh_table, _r34, 9)),
+       ("23 min", _th92.RED.lower()))
+    _tax92 = win.settings["sales_tax_pct"] / 100.0
+    _brk92 = win.settings["broker_fee_pct"] / 100.0
+    _rows92 = _st89.list_shopping()
+    _sv34 = win._shopping_sort_value(_rows92[0], 9, _tax92, _brk92)
+    _sv35 = win._shopping_sort_value(_rows92[1], 9, _tax92, _brk92)
+    check("b92 Sortierung nach Alter: geladen zaehlt Sekunden, ohne Preise zuletzt",
+          isinstance(_sv34, (int, float)) and 390 < _sv34 < 500 and _sv35 > _sv34)
+    _sp87.sprache_setzen("de")
+    win._render_shopping()
+    check("b92 deutsch: Spaltenkopf der Einkaufsliste 'Alter'",
+          _t4("Age") == "Alter")
+finally:
+    (_st89.list_shopping, win._table_icon, win._sh_ladders, win._sh_sort,
+     _sp87._aktuell) = _alt_sh92
+    win._render_shopping()
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.

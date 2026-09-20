@@ -1,4 +1,5 @@
 """Authenticated + public ESI calls."""
+import email.utils
 import time
 
 import requests
@@ -294,14 +295,40 @@ def fetch_wallet_balance(client_id: str, character_id: int) -> float:
     return float(r.json())
 
 
+class TimedList(list):
+    """A list that remembers when its data was generated (`as_of`, unix time)."""
+    as_of = None
+
+
+class TimedDict(dict):
+    """A dict that remembers when its data was generated (`as_of`, unix time)."""
+    as_of = None
+
+
+def _data_time(r) -> float:
+    """When the DATA of an ESI response was generated: its Last-Modified (which
+    includes ESI's own cache - your orders are cached up to ~20 min, market
+    data ~5 min), else now."""
+    try:
+        v = r.headers.get("Last-Modified")
+        if v:
+            return email.utils.parsedate_to_datetime(v).timestamp()
+    except Exception:
+        pass
+    return time.time()
+
+
 def fetch_character_orders(client_id: str, character_id: int) -> list:
     """Open market orders of the character. Needs
     esi-markets.read_character_orders.v1. Each order has price, volume_remain,
-    is_buy_order and (for buy orders) escrow."""
+    is_buy_order and (for buy orders) escrow. The list carries `.as_of`, the
+    time its data was generated."""
     url = f"{config.ESI_BASE}/characters/{character_id}/orders/"
     r = _get_with_retry(url, headers=_auth_headers(client_id, character_id), timeout=30)
     r.raise_for_status()
-    return r.json()
+    out = TimedList(r.json())
+    out.as_of = _data_time(r)
+    return out
 
 
 def _fetch_all_assets(client_id: str, character_id: int) -> list:
@@ -1223,7 +1250,8 @@ def fetch_structure_orders_full(client_id: str, character_id: int, structure_id:
     first = _get_with_retry(base, params={"page": 1}, headers=headers, timeout=40)
     first.raise_for_status()
     pages = int(first.headers.get("X-Pages", "1"))
-    book = {}
+    book = TimedDict()
+    as_of = _data_time(first)          # the OLDEST page decides how old the book is
 
     def fold(orders):
         for o in orders:
@@ -1237,9 +1265,11 @@ def fetch_structure_orders_full(client_id: str, character_id: int, structure_id:
     for p in range(2, pages + 1):
         r = _get_with_retry(base, params={"page": p}, headers=headers, timeout=40)
         r.raise_for_status()
+        as_of = min(as_of, _data_time(r))
         fold(r.json())
         if progress:
             progress(p, pages)
+    book.as_of = as_of
     for _tid, b in book.items():
         b["sell"].sort(key=lambda x: x[0])
         b["buy"].sort(key=lambda x: x[0], reverse=True)
@@ -1403,14 +1433,18 @@ def station_location_ids(client_id: str, character_id: int) -> set:
 def fetch_type_orders(type_id: int, station: int = config.JITA_STATION,
                       region: int = config.FORGE_REGION) -> dict:
     """Full order ladder for one item at a station.
-    Returns {'sell': [(price, qty) ascending], 'buy': [(price, qty) descending]}."""
+    Returns {'sell': [(price, qty) ascending], 'buy': [(price, qty) descending],
+    'as_of': time the data was generated (oldest page)}."""
     url = f"{config.ESI_BASE}/markets/{region}/orders/"
     sell, buy = [], []
     page = 1
+    as_of = None
     while True:
         r = _get_with_retry(url, params={"type_id": type_id, "order_type": "all",
                                          "page": page}, timeout=30)
         r.raise_for_status()
+        _dt = _data_time(r)
+        as_of = _dt if as_of is None else min(as_of, _dt)   # oldest page counts
         data = r.json()
         for o in data:
             if o["location_id"] != station:
@@ -1422,7 +1456,7 @@ def fetch_type_orders(type_id: int, station: int = config.JITA_STATION,
         page += 1
     sell.sort(key=lambda x: x[0])
     buy.sort(key=lambda x: x[0], reverse=True)
-    return {"sell": sell, "buy": buy}
+    return {"sell": sell, "buy": buy, "as_of": as_of}
 
 
 def resolve_corp_id(name: str):

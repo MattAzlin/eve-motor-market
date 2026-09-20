@@ -8741,16 +8741,16 @@ check("aa201 die Spalten-Legende nennt die drei Zustaende",
 # updaten auf den tiefsten aktuellen Preis, also unterbieten").
 check("aa202 die Sell-Tabelle traegt Oe-Einkauf und Marge neu",
       't("\\u00d8 purchase"),' in _src_txt and 't("New margin"),' in _src_txt
-      and "QTableWidget(0, 7 if is_buy else 9)" in _src_txt)
+      and "QTableWidget(0, 8 if is_buy else 10)" in _src_txt)
 check("aa202 die Marge rechnet mit den Zeilen-Gebuehren des Charakters",
       "(newp * (1 - tax - broker) - cost)\n"
       "                                          / cost * 100.0" in _src_txt)
 check("aa202 unbekannter Kaufpreis zeigt Strich samt Tooltip, keine Null",
       'isk(r["cost"], suffix=False) if _ck9 else "—"' in _src_txt
       and 't("Purchase price unknown.")' in _src_txt)
-check("aa202 die Folgespalten ruecken per Versatz (Buy bleibt bei 7)",
+check("aa202 die Folgespalten ruecken per Versatz (Buy hat 8 Spalten, seit der Alters-Spalte)",
       "table.setItem(i, 3 + _off, st)" in _src_txt
-      and "table.setCellWidget(i, 6 + _off, act)" in _src_txt)
+      and "table.setCellWidget(i, 7 + _off, act)" in _src_txt)
 # FUNKTIONAL mit den 425mm-Zahlen: Nachbessern auf 1'488'000 bei Einstand
 # 1'494'000 und 4,401% Gebuehren muss ~-4,8% Marge ergeben (rot).
 _m202 = (1488000 * (1 - 0.03375 - 0.01026) - 1494000) / 1494000 * 100.0
