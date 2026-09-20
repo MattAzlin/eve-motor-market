@@ -50,12 +50,14 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(
-            b"<html><body style='background:#0A0E12;color:#35D0BA;"
-            b"font-family:monospace;text-align:center;padding-top:80px'>"
-            b"<h2>Login erfolgreich</h2><p>Du kannst dieses Fenster schliessen "
-            b"und ins Tool zurueckkehren.</p></body></html>"
-        )
+        from .sprache import t as _txt
+        self.wfile.write((
+            "<html><body style='background:#0A0E12;color:#35D0BA;"
+            "font-family:monospace;text-align:center;padding-top:80px'>"
+            f"<h2>{_txt('Login successful')}</h2>"
+            f"<p>{_txt('You can close this window and return to the tool.')}</p>"
+            "</body></html>"
+        ).encode("utf-8"))
 
     def log_message(self, *args):
         pass
