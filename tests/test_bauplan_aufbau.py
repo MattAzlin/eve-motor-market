@@ -9786,6 +9786,152 @@ finally:
     win._rg_last_key = None
 
 
+# ---------------------------------------------------------------- (b89)
+# EIN FEHLGESCHLAGENER MARKT-ABRUF IST "UNBEKANNT", NICHT "TOP" (Issue #17).
+# `_load_order_mods` machte aus jeder Ausnahme ein leeres Orderbuch; mit
+# best = 0 greift weder die Ueberboten- noch die Unterboten-Bedingung, die Zeile
+# zeigte "-" und "top". Und `_get_with_retry` wiederholte 420/429 (Rate-Limit)
+# nicht, obwohl sechs Abrufe gleichzeitig laufen. Jetzt: Zeile "? unknown",
+# nicht als "zu aendern" gezaehlt, Zahl in der Statuszeile; 420/429 werden mit
+# Wartezeit (Retry-After / X-Esi-Error-Limit-Reset, hoechstens 10 s) wiederholt.
+import requests as _rq89
+from types import SimpleNamespace as _NS89
+
+
+class _Antw89:
+    def __init__(self, code, headers=None):
+        self.status_code = code
+        self.headers = headers or {}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise _rq89.HTTPError(f"{self.status_code}")
+
+    def json(self):
+        return []
+
+
+def _lauf89(codes):
+    """_get_with_retry gegen eine Folge von Statuscodes; (Aufrufe, Pausen, Ergebnis)."""
+    _folge = list(codes)
+    _pausen, _n = [], [0]
+
+    class _Sess89:
+        def get(self, *a, **k):
+            _n[0] += 1
+            _c = _folge.pop(0)
+            return _Antw89(*_c) if isinstance(_c, tuple) else _Antw89(_c)
+
+    class _Zeit89:
+        sleep = staticmethod(lambda s: _pausen.append(s))
+
+        def __getattr__(self, name):
+            return getattr(__import__("time"), name)
+
+    _alt_s, _alt_t = _esi83._session, _esi83.time
+    _esi83._session, _esi83.time = _Sess89(), _Zeit89()
+    try:
+        try:
+            _res = _esi83._get_with_retry("http://x")
+        except _rq89.HTTPError as _e:
+            _res = _e
+    finally:
+        _esi83._session, _esi83.time = _alt_s, _alt_t
+    return _n[0], _pausen, _res
+
+
+_n89, _p89, _r89 = _lauf89([429, 200])
+check("b89 429 wird wiederholt und klappt danach (2 Aufrufe, 1 Pause)",
+      _n89 == 2 and len(_p89) == 1 and getattr(_r89, "status_code", None) == 200)
+_n89, _p89, _r89 = _lauf89([(429, {"Retry-After": "3"}), 200])
+check("b89 die Wartezeit folgt Retry-After", _p89 == [3.0])
+_n89, _p89, _r89 = _lauf89([(420, {"X-Esi-Error-Limit-Reset": "7"}), 200])
+check("b89 420 wartet die Fehlerlimit-Zeit ab und wiederholt",
+      _n89 == 2 and _p89 == [7.0])
+_n89, _p89, _r89 = _lauf89([(429, {"Retry-After": "600"}), 200])
+check("b89 die Wartezeit ist auf 10 s gedeckelt", _p89 == [10.0])
+_n89, _p89, _r89 = _lauf89([429, 429, 429])
+check("b89 bleibt es beim Limit, wird nach 3 Versuchen aufgegeben (Fehler wie vorher)",
+      _n89 == 3 and isinstance(_r89, _rq89.HTTPError))
+_n89, _p89, _r89 = _lauf89([404])
+check("b89 4xx ausser 420/429 wird weiter NICHT wiederholt",
+      _n89 == 1 and isinstance(_r89, _rq89.HTTPError) and _p89 == [])
+_n89, _p89, _r89 = _lauf89([503, 200])
+check("b89 5xx wird wie vorher wiederholt", _n89 == 2 and getattr(_r89, "status_code", None) == 200)
+
+# ---- Order update: ein Item, dessen Marktabruf scheitert
+import eve_trader.store as _st89
+_stat89 = win._active_hub()[1]
+_alt89 = (_st89.list_characters, _esi83.fetch_character_orders,
+          _esi83.fetch_type_orders, _esi83.resolve_names, win._run,
+          win._table_icon, _sp87._aktuell)
+
+
+def _order89(tid, preis, oid):
+    return {"type_id": tid, "price": preis, "is_buy_order": False, "order_id": oid,
+            "volume_remain": 10, "location_id": _stat89}
+
+
+def _buch89(tid, s, r):
+    if tid == 34:
+        raise RuntimeError("420 error limited")
+    return {"sell": [(900.0, 5)], "buy": []}
+
+
+def _zeile89(name):
+    for _r in range(win.sellord_table.rowCount()):
+        if win.sellord_table.item(_r, 0).text() == name:
+            return _r
+    return None
+
+
+try:
+    _st89.list_characters = lambda: [{"character_id": 1, "character_name": "T"}]
+    _esi83.fetch_character_orders = lambda c, cid: [_order89(34, 1000.0, 1),
+                                                    _order89(35, 1000.0, 2)]
+    _esi83.fetch_type_orders = _buch89
+    _esi83.resolve_names = lambda ids: {i: f"Item{i}" for i in ids}
+    win._run = lambda w, done, fail_cb=None, **k: done(w._fn(*w._args, **w._kwargs))
+    win._table_icon = lambda *a, **k: None
+    _sp87.sprache_setzen("en")
+    win._load_order_mods()
+    _r34 = _zeile89("Item34")
+    _r35 = _zeile89("Item35")
+    check("b89 Zeile mit gescheitertem Abruf: Status '? unknown', nicht 'top'",
+          _r34 is not None and win.sellord_table.item(_r34, 5).text() == _t4("? unknown"))
+    check("b89 ... sie ist als unbekannt markiert und NICHT als 'zu aendern' gezaehlt",
+          any(r.get("unknown") for r in win._ordmod_sell)
+          and not any(r["flag"] for r in win._ordmod_sell if r.get("unknown")))
+    check("b89 ... der Tooltip sagt, dass der Abruf scheiterte",
+          _r34 is not None
+          and "failed" in win.sellord_table.item(_r34, 5).toolTip())
+    check("b89 die andere Zeile bleibt normal: Konkurrent bei 900 = 'undercut'",
+          _r35 is not None
+          and win.sellord_table.item(_r35, 5).text() == _t4("⚠ undercut"))
+    check("b89 Unbekannte stehen vor den Guten (aber nach den zu aendernden)",
+          _r35 is not None and _r34 is not None and _r35 < _r34
+          and win.sellord_table.rowCount() == 2)
+    check("b89 die Statuszeile nennt die Zahl der nicht pruefbaren Zeilen",
+          "1" in win.statusBar().currentMessage()
+          and "could not be checked" in win.statusBar().currentMessage())
+    check("b89 der Reiter zaehlt nur echte Nachbesserungen (1)",
+          "1 to adjust" in win._orders_inner.tabText(1))
+    _sp87.sprache_setzen("de")
+    win._fill_order_table(win.sellord_table, win._ordmod_sell, False)
+    _z89 = _zeile89("Item34")
+    check("b89 deutsch: Status und Tooltip der unbekannten Zeile sind uebersetzt",
+          _z89 is not None and "unbekannt" in win.sellord_table.item(_z89, 5).text()
+          and "fehlgeschlagen" in win.sellord_table.item(_z89, 5).toolTip())
+finally:
+    (_st89.list_characters, _esi83.fetch_character_orders, _esi83.fetch_type_orders,
+     _esi83.resolve_names, win._run, win._table_icon, _sp87._aktuell) = _alt89
+    win._ordmod_sell = []
+    win._ordmod_buy = []
+    win.sellord_table.setRowCount(0)
+    win.buyord_table.setRowCount(0)
+    win._ord_laeuft = False
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.

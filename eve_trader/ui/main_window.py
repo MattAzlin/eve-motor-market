@@ -21989,7 +21989,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     try:
                         books[_ti] = f.result()
                     except Exception:
-                        books[_ti] = {"buy": [], "sell": []}
+                        # NOT an empty book: with best = 0 no outbid/undercut
+                        # condition can fire, so the row used to read "top".
+                        books[_ti] = {"buy": [], "sell": [], "failed": True}
             try:
                 names = esi.resolve_names(tids)     # ESI-Fallback für fehlende Namen
             except Exception:
@@ -22086,6 +22088,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             for tid, price, is_buy, order_id, char_id, vol_remain in res["orders"]:
                 tax, broker = _fees_row9(char_id)
                 book = res["books"].get(tid, {})
+                unknown = bool(book.get("failed"))     # lookup failed: status unknown
                 mod_count = mod_counts.get(order_id, 0)
                 # Bisher schon bezahlte Nachbesserungs-Gebühren (grobe Schätzung:
                 # aktueller Preis × Restmenge × Broker-Satz, je Nachbesserung -
@@ -22120,6 +22123,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                                      "order_id": order_id, "char_id": char_id,
                                      "mod_count": mod_count, "cum_fee": cum_fee,
                                      "fee_wiped_out": fee_wiped_out,
+                                     "unknown": unknown,
                                      "vol_remain": vol_remain})
                 else:
                     sells = [p for p, _v in (book.get("sell") or [])]
@@ -22166,6 +22170,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                                       "order_id": order_id, "char_id": char_id,
                                       "mod_count": mod_count, "cum_fee": cum_fee,
                                       "fee_wiped_out": fee_wiped_out,
+                                      "unknown": unknown,
                                       "vol_remain": vol_remain})
             self._ordmod_buy = buy_rows
             self._ordmod_sell = sell_rows
@@ -22177,6 +22182,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             nb = sum(1 for r in buy_rows if r["flag"])
             ns = sum(1 for r in sell_rows if r["flag"])
             nl = sum(1 for r in sell_rows if r.get("loss"))
+            nu = sum(1 for r in buy_rows + sell_rows if r.get("unknown"))
             # HINWEIS AUF ANDERE ORTE - vor allem, wenn hier gar nichts steht.
             _and = res.get("andere") or []
             if _and:
@@ -22196,7 +22202,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             self.statusBar().showMessage(
                 _txt("Orders checked: {b} buy ({nb} to adjust), {s} sell ({ns} to adjust"
                      ).format(b=len(buy_rows), nb=nb, s=len(sell_rows), ns=ns)
-                + (_txt(", {n} of them only at a loss").format(n=nl) if nl else "") + ").")
+                + (_txt(", {n} of them only at a loss").format(n=nl) if nl else "")
+                + (_txt(", {n} could not be checked").format(n=nu) if nu else "") + ").")
         def _ord_fehler(msg):
             # WICHTIG: ohne das bliebe die Laufsperre nach einem Netzfehler
             # fuer immer stehen - und das automatische Laden waere tot.
@@ -22217,7 +22224,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
 
     def _fill_order_table(self, table, rows, is_buy):
         # nachzubessern zuerst, Verlust-Items ans Ende (nicht ansteuern lohnt nicht)
-        rows = sorted(rows, key=lambda r: (not r["flag"], bool(r.get("loss")), r["name"]))
+        # unknown (failed lookup) right after the ones to adjust, before the fine ones
+        rows = sorted(rows, key=lambda r: (not r["flag"], not r.get("unknown"),
+                                           bool(r.get("loss")), r["name"]))
         table.setRowCount(len(rows))
         for i, r in enumerate(rows):
             flag = r["flag"]
@@ -22276,9 +22285,17 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 else:
                     st_txt = t("\u26a0 outbid") if is_buy else t("\u26a0 undercut")
             st_col = (theme.RED if loss else theme.AMBER) if flag else theme.GREEN
+            if r.get("unknown"):
+                st_txt = t("? unknown")
+                st_col = theme.MUTED
             st = QTableWidgetItem(st_txt)
             st.setForeground(QColor(st_col))
-            if fee_wiped:
+            if r.get("unknown"):
+                st.setToolTip(t(
+                    "The market lookup for this item failed \u2013 its current price is "
+                    "unknown, so the status cannot be judged. Press \u201e{button}\u201c "
+                    "again.").format(button=t("Check orders")))
+            elif fee_wiped:
                 st.setToolTip(
                     t("This order has already been repriced {n}\u00d7 - estimated broker "
                       "fees so far: \u2248{fee}. That alone already eats up the "
