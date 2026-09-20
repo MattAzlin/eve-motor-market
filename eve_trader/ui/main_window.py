@@ -4226,7 +4226,17 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
 
         def fail(msg):
             self.deals_btn.setEnabled(True)
-            self.deal_status.setText(t("Error: ") + msg)
+            # STALE PROTECTION (as in Regional): the table of the PREVIOUS run
+            # would stay under the error line and look like the result of the
+            # current settings. Drop it, and everything that could redraw it.
+            self._last_deals = []
+            self._deals_last = (None, None)
+            self._last_deal_diag = {}
+            if "day" in self._ladder_ctx:
+                self._ladder_ctx["day"]["deals"] = {}
+            self.deals_table.setRowCount(0)
+            self.deal_status.setText(t("Error: ") + msg
+                                     + t("  \u2013 no results (old table discarded)."))
         self._run(w, done, fail_cb=fail, label=t("Computing deals …"))
 
 
@@ -4834,11 +4844,13 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 # _add_deal_to_cart prueft selbst auf Doppeleintrag UND merkt
                 # den Tagesvolumen-Vorschlag mit; das handgeschriebene
                 # store.add_shopping() hier liess den Vorschlag fallen.
-                if self._add_deal_to_cart(tid, nm):
+                _qty_add = self._add_deal_to_cart(tid, nm)
+                if _qty_add:
                     self._render_shopping()
                     self._flash_tip(t("added to the shopping cart \u2713"))
                     self.statusBar().showMessage(
-                        t("{name} added to the shopping cart (quantity 1).").format(name=nm))
+                        t("{name} added to the shopping cart (quantity {qty}).").format(
+                            name=nm, qty=_qty_add))
                 else:
                     self.statusBar().showMessage(
                         t("{name} is already in the shopping cart.").format(name=nm))
@@ -5286,15 +5298,20 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         return max(1, int(round(dv / (comp + 1))))
 
     def _add_deal_to_cart(self, tid, name, qty=None):
+        """Puts a Daytrade deal into the shopping cart. Without an explicit
+        quantity it is ONE DAY'S INTAKE (the share of daily volume you can
+        realistically capture, at least 1) - what the "added" message says;
+        it used to be 1. 1 also when the deal is not in the current table.
+        Returns the quantity added (truthy), or False if already in the cart."""
         if tid in self._cart_ids():
             return False
         deals = self._ladder_ctx.get("day", {}).get("deals", {})
         d = deals.get(tid, {})
         sugg = self._deal_default_qty(d) if d else 0   # Tagesvolumen-Vorschlag merken
         if qty is None:
-            qty = 1                                    # Standard: 1 Stück
+            qty = sugg or 1
         store.add_shopping(tid, name, qty, 0, 0, source="daytrade", sugg_qty=sugg)
-        return True
+        return qty
 
 
     def _deals_add_selection(self, rows):

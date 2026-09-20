@@ -2998,6 +2998,8 @@ KATALOG = {
             "\u26a0 unterboten",
         "This order has already been adjusted {n}\u00d7 - estimated broker fees from that so far: \u2248{fee}. That alone already eats the expected profit over the remaining quantity.":
             "Diese Order wurde schon {n}\u00d7 nachgebessert - gesch\u00e4tzte Broker-Geb\u00fchren dadurch bisher: \u2248{fee}. Das allein frisst den erwarteten Gewinn \u00fcber die Restmenge schon auf.",
+        "{name} added to the shopping cart (quantity {qty}).":
+            "{name} in den Einkaufswagen (Menge {qty}).",
         "{name} added to the shopping cart (quantity 1).":
             "{name} in den Einkaufswagen (Menge 1).",
         "{name} added to the shopping cart.":
