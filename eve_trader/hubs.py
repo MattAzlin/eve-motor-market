@@ -268,6 +268,12 @@ def bewerte_leeren_markt(tid, quell_preis, hist, tax, broker, ziel_eintrag=None)
     }
 
 
+# Minimum number of units the source price is averaged over when selling via a
+# sell order ("relist"). If the source book holds fewer, the average is over all
+# of them.
+MIN_FILL_QTY = 100
+
+
 def arbitrage(source: dict, target: dict, settings: dict, filters: dict,
               sell_mode: str = "relist", target_is_structure: bool = False) -> list:
     """Buy at source (sell orders), sell at target. Returns ranked deals.
@@ -296,7 +302,15 @@ def arbitrage(source: dict, target: dict, settings: dict, filters: dict,
         t = target.get(tid)
         if not t:
             continue
-        want = min(max(int(t.get("buy_qty", 0)), 1), 1000)
+        # DEPTH THE SOURCE PRICE IS AVERAGED OVER. Instant mode sells into the
+        # destination's buy orders, so their quantity is the size. Relist mode
+        # sells via a sell order: the destination's buy orders say nothing about
+        # how much you buy, and with none at all want was 1 - the "average" was
+        # then the single cheapest order, so one ghost listing at the bottom of
+        # the source book set the price (1 unit @ 10 before 5,000 @ 100 showed a
+        # 1137 % margin instead of ~25 %). Relist therefore gets a minimum depth.
+        want = min(max(int(t.get("buy_qty", 0)),
+                       1 if sell_mode == "instant" else MIN_FILL_QTY), 1000)
         filled = 0
         spent = 0.0
         for price, vol in ladder:

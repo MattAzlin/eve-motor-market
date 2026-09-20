@@ -9197,6 +9197,51 @@ except Exception as _e81:                                # pragma: no cover
     _fail.append(f"b81 Ladeschirm -1: {type(_e81).__name__}: {_e81}")
 
 
+# ---------------------------------------------------------------- (b82)
+# EIN GEISTER-ANGEBOT DARF DEN QUELLPREIS NICHT SETZEN (Issue #2).
+# `hubs.arbitrage` mittelt den Einkaufspreis ueber `want` Stueck, und `want`
+# kam aus der KAUFGEBOTS-Menge des Ziels. Hat das Ziel keine Kaufgebote (bei
+# "Sell via sell order" der Normalfall), war want = 1 und der "Durchschnitt"
+# war die eine billigste Quell-Order: 1 Stueck zu 10 ISK vor 5'000 zu 100
+# ergab 1136 % Marge statt der echten ~25 %. Fuer die Verkaufsart "relist"
+# gilt jetzt eine Mindesttiefe (MIN_FILL_QTY); die Kaufgebote des Ziels sagen
+# dort nichts darueber, wie viel man einkauft.
+import eve_trader.hubs as _hb82
+
+_set82 = {"sales_tax_pct": 3.375, "broker_fee_pct": 1.5}
+
+
+def _buch82(sell=(), buy=()):
+    _s = sorted(sell)
+    _b = sorted(buy, reverse=True)
+    return {"sell_min": _s[0][0] if _s else 0, "buy_max": _b[0][0] if _b else 0,
+            "sell_qty": sum(v for _p, v in _s), "buy_qty": sum(v for _p, v in _b),
+            "sell_orders": _s}
+
+
+def _deal82(quelle, ziel, modus="relist"):
+    _r = _hb82.arbitrage({1: quelle}, {1: ziel}, _set82, {"max_items": 400}, modus)
+    return _r[0] if _r else None
+
+
+_geist82 = _buch82(sell=[(10, 1), (100, 5000)])
+_ohne_kauf82 = _buch82(sell=[(130, 100)])
+_d82 = _deal82(_geist82, _ohne_kauf82)
+check("b82 Geister-Order, Ziel ohne Kaufgebote: Preis ist der Tiefen-Durchschnitt",
+      _d82 is not None and abs(_d82["source_sell"] - (10 + 99 * 100) / 100.0) < 1e-9)
+check("b82 ... und die Marge ist die echte (~25 %), nicht 1136 %",
+      _d82 is not None and 20 < _d82["margin"] < 30)
+_d82 = _deal82(_geist82, _buch82(sell=[(130, 100)], buy=[(90, 5)]))
+check("b82 auch mit winziger Nachfrage (5 Stueck) gilt die Mindesttiefe",
+      _d82 is not None and abs(_d82["source_sell"] - (10 + 99 * 100) / 100.0) < 1e-9)
+_d82 = _deal82(_geist82, _buch82(sell=[(130, 100)], buy=[(90, 300)]))
+check("b82 grosse Nachfrage (300) bleibt die Tiefe - die Mindesttiefe verkleinert nichts",
+      _d82 is not None and abs(_d82["source_sell"] - (10 + 299 * 100) / 300.0) < 1e-9)
+_d82 = _deal82(_buch82(sell=[(100, 1)]), _ohne_kauf82)
+check("b82 duenne Quelle (nur 1 Stueck da): der echte Einzelpreis bleibt",
+      _d82 is not None and _d82["source_sell"] == 100.0)
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.
