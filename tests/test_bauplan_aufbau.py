@@ -9486,6 +9486,129 @@ finally:
             win.settings[_k85] = _v85
 
 
+# ---------------------------------------------------------------- (b86)
+# DIE 400 FUER DIE NETZ-SCHRITTE WERDEN NACH DER TABELLEN-REIHENFOLGE
+# GEWAEHLT (Issue #5). `compute_arbitrage` schnitt die Kandidaten NACH
+# Gewinn x Nachfrage auf 400 - bevor Fracht und Feinfilter liefen. Schwere,
+# teure Ware verdraengte leichte Schuettgut-Ware, obwohl die Tabelle nach
+# Gewinn PRO m3 sortiert: bei Fracht 500 ISK/m3 war die Tabelle leer, obwohl
+# jede leichte Ware Gewinn brachte. Gewinn/m3 minus Fracht behaelt die
+# Reihenfolge bei (pm3 = gewinn/vol - fracht), die Auswahl braucht die Fracht
+# also nicht. `hubs.preselect`: die eine Haelfte nach Gewinn/m3 (Volumen aus
+# der lokalen SDE), der Rest nach dem alten Score; ohne Volumen wie vorher.
+_deals86 = [{"type_id": i, "profit_unit": 428_000.0, "score": 42_800_000.0 + i}
+            for i in range(1, 501)]                         # schwer, hoher Score
+_deals86 += [{"type_id": i, "profit_unit": 52_000.0, "score": 52_000.0 + i}
+             for i in range(1001, 1101)]                    # leicht, niedriger Score
+_vol86 = {i: 50_000.0 for i in range(1, 501)}
+_vol86.update({i: 0.01 for i in range(1001, 1101)})
+_deals86.sort(key=lambda d: d["score"], reverse=True)
+
+_alt_cap86 = _hb82.arbitrage(
+    {1: {"sell_min": 100, "sell_qty": 9, "sell_orders": [(100, 9)]},
+     2: {"sell_min": 100, "sell_qty": 9, "sell_orders": [(100, 9)]}},
+    {1: {"sell_min": 200, "sell_qty": 9, "buy_max": 0, "buy_qty": 0},
+     2: {"sell_min": 200, "sell_qty": 9, "buy_max": 0, "buy_qty": 0}},
+    _set82, {"max_items": None}, "relist")
+eq("b86 hubs.arbitrage ohne Obergrenze (max_items=None) liefert alle", len(_alt_cap86), 2)
+
+_sel86 = getattr(_hb82, "preselect", None)
+_p86 = _sel86(_deals86, _vol86, 400) if _sel86 else []
+_ids86 = [d["type_id"] for d in _p86]
+eq("b86 preselect: genau 400 bei 600 Kandidaten", len(_p86), 400)
+check("b86 ... alle 100 leichten Waren sind dabei (vorher: keine)",
+      sum(1 for i in _ids86 if i > 1000) == 100)
+check("b86 ... ohne Doppelte", len(set(_ids86)) == len(_ids86))
+check("b86 ... die schweren rutschen nach dem alten Score nach (300 Stueck)",
+      sum(1 for i in _ids86 if i <= 500) == 300)
+check("b86 ... Ergebnis bleibt nach Score absteigend sortiert",
+      [d["score"] for d in _p86] == sorted((d["score"] for d in _p86), reverse=True))
+_kurz86 = _deals86[:50]
+check("b86 wenige Kandidaten (<= Obergrenze): unveraendert zurueck",
+      _sel86 is not None and _sel86(_kurz86, _vol86, 400) == _kurz86)
+_p86 = _sel86(_deals86, {}, 400) if _sel86 else []
+check("b86 ohne Volumen (SDE leer): wie vorher, die 400 mit dem hoechsten Score",
+      [d["type_id"] for d in _p86] == [d["type_id"] for d in _deals86[:400]])
+_vol86b = dict(_vol86)
+_top86 = _deals86[0]["type_id"]
+_vol86b.pop(_top86)
+_p86 = _sel86(_deals86, _vol86b, 400) if _sel86 else []
+check("b86 ein Item ohne bekanntes Volumen faellt nicht raus, wenn sein Score traegt",
+      _top86 in {d["type_id"] for d in _p86})
+
+# ---- Ende-zu-Ende: compute_arbitrage, Fracht 500 ISK/m3, Filter auf 0
+import eve_trader.industry as _ind86
+_GES86 = {"kind": "hub", "region_id": _AMARR85, "station_id": 1, "name": "x"}
+
+
+def _buch86(sell, qty, buy=0, bqty=0):
+    return {"sell_min": sell, "sell_qty": qty, "buy_max": buy, "buy_qty": bqty,
+            "sell_orders": [(sell, qty)], "buy_ladder": [(buy, bqty)] if bqty else []}
+
+
+_q86, _z86 = {}, {}
+for _i86 in range(1, 501):
+    _q86[_i86] = _buch86(1_000_000, 50)
+    _z86[_i86] = _buch86(1_500_000, 10, 900_000, 100)
+for _i86 in range(1001, 1101):
+    _q86[_i86] = _buch86(100_000, 5000)
+    _z86[_i86] = _buch86(160_000, 10)
+_bk86 = {_AMARR85: _q86, _JITA85: _z86}
+_h86 = [{"volume": 50, "average": 1.0, "highest": 1.0, "lowest": 1.0}] * 30
+_ui86 = {n: getattr(win, n).value() for n in ("rg_margin", "rg_profit", "rg_vol", "rg_haul")}
+_orig86 = (_hb82.load_location_orders, _esi83.resolve_names, _esi83.resolve_volumes,
+           _sc85.history_cached, win._run, win._render_arbitrage,
+           win._icon_prefetch_pending, _ind86.item_volume_map)
+_gezeigt86 = {}
+try:
+    _hb82.load_location_orders = lambda loc, s, progress=None: _bk86[loc["region_id"]]
+    _esi83.resolve_names = lambda ids: {}
+    _esi83.resolve_volumes = lambda ids: {i: _vol86.get(i, 0.0) for i in ids}
+    _sc85.history_cached = lambda tid, region, *a, **k: _h86
+    win._run = lambda w, done, fail_cb=None, **k: done(w._fn(*w._args, **w._kwargs))
+    win._render_arbitrage = lambda deals: _gezeigt86.update(zeilen=list(deals))
+    win._icon_prefetch_pending = lambda *a, **k: None
+    for _c86, _r86 in ((win.rg_src, _AMARR85), (win.rg_tgt, _JITA85)):
+        for _i86 in range(_c86.count()):
+            _d86 = _c86.itemData(_i86) or {}
+            if _d86.get("kind") == "hub" and _d86.get("region_id") == _r86:
+                _c86.setCurrentIndex(_i86)
+    for _i86 in range(win.rg_mode.count()):
+        if win.rg_mode.itemData(_i86) == "relist":
+            win.rg_mode.setCurrentIndex(_i86)
+    win.rg_margin.setValue(0)
+    win.rg_profit.setValue(0)
+    win.rg_vol.setValue(0)
+    win.rg_haul.setValue(500)
+    _ind86.item_volume_map = lambda ids=None: dict(_vol86)
+    win._rg_raw = None
+    win._rg_last_key = None
+    win.compute_arbitrage()
+    _leicht86 = [d for d in _gezeigt86.get("zeilen", []) if d["type_id"] > 1000]
+    eq("b86 compute_arbitrage: bei Fracht 500 zeigt die Tabelle die 100 leichten Waren",
+       len(_leicht86), 100)
+    check("b86 ... und keine schwere Ware (Fracht frisst ihren Gewinn)",
+          not any(d["type_id"] <= 500 for d in _gezeigt86.get("zeilen", [])))
+    check("b86 ... die Netz-Schritte bleiben bei hoechstens 400 Kandidaten",
+          len(win._rg_raw or []) <= 400)
+    _ind86.item_volume_map = lambda ids=None: {}
+    win._rg_raw = None
+    win._rg_last_key = None
+    _gezeigt86.clear()
+    win.compute_arbitrage()
+    check("b86 ohne SDE-Volumen: wie vorher (400 Kandidaten, keine leichten)",
+          len(win._rg_raw or []) == 400
+          and not any(d["type_id"] > 1000 for d in (win._rg_raw or [])))
+finally:
+    (_hb82.load_location_orders, _esi83.resolve_names, _esi83.resolve_volumes,
+     _sc85.history_cached, win._run, win._render_arbitrage,
+     win._icon_prefetch_pending, _ind86.item_volume_map) = _orig86
+    for _n86, _v86 in _ui86.items():
+        getattr(win, _n86).setValue(_v86)
+    win._rg_raw = None
+    win._rg_last_key = None
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.

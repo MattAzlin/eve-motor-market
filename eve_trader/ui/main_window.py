@@ -19625,10 +19625,18 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 status(t("Comparing prices & calculating margin \u2026"))
             # Floors hier auf 0 – gefiltert wird LIVE in _apply_rg_view, damit Fracht
             # und Feinfilter sofort auf die Tabelle wirken (ohne Neu-Laden).
+            # No cut here: cutting by profit x demand BEFORE freight and the
+            # fine filters let heavy, expensive goods crowd out light bulk
+            # goods (with freight the table came out empty although every
+            # light item paid). The cut to 400 for the network-bound steps
+            # below is `hubs.preselect`, in the table's own order.
             raw_filters = dict(filters, min_margin=0, min_profit_isk=0,
-                               min_liquidity=0, price_min=0, price_max=0)
+                               min_liquidity=0, price_min=0, price_max=0,
+                               max_items=None)
             deals = hubs.arbitrage(so, to, arb_settings, raw_filters, mode,
                                    target_is_structure=(tgt.get("kind") == "structure"))
+            deals = hubs.preselect(deals, industry.item_volume_map(),
+                                   filters["max_items"])
             ids = [d["type_id"] for d in deals]
             if status:
                 status(_txt("Resolving names & volumes \u2026"))
