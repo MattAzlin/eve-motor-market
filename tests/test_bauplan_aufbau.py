@@ -10915,6 +10915,142 @@ check("b96 das alte Verhalten fuer Zeilen ohne Datum bleibt (b51: 10 Zeilen ohne
       and _hb96.bewerte_leeren_markt(1, 500.0, _h51([10] * 30), _T51, _B51) is not None)
 
 
+# ---------------------------------------------------------------- (b97)
+# ORDER UPDATE: ALLE SPALTEN ERREICHBAR, BREITEN VERSTELLBAR (Regression von
+# #21). Mit der Alters-Spalte brauchen die Tabellen im echten Fenster mehr
+# Breite als da ist (Verkauf: 974 px Spalten in 836 px Ansicht bei der
+# Mindestbreite 1100): "Item" wurde auf "Medium ..." gequetscht, es erschien
+# eine waagerechte Laufleiste, und die Knopf-Spalte (Price/Open) am rechten Ende
+# war abgeschnitten. Die Tests liefen bisher OHNE das globale App-Stylesheet
+# (das die Spalten verbreitert) und sahen das nicht. Jetzt: alle Spalten wie im
+# Rest der App verschiebbar UND in der Breite ziehbar, die Knoepfe stehen gleich
+# hinter dem Namen (logische Spalten bleiben, nur die Anzeige-Reihenfolge
+# aendert sich), und ein von einer aelteren Version gemerkter Kopfzustand
+# (feste Breiten, Knoepfe hinten) wird EINMAL auf das neue Layout gesetzt.
+from PySide6.QtWidgets import QHeaderView as _QHV97, QPushButton as _QPB97
+from eve_trader.ui import theme as _th97
+
+_qss_alt97 = _app.styleSheet()
+_tab_alt97 = win.tabs.currentIndex()
+_alt_ico97 = (win._table_icon, win._icon_prefetch_pending)
+_set_alt97 = {k: win.settings.get(k, _LEER85) for k in ("ui_spalten", "ui_order_layout")}
+_jetzt97 = _tm92.time()
+
+
+def _zeile97(tid, name, kauf):
+    _r = {"tid": tid, "name": name, "mine": 1_234_000.0, "best": 1_200_000.0,
+          "flag": True, "newp": 1_199_990.0, "cost": 1_000_000.0, "loss": False,
+          "under_target": False, "marge_neu": 10.0, "ziel": 0.0, "cost_known": True,
+          "marge_new": 12.5, "order_id": tid, "char_id": 1, "mod_count": 3,
+          "cum_fee": 100.0, "fee_wiped_out": False, "vol_remain": 10,
+          "unknown": False, "orders_asof": _jetzt97 - 400, "market_asof": _jetzt97 - 100}
+    if kauf:
+        _r["best_sell"] = 1_300_000.0
+    return _r
+
+
+_vk97 = [_zeile97(i, f"Medium Capacitor Control Circuit II #{i}", False) for i in range(1, 6)]
+_kf97 = [_zeile97(i + 10, f"Republic Fleet Phased Plasma L #{i}", True) for i in range(1, 6)]
+try:
+    _app.setStyleSheet(_th97.QSS)            # das GLOBALE Stylesheet der echten App
+    # Vom Standard aus starten: die Suite behaelt ihre gemerkten Kopfzustaende
+    # von frueheren Laeufen (.smoke_home) - die duerfen hier nichts vorgeben.
+    _lay0_97 = getattr(win, "_order_table_layout", None)
+    if _lay0_97 is not None:
+        _lay0_97(win.sellord_table, False)
+        _lay0_97(win.buyord_table, True)
+    win._table_icon = lambda *a, **k: None
+    win._icon_prefetch_pending = lambda *a, **k: None
+    win.show()
+    win.resize(1100, 720)                    # Mindestbreite des Hauptfensters
+    win.tabs.setCurrentWidget(win._orders_w)
+    win._ordmod_sell, win._ordmod_buy = _vk97, _kf97
+    win._fill_order_table(win.sellord_table, _vk97, False)
+    win._fill_order_table(win.buyord_table, _kf97, True)
+    for _t97, _n97 in ((win.sellord_table, "Verkauf"), (win.buyord_table, "Kauf")):
+        win._orders_inner.setCurrentWidget(_t97.parentWidget())
+        _app.processEvents()
+        _app.processEvents()
+        _h97 = _t97.horizontalHeader()
+        _nc97 = _t97.columnCount()
+        check(f"b97 {_n97}: alle Spalten sind in der Breite ziehbar (Interactive)",
+              all(_h97.sectionResizeMode(i) == _QHV97.Interactive for i in range(_nc97)))
+        check(f"b97 {_n97}: die Spalten sind verschiebbar", _h97.sectionsMovable())
+        eq(f"b97 {_n97}: die Knopf-Spalte steht Anzeige-Position 1, gleich hinter dem Namen",
+           _h97.visualIndex(_nc97 - 1), 1)
+        eq(f"b97 {_n97}: ... die logischen Spalten bleiben (Status/Alter/Redo unveraendert)",
+           (_h97.logicalIndex(0), _h97.logicalIndex(1)), (0, _nc97 - 1))
+        _pos97 = _h97.sectionViewportPosition(_nc97 - 1)
+        _br97 = _h97.sectionSize(_nc97 - 1)
+        check(f"b97 {_n97}: bei Mindestbreite ist die Knopf-Spalte OHNE Scrollen ganz sichtbar",
+              _t97.horizontalScrollBar().value() == 0
+              and 0 <= _pos97 and _pos97 + _br97 <= _t97.viewport().width())
+        _akt97 = _t97.cellWidget(0, _nc97 - 1)
+        _kn97 = sorted((b.geometry().x(), b.geometry().width(), b.text())
+                       for b in _akt97.findChildren(_QPB97)) if _akt97 else []
+        check(f"b97 {_n97}: Price und Open haben Abstand (>= 6 px) und passen in die Spalte",
+              len(_kn97) == 2 and _kn97[1][0] - (_kn97[0][0] + _kn97[0][1]) >= 6
+              and _kn97[1][0] + _kn97[1][1] <= _akt97.width())
+        _t97.setColumnWidth(2, 140)
+        win._fill_order_table(_t97, _vk97 if _t97 is win.sellord_table else _kf97,
+                              _t97 is win.buyord_table)
+        eq(f"b97 {_n97}: eine gezogene Breite bleibt beim Neuladen der Zeilen (140)",
+           _t97.columnWidth(2), 140)
+
+    # ---- ein von einer AELTEREN Version gemerkter Kopfzustand
+    _leg97 = {}
+    for _t97, _n97 in ((win.sellord_table, "sellord_table"), (win.buyord_table, "buyord_table")):
+        _h97 = _t97.horizontalHeader()
+        _nc97 = _t97.columnCount()
+        _h97.setSectionResizeMode(0, _QHV97.Stretch)
+        for _c97 in range(1, _nc97 - 1):
+            _h97.setSectionResizeMode(_c97, _QHV97.ResizeToContents)
+        _h97.setSectionResizeMode(_nc97 - 1, _QHV97.Fixed)
+        _h97.moveSection(_h97.visualIndex(_nc97 - 1), _nc97 - 1)
+        _leg97[_n97] = bytes(_h97.saveState().toBase64()).decode()
+    win.settings["ui_spalten"] = dict(_leg97)
+    win.settings.pop("ui_order_layout", None)
+    win._spalten_wiederherstellen()
+    for _t97, _n97 in ((win.sellord_table, "Verkauf"), (win.buyord_table, "Kauf")):
+        _h97 = _t97.horizontalHeader()
+        _nc97 = _t97.columnCount()
+        check(f"b97 {_n97}, alter gemerkter Zustand: nach dem Start ziehbar und Knoepfe vorn",
+              all(_h97.sectionResizeMode(i) == _QHV97.Interactive for i in range(_nc97))
+              and _h97.visualIndex(_nc97 - 1) == 1)
+    check("b97 die Umstellung wird nur EINMAL gemacht (Marke gesetzt)",
+          win.settings.get("ui_order_layout") == 1)
+    # danach zaehlt, was der Nutzer selbst einstellt
+    _t97 = win.sellord_table
+    _h97 = _t97.horizontalHeader()
+    _t97.setColumnWidth(2, 150)
+    _h97.moveSection(_h97.visualIndex(_t97.columnCount() - 1), _t97.columnCount() - 1)
+    win._spalten_merken()
+    _lay97 = getattr(win, "_order_table_layout", None)
+    if _lay97 is not None:
+        _lay97(_t97, False)                                  # wie ein frischer Start
+    win._spalten_wiederherstellen()
+    check("b97 die eigene Einstellung (Breite 150, Knoepfe hinten) bleibt danach erhalten",
+          _t97.columnWidth(2) == 150
+          and _h97.visualIndex(_t97.columnCount() - 1) == _t97.columnCount() - 1)
+finally:
+    _app.setStyleSheet(_qss_alt97)
+    win._table_icon, win._icon_prefetch_pending = _alt_ico97
+    win.tabs.setCurrentIndex(_tab_alt97)
+    for _k97, _v97 in _set_alt97.items():
+        if _v97 is _LEER85:
+            win.settings.pop(_k97, None)
+        else:
+            win.settings[_k97] = _v97
+    win._ordmod_sell = []
+    win._ordmod_buy = []
+    win.sellord_table.setRowCount(0)
+    win.buyord_table.setRowCount(0)
+    _lay97 = getattr(win, "_order_table_layout", None)
+    if _lay97 is not None:
+        _lay97(win.sellord_table, False)
+        _lay97(win.buyord_table, True)
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.
