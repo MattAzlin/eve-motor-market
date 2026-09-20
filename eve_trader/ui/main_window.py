@@ -18802,10 +18802,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             "Minimum demand at the destination: the quantity currently "
               "requested there by buy orders (a snapshot)."))
         self.rg_vol.setToolTip(t(
-            "Minimum Ø daily volume at the destination: how many units "
-              "are actually traded there PER DAY (from the market "
-              "history). The honest test whether the item sells there. 0 "
-              "= off. NPC hubs only (structures have no history)."))
+            "Minimum \u00d8 daily volume in the destination REGION: how many units are traded per day across ALL stations of that region (market history; ESI has no per-station history). An upper bound for the hub: a low value shows it will not sell there, a high one does not prove it does \u2013 check demand, supply and the order share in the cell tooltip. 0 = off. NPC hubs only (structures have no history)."))
         self.rg_m3.setToolTip(t("Minimum profit per m\u00b3 of cargo hold. Decisive in "
                                 "regional trading: shows what pays off per transport "
                                 "volume. 0 = off."))
@@ -18916,7 +18913,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             (t("Min margin"), self.rg_margin),
             (t("Min profit/unit (ISK)"), self.rg_profit),
             (t("Min demand (buy now)"), self.rg_liq),
-            (t("Min Ø daily volume destination"), self.rg_vol),
+            (t("Min \u00d8 daily volume dest. region"), self.rg_vol),
             (t("Min profit/m³ (ISK)"), self.rg_m3),
             (t("Price from"), self.rg_pmin), (t("Price to (0=∞)"), self.rg_pmax),
         ]
@@ -18953,7 +18950,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             [t("Item"), t("Sell (source)"), t("Sell (destination)"),
              t("Profit/unit"), t("Margin %"), t("Profit/m³"), t("m³/unit"),
              t("Demand destination"), t("Supply destination"),
-             t("Ø daily vol destination")])
+             t("\u00d8 daily vol dest. region")])
         hdr = self.rg_table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.Stretch)
         for col in range(1, 10):
@@ -18981,13 +18978,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             6: "Volume per unit in m\u00b3 (packaged).",
             7: "Demand at the destination NOW: units on open buy orders (snapshot).",
             8: "Supply at the destination: units on sell orders.",
-            9: "\u00d8 daily volume at the destination (market history): how many units "
-               "actually trade there per day. \u201e\u2014\u201c = no history (e.g. "
-               "structure).",
+            9: "\u00d8 daily volume in the destination region (market history, covers every station of the region \u2013 ESI has no per-station history): an upper bound for the hub. \u201e\u2014\u201c = no history (e.g. structure).",
         })
         # SPALTEN-VORGABE REGIONAL (Nutzer, Sitzung 16, zweite Runde: "und so
         # der Region Trading Tab"): Item · Buy (source) · Sell (destination) ·
-        # Profit/m³ · Margin % · Supply destination · Ø daily vol destination.
+        # Profit/m³ · Margin % · Supply destination · Ø daily vol dest. region.
         # Gegenueber der ersten Fassung sind Marge % und Angebot am Ziel
         # dazugekommen - er will neben dem Frachtraum-Wert auch sehen, wie
         # viel dort schon liegt.
@@ -19000,7 +18995,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
              (3, t("Profit/unit")), (4, t("Margin %")), (5, t("Profit/m³")),
              (6, t("m³/unit")), (7, t("Demand destination")),
              (8, t("Supply destination")),
-             (9, t("Ø daily vol destination"))],
+             (9, t("\u00d8 daily vol dest. region"))],
             t("Which columns are visible - the rest can be switched on."))
         _rhdr = self.rg_table.horizontalHeader()
         for _ziel, _log in enumerate(_REG_STD):
@@ -19867,7 +19862,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         ("margin_low", "margin too small"),
         ("m3_low", "profit/m\u00b3 too small"),
         ("demand_low", "destination demand (order book) too thin"),
-        ("target_vol_low", "destination sales (history) too small"),
+        ("target_vol_low", "destination region sales (history) too small"),
     ]
     # de_scan3: an
 
@@ -19990,30 +19985,31 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 if j in (3, 4, 5):
                     it.setForeground(QColor(theme.GREEN if d["profit_unit"] > 0 else theme.RED))
-                if j == 9 and d.get("tgt_sell_reach") is not None:
-                    it.setToolTip(
-                        t("S % = sell exit evidence at the DESTINATION: share of the spread the "
-                          "daily highs there reach on average towards the sell order. High = your "
-                          "sell order at the destination is realistically served; low = trading "
-                          "only happens on the buy side \u2013 you would sit on the goods."))
+                if j == 9:
+                    # One tooltip that keeps every hint: the sell-exit evidence,
+                    # the low-volume warning (it used to REPLACE the S % text)
+                    # and the share of the region's orders standing at the hub.
+                    _tips = []
+                    if d.get("tgt_sell_reach") is not None:
+                        _tips.append(t("S % = sell exit evidence for the destination: share of the spread the daily highs in the destination region reach on average towards the sell order. High = your sell order at the destination is realistically served; low = trading only happens on the buy side \u2013 you would sit on the goods."))
+                    if tvol is not None and tvol < 10:
+                        _tips.append(t("Hardly anything is traded in the destination region \u2013 careful, it may not sell."))
+                    if d.get("target_order_share") is not None:
+                        _tips.append(t("{pct} % of the open orders for this item in the destination region stand at this hub station.").format(
+                            pct=f"{d['target_order_share'] * 100:.0f}"))
+                    if _tips:
+                        it.setToolTip("\n\n".join(_tips))
                 if j == 9 and tvol is not None:
-                    # green = actually trades there, amber = thin, red = nobody buys
+                    # green = trades in the region, amber = thin, red = nobody buys
                     col = (theme.GREEN if tvol >= 100 else
                            theme.AMBER if tvol >= 10 else theme.RED)
                     it.setForeground(QColor(col))
-                    if tvol < 10:
-                        it.setToolTip(t("Hardly anything is traded here at the destination \u2013 careful, it may not "
-                                        "sell."))
                 if d.get("leerer_markt"):
                     # Die ganze Zeile bekommt einen Hinweis - der Fund ist
                     # eine CHANCE, keine gerechnete Marge. Wer das nicht
                     # weiss, haelt die Prozentzahl fuer belastbar.
                     it.setToolTip(t(
-                        "\u26a0 There is currently NO sell order at the destination. "
-                        "It traded there on {days} of the last 7 days \u2013 the market "
-                        "is alive, just empty. The destination price is the 30-day "
-                        "AVERAGE from history, not a price read off an order. "
-                        "Profit and margin are estimates."
+                        "\u26a0 There is currently NO sell order at the destination. It traded in the destination region on {days} of the last 7 days (history is per region, not per station) \u2013 the market is alive, just empty. The destination price is the 30-day AVERAGE from history, not a price read off an order. Profit and margin are estimates."
                     ).format(days=d.get("tage_mit_umsatz_7", 0)))
                 if d["type_id"] in top_ids:
                     it.setBackground(tint)
@@ -26279,7 +26275,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         "Motor Market: the column headers can be dragged to reorder and resized – arrange every table the way you need it.",
         "Motor Market: a click on a deal row shows the real order ladder (sell orders) below – so you see how much is really worthwhile at the target price before a ghost order fools you.",
         "Motor Market: „Min Ø daily volume“ is your most important filter against shelf warmers – a huge spread is worthless if the item barely trades.",
-        "Motor Market: in Regional Trading, „Ø daily vol destination“ shows whether an item sells at the destination at all. Red = hardly anyone buys, better keep away.",
+        "Motor Market: in Regional Trading, \u201e\u00d8 daily vol dest. region\u201c shows whether an item sells in the destination region at all. Red = hardly anyone buys, better keep away.",
         "Motor Market: add your own stations or citadels for regional trading via „＋ Structure“ – park a character with market access there and link it.",
         "Motor Market: right-click on a row opens the item in the in-game market (market window must be open in game) or puts it on the shopping list.",
         "Motor Market: the portfolio calculates with a FIFO cost basis from your real transactions – so the profit signals match your actual purchase prices.",

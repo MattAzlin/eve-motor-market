@@ -9609,6 +9609,104 @@ finally:
     win._rg_last_key = None
 
 
+# ---------------------------------------------------------------- (b87)
+# DAS ZIEL-VOLUMEN IST DAS DER REGION, NICHT DER STATION (Issue #6).
+# ESI-Markthistorie gibt es nur je REGION. Spalte, Filter, Trichterzeile und
+# Tooltips sagten "dort gehandelt", gemeint war "irgendwo in der Region" - am
+# Hub also eine OBERGRENZE. Jetzt steht "Zielregion" dran, die Tooltips
+# sagen es, und als Beleg fuer den Hub selbst zaehlt fetch_hub_orders die
+# Orders JEDER Station der Region mit (`region_orders`): der Tooltip nennt den
+# Anteil, der an der Ziel-Station liegt. Eine Schaetzung des Stations-Volumens
+# gibt es bewusst NICHT - die Daten dafuer fehlen.
+import eve_trader.sprache as _sp87
+
+
+class _Seite87:
+    headers = {"X-Pages": "1"}
+
+    def json(self):
+        _o = lambda loc, buy, p, v, t=7: {"location_id": loc, "type_id": t,
+                                          "is_buy_order": buy, "price": p,
+                                          "volume_remain": v}
+        return [_o(60003760, True, 120.0, 10), _o(60003760, False, 130.0, 5),
+                _o(999, True, 100.0, 1), _o(999, True, 101.0, 2),
+                _o(999, False, 140.0, 3), _o(999, False, 5.0, 1, t=8)]
+
+
+_alt87 = _esi83._get_with_retry
+_esi83._get_with_retry = lambda *a, **k: _Seite87()
+try:
+    _agg87 = _hb82.fetch_hub_orders(10000002, 60003760)
+finally:
+    _esi83._get_with_retry = _alt87
+eq("b87 fetch_hub_orders zaehlt die Orders der ganzen Region mit (2 hier + 3 dort)",
+   _agg87[7].get("region_orders"), 5)
+check("b87 ... ein Item, das nur an einer anderen Station liegt, bekommt keinen Eintrag",
+      8 not in _agg87)
+
+_z87 = {"sell_min": 130.0, "sell_qty": 100, "buy_max": 90.0, "buy_qty": 5,
+        "sell_orders": [(130.0, 100)], "buy_ladder": [(90.0, 5)], "region_orders": 10}
+_d87 = _deal82(_buch82(sell=[(100, 5000)]), _z87)
+check("b87 arbitrage: Anteil der Ziel-Station an den Region-Orders (2 von 10)",
+      _d87 is not None and abs((_d87.get("target_order_share") or -1) - 0.2) < 1e-9)
+_d87 = _deal82(_buch82(sell=[(100, 5000)]),
+               {k: v for k, v in _z87.items() if k != "region_orders"})
+check("b87 ... ohne Region-Zahl (Struktur): None statt einer erfundenen Zahl",
+      _d87 is not None and "target_order_share" in _d87
+      and _d87["target_order_share"] is None)
+
+eq("b87 Spaltenkopf 9 nennt die Zielregion",
+   win.rg_table.horizontalHeaderItem(9).text(), _t4("Ø daily vol dest. region"))
+check("b87 Kopf-Tooltip: je Region, keine Historie je Station, Obergrenze",
+      all(w in win.rg_table.horizontalHeaderItem(9).toolTip()
+          for w in ("region", "per-station", "upper bound")))
+# (`_install_tip` verschiebt den Tooltip vom Eingabefeld auf das Titel-Label)
+_lab87 = [l for l in win._tip_anchor
+          if l.text() == _t4("Min \u00d8 daily volume dest. region")]
+eq("b87 der Filter heisst 'Min \u00d8 daily volume dest. region' (genau ein Label)",
+   len(_lab87), 1)
+check("b87 Filter-Tooltip sagt dasselbe und nennt die REGION",
+      bool(_lab87) and all(w in win._tip_anchor[_lab87[0]] for w in ("REGION", "upper bound")))
+eq("b87 Trichterzeile nennt die Zielregion",
+   dict(win._RG_DIAG_LABELS)["target_vol_low"],
+   "destination region sales (history) too small")
+
+_basis87 = {"type_id": 34, "source_sell": 100.0, "target_sell": 200.0,
+            "target_buy": 150.0, "profit_unit": 50.0, "margin": 50.0,
+            "target_demand": 10, "target_supply": 3, "volume": 0.01,
+            "profit_m3": 5000.0}
+_alt_render87 = (win._icon_prefetch_pending, getattr(win, "_arb_modus", None),
+                 _sp87._aktuell)
+win._icon_prefetch_pending = lambda *a, **k: None
+win._arb_modus = "relist"
+try:
+    win._render_arbitrage([dict(_basis87, target_vol=5.0, tgt_sell_reach=0.5,
+                                target_order_share=0.25)])
+    _tip87 = win.rg_table.item(0, 9).toolTip()
+    check("b87 Zellen-Tooltip: der Anteil an der Ziel-Station (25 %)", "25 %" in _tip87)
+    check("b87 ... die Warnung bei kleinem Volumen nennt die Zielregion",
+          "destination region" in _tip87)
+    check("b87 ... und der Verkaufs-Beleg (S %) bleibt daneben stehen",
+          "S %" in _tip87)
+    win._render_arbitrage([dict(_basis87, target_vol=500.0)])
+    check("b87 ohne Anteil und bei gutem Volumen: kein Prozent-Satz im Tooltip",
+          "%" not in win.rg_table.item(0, 9).toolTip())
+    _sp87.sprache_setzen("de")
+    win._render_arbitrage([dict(_basis87, target_vol=5.0, tgt_sell_reach=0.5,
+                                target_order_share=0.25)])
+    _tipd87 = win.rg_table.item(0, 9).toolTip()
+    check("b87 deutsch: Anteils-Satz und Zielregion-Warnung sind uebersetzt",
+          "25 %" in _tipd87 and "Orders" in _tipd87 and "Zielregion" in _tipd87)
+    check("b87 deutsch: der Kopf nennt die Zielregion",
+          "Zielregion" in win.rg_table.horizontalHeaderItem(9).text()
+          or "Zielregion" in _t4("Ø daily vol dest. region"))
+finally:
+    _sp87.sprache_setzen(_alt_render87[2])
+    win._icon_prefetch_pending = _alt_render87[0]
+    win._arb_modus = _alt_render87[1]
+    win.rg_table.setRowCount(0)
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.
