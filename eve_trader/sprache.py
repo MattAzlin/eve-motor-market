@@ -3952,6 +3952,10 @@ KATALOG = {
             "In der Zielregion wird kaum/nichts gehandelt \u2013 Vorsicht, bleibt evtl. liegen.",
         "{pct} % of the open orders for this item in the destination region stand at this hub station.":
             "{pct} % der offenen Orders f\u00fcr dieses Item in der Zielregion liegen an dieser Hub-Station.",
+        "Transport cost (ISK/m\u00b3) is 0 \u2013 the profit shown does not include hauling.":
+            "Transportkosten (ISK/m\u00b3) stehen auf 0 \u2013 der angezeigte Gewinn enth\u00e4lt keine Fracht.",
+        "\u201e{name}\u201c (Fine filters) is 0 \u2013 nothing checks that the item sells at the destination.":
+            "\u201e{name}\u201c (Feinfilter) steht auf 0 \u2013 nichts pr\u00fcft, ob das Item am Ziel verkauft wird.",
         "Copies build plan/swing/manual items (name + quantity) as multibuy for instant purchase from sell orders. Daytrade items are deliberately NOT copied \u2013 they need their own, cheaper buy order instead of buying instantly at the sell price.":
             "Kopiert Bauplan-/Swing-/manuelle Items (Name + Menge) als Multibuy f\u00fcr den Sofortkauf aus Sell-Orders. Daytrade-Items werden bewusst NICHT mitkopiert \u2013 die brauchen eine eigene, g\u00fcnstigere Buy-Order statt sofort zum Sell-Preis zu kaufen.",
         "Fetches your open market orders and marks in red which items you already have in a buy order in game.":

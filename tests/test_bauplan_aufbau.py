@@ -9707,6 +9707,85 @@ finally:
     win.rg_table.setRowCount(0)
 
 
+# ---------------------------------------------------------------- (b88)
+# REGIONAL WARNT, WENN DER GEWINN OHNE FRACHT / OHNE ABSATZ-PRUEFUNG STEHT
+# (Issue #7). Fracht steht auf 0 ISK/m3 und das Mindest-Volumen am Ziel auf
+# 0: wer "Deals laden" drueckt, sah Gewinn VOR Fracht und ohne Pruefung, ob
+# die Ware dort ueberhaupt laeuft - ohne jeden Hinweis. Die Vorgaben bleiben
+# (Nutzer-Entscheid: nur warnen); ein bernsteinfarbener Hinweis unter der
+# Statuszeile sagt es, solange es gilt, und verschwindet sonst.
+_ui88 = {n: getattr(win, n).value() for n in ("rg_haul", "rg_vol")}
+_orig88 = (win._render_arbitrage, getattr(win, "_rg_raw", None),
+           win._run, _hb82.load_location_orders, _sp87._aktuell)
+_deal88 = {"type_id": 34, "source_sell": 100.0, "target_sell": 200.0,
+           "target_buy": 150.0, "profit_unit": 50.0, "margin": 50.0,
+           "target_demand": 10, "target_supply": 3, "volume": 0.01,
+           "target_vol": 500.0}
+
+
+def _hinweis88(fracht, vol):
+    win.rg_haul.setValue(fracht)
+    win.rg_vol.setValue(vol)
+    win._apply_rg_view()
+    _w = getattr(win, "rg_warn", None)
+    return (_w.text() if _w is not None else None,
+            (not _w.isHidden()) if _w is not None else None)
+
+
+try:
+    win._render_arbitrage = lambda deals: None
+    win._rg_raw = [dict(_deal88)]
+    _t88, _sicht88 = _hinweis88(0, 0)
+    check("b88 Fracht 0 und kein Mindest-Volumen: beide Hinweise stehen da",
+          _sicht88 is True and "Transport cost" in (_t88 or "") and "Min Ø daily volume" in (_t88 or ""))
+    _t88, _sicht88 = _hinweis88(500, 100)
+    check("b88 Fracht und Volumen gesetzt: kein Hinweis, Feld versteckt",
+          _t88 == "" and _sicht88 is False)
+    _t88, _sicht88 = _hinweis88(500, 0)
+    check("b88 nur das Volumen fehlt: nur der Volumen-Hinweis",
+          _sicht88 is True and "Transport cost" not in (_t88 or "")
+          and "Min Ø daily volume" in (_t88 or ""))
+    _t88, _sicht88 = _hinweis88(0, 100)
+    check("b88 nur die Fracht fehlt: nur der Fracht-Hinweis",
+          _sicht88 is True and "Transport cost" in (_t88 or "")
+          and "Min Ø daily volume" not in (_t88 or ""))
+    _t88, _ = _hinweis88(0, 0)
+    check("b88 der Hinweis nennt, wo man es einstellt (Feinfilter)", "Fine filters" in (_t88 or ""))
+    _sp87.sprache_setzen("de")
+    _t88, _ = _hinweis88(0, 0)
+    check("b88 deutsch: beide Hinweise uebersetzt",
+          "Transportkosten" in (_t88 or "") and "Tagesvolumen Zielregion" in (_t88 or "")
+          and "Feinfilter" in (_t88 or "") and "Transport cost" not in (_t88 or ""))
+    _sp87.sprache_setzen("en")
+    # ein fehlgeschlagener Ladevorgang leert die Tabelle - der Hinweis geht mit
+    _hinweis88(0, 0)
+
+    def _lauf_fehl88(w, done, fail_cb=None, **k):
+        try:
+            _r = w._fn(*w._args, **w._kwargs)
+        except Exception as _e:
+            fail_cb(str(_e))
+            return
+        done(_r)
+
+    def _boom88(*a, **k):
+        raise RuntimeError("boom")
+    _hb82.load_location_orders = _boom88
+    win._run = _lauf_fehl88
+    win._rg_raw = None
+    win._rg_last_key = None
+    win.compute_arbitrage()
+    _w88 = getattr(win, "rg_warn", None)
+    check("b88 nach einem Ladefehler ist der Hinweis weg",
+          _w88 is not None and _w88.isHidden() and _w88.text() == "")
+finally:
+    (win._render_arbitrage, win._rg_raw, win._run, _hb82.load_location_orders,
+     _sp87._aktuell) = _orig88
+    for _n88, _v88 in _ui88.items():
+        getattr(win, _n88).setValue(_v88)
+    win._rg_last_key = None
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.
