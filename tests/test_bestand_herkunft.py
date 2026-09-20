@@ -17540,6 +17540,67 @@ check("aa372 beim Speichern werden label und item_name bereinigt",
       "label = config.plan_name_bereinigen(label)" in _bf372
       and '"item_name": config.plan_name_bereinigen(name),' in _bf372)
 
+# ---------------------------------------------------------------- (aa373)
+# FEHLGESCHLAGENE VOLUMEN-ABFRAGE DARF NICHT ALS 0 m3 ZWISCHENGESPEICHERT
+# WERDEN (Issue #1). Vorher schrieb esi.resolve_volumes bei JEDER Ausnahme
+# 0.0 in die Tabelle type_volumes und cached_volumes lieferte die Null fuer
+# immer zurueck: ein einziger Netzfehler markierte das Item dauerhaft als
+# 0 m3, und der Regional-Handel liess bei ihm die Fracht stillschweigend weg
+# (`if haul and v > 0`). Jetzt: Fehlschlag -> 0.0 nur fuer DIESEN Aufruf,
+# nichts gespeichert; eine schon gespeicherte 0 zaehlt als "fehlt".
+from eve_trader import esi as _esi373, store as _st373
+_TID373 = 999000373
+
+
+class _Boom373:
+    def get(self, *a, **k):
+        raise ConnectionError("transient")
+
+
+class _Resp373:
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"packaged_volume": 2.5, "volume": 10.0}
+
+
+class _Ok373:
+    def get(self, *a, **k):
+        return _Resp373()
+
+
+def _weg373():
+    with _st373._conn() as _c:
+        _c.execute("DELETE FROM type_volumes WHERE type_id=?", (_TID373,))
+
+
+_sess373 = _esi373._session
+_st373.init_volumes()
+_weg373()
+try:
+    _esi373._session = _Boom373()
+    eq("aa373 Netzfehler: dieser Aufruf meldet 0.0",
+       _esi373.resolve_volumes([_TID373]), {_TID373: 0.0})
+    eq("aa373 Netzfehler: NICHTS wird zwischengespeichert",
+       _st373.cached_volumes([_TID373]), {})
+    _esi373._session = _Ok373()
+    eq("aa373 danach wird neu abgefragt (packaged_volume gewinnt)",
+       _esi373.resolve_volumes([_TID373]), {_TID373: 2.5})
+    eq("aa373 der echte Wert ist gespeichert",
+       _st373.cached_volumes([_TID373]), {_TID373: 2.5})
+    _esi373._session = _Boom373()
+    eq("aa373 ein gespeicherter Wert braucht kein Netz",
+       _esi373.resolve_volumes([_TID373]), {_TID373: 2.5})
+    _weg373()
+    _st373.save_volumes({_TID373: 0.0})      # ALTLAST: vergiftete Zeile
+    _esi373._session = _Ok373()
+    eq("aa373 eine schon gespeicherte 0 zaehlt als fehlend und heilt sich",
+       _esi373.resolve_volumes([_TID373]), {_TID373: 2.5})
+finally:
+    _esi373._session = _sess373
+    _weg373()
+
 print(f"(aa) Bestand-Herkunft: {_ok}/{_ok + len(_fail)} gruen")
 for f in _fail:
     print("  FEHLER: " + f)

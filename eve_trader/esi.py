@@ -575,25 +575,32 @@ def fetch_character_portrait_bytes(character_id: int, size: int = 64) -> bytes:
 
 def resolve_volumes(type_ids) -> dict:
     """Item volume in m³ per type, cached. Uses packaged_volume when present
-    (ships/modules pack smaller), else the base volume."""
+    (ships/modules pack smaller), else the base volume.
+
+    Only a successful lookup with a positive volume is cached. A failed
+    request reports 0.0 for this call and is retried next time; caching it
+    would pin the item at 0 m³ for good, and freight would silently be left
+    out of every profit that involves it."""
     from . import store
     ids = list({int(t) for t in type_ids})
     have = store.cached_volumes(ids)
     missing = [t for t in ids if t not in have]
     fetched = {}
     for t in missing:
+        vol = 0.0
         try:
             r = _session.get(f"{config.ESI_BASE}/universe/types/{t}/",
                              timeout=20)
             r.raise_for_status()
             d = r.json()
-            vol = d.get("packaged_volume") or d.get("volume") or 0
-            fetched[t] = float(vol)
+            vol = float(d.get("packaged_volume") or d.get("volume") or 0)
         except Exception:
-            fetched[t] = 0.0
+            pass
+        if vol > 0:
+            fetched[t] = vol
+        have[t] = vol
     if fetched:
         store.save_volumes(fetched)
-    have.update(fetched)
     return have
 
 
