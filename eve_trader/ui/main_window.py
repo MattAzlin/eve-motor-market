@@ -20274,34 +20274,48 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 return r, s, None
         return config.FORGE_REGION, config.JITA_STATION, None
 
-    def _structure_agg(self, structure, max_age=300):
+    def _structure_agg(self, structure, max_age=300, force=False):
         """Gecachtes Struktur-Orderbuch (je Item aggregiert). Das ESI liefert das GANZE
         Orderbuch der Struktur auf einmal – wir laden es einmal und halten es kurz im
-        Speicher, statt bei jedem Item neu zu fetchen."""
+        Speicher, statt bei jedem Item neu zu fetchen. Nur das Buch; ob ein nötiger
+        Abruf scheiterte, sagt `_structure_agg_ex`."""
+        return self._structure_agg_ex(structure, max_age, force)[0]
+
+    def _structure_agg_ex(self, structure, max_age=300, force=False):
+        """(Buch, gescheitert). `force` umgeht den Speicher (der Knopf "Check
+        orders" heisst "jetzt sofort"). Scheitert ein nötiger Abruf, kommt das
+        ALTE Buch (oder {}) zurück - mit seinem ALTEN Zeitstempel: es wurde früher
+        neu gestempelt, und alte Daten galten weitere `max_age` Sekunden als
+        frisch. So versucht der nächste Aufruf es wieder."""
         import time
         sid = structure["structure_id"]
         cache = getattr(self, "_struct_cache", None)
         if cache is None:
             cache = self._struct_cache = {}
         prev = cache.get(sid)
-        if prev and (time.time() - prev[0]) < max_age:
-            return prev[1]
+        if not force and prev and (time.time() - prev[0]) < max_age:
+            return prev[1], False
         try:
             book = esi.fetch_structure_orders_full(self.settings.get("client_id"),
                                                    structure.get("character_id"), sid)
         except Exception:
-            book = prev[1] if prev else {}
+            return (prev[1] if prev else {}), True
         cache[sid] = (time.time(), book)
-        return book
+        return book, False
 
-    def _structure_books(self, structure, type_ids):
+    def _structure_books(self, structure, type_ids, force=False):
         """{type_id: {'sell': [(p,q)…], 'buy': [(p,q)…]}} – volle Order-Leitern aus dem
-        (gecachten) Struktur-Orderbuch, gleiches Format wie fetch_type_orders."""
-        book = self._structure_agg(structure) or {}
+        (gecachten) Struktur-Orderbuch, gleiches Format wie fetch_type_orders. Ist
+        ein nötiger Abruf gescheitert, tragen alle Bücher zusätzlich 'failed': True
+        (der Stand ist dann der alte oder leer - "unbekannt", nicht "keine Orders")."""
+        book, failed = self._structure_agg_ex(structure, force=force)
+        book = book or {}
         out = {}
         for t in type_ids:
             b = book.get(t, {})
             out[t] = {"sell": list(b.get("sell", [])), "buy": list(b.get("buy", []))}
+            if failed:
+                out[t]["failed"] = True
         return out
 
     def _hub_orders(self, type_id, region, station, structure=None):
@@ -21979,7 +21993,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             tids = list({_ti for _ti, _p, _b, _oid, _cid, _v in myorders})
             books = {}
             if structure:                       # Upwell: ein Orderbuch-Fetch für alles
-                books = self._structure_books(structure, tids)
+                # force: "Check orders" is the "right now" button, so the
+                # 5-minute in-memory book must not answer it.
+                books = self._structure_books(structure, tids, force=True)
             else:
               with cf.ThreadPoolExecutor(max_workers=6) as ex:
                 fut = {ex.submit(esi.fetch_type_orders, _ti, station, region): _ti

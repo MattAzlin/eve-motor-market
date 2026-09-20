@@ -9932,6 +9932,115 @@ finally:
     win._ord_laeuft = False
 
 
+# ---------------------------------------------------------------- (b90)
+# STRUKTUR-HUB: "CHECK ORDERS" HOLT FRISCH, EIN FEHLSCHLAG BLEIBT EINER
+# (Issue #18). `_structure_agg` hielt das Orderbuch 300 s im Speicher - auch
+# fuer den Knopf, der "jetzt sofort" heisst. Und schlug ein Abruf fehl, kam das
+# ALTE Buch zurueck und wurde mit neuem Zeitstempel wieder eingelagert: alte
+# Daten galten weitere 5 Minuten als frisch. Jetzt: `force` umgeht den Speicher
+# (Order update nutzt es immer), ein Fehlschlag fasst den alten Zeitstempel nicht
+# an und wird gemeldet; die Zeilen stehen dann auf "? unknown" (wie #17).
+_S90 = {"structure_id": 555, "character_id": 1, "name": "Cit", "region_id": 10000002}
+_aufr90 = {"n": 0, "modus": "ok", "preis": 900.0}
+
+
+def _voll90(client_id, cid, sid, progress=None):
+    _aufr90["n"] += 1
+    if _aufr90["modus"] == "fehl":
+        raise RuntimeError("timeout")
+    return {34: {"sell": [(_aufr90["preis"], 5)], "buy": [],
+                 "sell_min": _aufr90["preis"], "buy_max": 0.0,
+                 "sell_qty": 5, "buy_qty": 0}}
+
+
+def _agg90(**kw):
+    try:
+        return win._structure_agg(_S90, **kw)
+    except TypeError:
+        return None
+
+
+_alt90 = (_esi83.fetch_structure_orders_full, getattr(win, "_struct_cache", None),
+          win._active_hub, _st89.list_characters, _esi83.fetch_character_orders,
+          _esi83.resolve_names, win._run, win._table_icon, _sp87._aktuell)
+try:
+    _esi83.fetch_structure_orders_full = _voll90
+    win._struct_cache = {}
+    _agg90()
+    _agg90()
+    eq("b90 zwei normale Aufrufe hintereinander holen nur einmal (Speicher gilt)",
+       _aufr90["n"], 1)
+    _agg90(force=True)
+    eq("b90 mit force wird trotzdem neu geholt", _aufr90["n"], 2)
+    _ts90, _buch90 = win._struct_cache[555]
+    win._struct_cache[555] = (_ts90 - 360, _buch90)
+    _aufr90["modus"] = "fehl"
+    _b90 = _agg90()
+    check("b90 abgelaufen + Abruf scheitert: das alte Buch kommt zurueck",
+          _b90 is _buch90)
+    check("b90 ... aber mit dem ALTEN Zeitstempel (nicht als frisch neu gestempelt)",
+          __import__("time").time() - win._struct_cache[555][0] > 300)
+    _vor90 = _aufr90["n"]
+    _agg90()
+    check("b90 ... der naechste Aufruf versucht es deshalb erneut", _aufr90["n"] > _vor90)
+    _aufr90["modus"] = "ok"
+    try:
+        _b90 = win._structure_books(_S90, [34, 99], force=True)
+    except TypeError:
+        _b90 = None
+    check("b90 _structure_books: Erfolg -> keine Fehlermarke, unbekanntes Item ist leer",
+          _b90 is not None and not _b90[34].get("failed") and not _b90[99].get("failed")
+          and _b90[99]["sell"] == [])
+    _aufr90["modus"] = "fehl"
+    try:
+        _b90 = win._structure_books(_S90, [34, 99], force=True)
+    except TypeError:
+        _b90 = None
+    check("b90 _structure_books: scheitert der Abruf, tragen ALLE Buecher 'failed'",
+          _b90 is not None and _b90[34].get("failed") is True and _b90[99].get("failed") is True)
+
+    # ---- Ende-zu-Ende: Order update an einer Struktur
+    _st89.list_characters = lambda: [{"character_id": 1, "character_name": "T"}]
+    _esi83.fetch_character_orders = lambda c, cid: [
+        {"type_id": 34, "price": 1000.0, "is_buy_order": False, "order_id": 1,
+         "volume_remain": 10, "location_id": 555}]
+    _esi83.resolve_names = lambda ids: {i: f"Item{i}" for i in ids}
+    win._active_hub = lambda: (10000002, None, _S90)
+    win._run = lambda w, done, fail_cb=None, **k: done(w._fn(*w._args, **w._kwargs))
+    win._table_icon = lambda *a, **k: None
+    _sp87.sprache_setzen("en")
+    win._struct_cache = {}
+    _aufr90.update(n=0, modus="ok", preis=900.0)
+    win._load_order_mods()
+    _r90 = _zeile89("Item34")
+    eq("b90 Order update, Struktur: Konkurrent bei 900 -> undercut",
+       win.sellord_table.item(_r90, 5).text() if _r90 is not None else None,
+       _t4("⚠ undercut"))
+    _aufr90["preis"] = 1100.0          # der Konkurrent ist weg / teurer
+    win._load_order_mods()
+    _r90 = _zeile89("Item34")
+    eq("b90 ... sofort nochmal 'Check orders': der neue Markt zaehlt (top), nicht der Speicher",
+       win.sellord_table.item(_r90, 5).text() if _r90 is not None else None,
+       _t4("✓ top"))
+    _aufr90["modus"] = "fehl"
+    win._load_order_mods()
+    _r90 = _zeile89("Item34")
+    eq("b90 ... scheitert der Abruf, steht '? unknown' statt der alten Zahlen",
+       win.sellord_table.item(_r90, 5).text() if _r90 is not None else None,
+       _t4("? unknown"))
+    check("b90 ... und die Statuszeile nennt es",
+          "could not be checked" in win.statusBar().currentMessage())
+finally:
+    (_esi83.fetch_structure_orders_full, win._struct_cache, win._active_hub,
+     _st89.list_characters, _esi83.fetch_character_orders, _esi83.resolve_names,
+     win._run, win._table_icon, _sp87._aktuell) = _alt90
+    win._ordmod_sell = []
+    win._ordmod_buy = []
+    win.sellord_table.setRowCount(0)
+    win.buyord_table.setRowCount(0)
+    win._ord_laeuft = False
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.
