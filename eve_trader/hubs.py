@@ -324,6 +324,38 @@ def _match_instant(asks: list, bids: list, tax: float, cap: int):
     return units, cost, gross
 
 
+def preselect(deals: list, volumes: dict, cap: int) -> list:
+    """Cut the candidate deals to `cap` for the network-bound steps (item
+    volumes, sales history at the destination), keeping the ones the table
+    will actually lead with.
+
+    The table sorts by profit per m3, which is profit / volume - freight. The
+    freight is the same for every row, so the ORDER does not depend on it and
+    the selection does not need to know it. Half of the slots go to the
+    highest profit per m3 (volumes from the local SDE, no network); the rest
+    keep the old order, profit x demand, for whoever sorts by ISK. Items whose
+    volume is unknown can still get in through that second half. Without any
+    volumes this is exactly the old cut."""
+    if cap is None or len(deals) <= cap:
+        return deals
+    dense = []
+    for d in deals:
+        v = volumes.get(d["type_id"]) or 0
+        if v > 0:
+            dense.append((d["profit_unit"] / v, d))
+    dense.sort(key=lambda p: p[0], reverse=True)
+    chosen = [d for _x, d in dense[:cap // 2]]
+    seen = {d["type_id"] for d in chosen}
+    for d in sorted(deals, key=lambda r: r["score"], reverse=True):
+        if len(chosen) >= cap:
+            break
+        if d["type_id"] not in seen:
+            chosen.append(d)
+            seen.add(d["type_id"])
+    chosen.sort(key=lambda r: r["score"], reverse=True)
+    return chosen
+
+
 def arbitrage(source: dict, target: dict, settings: dict, filters: dict,
               sell_mode: str = "relist", target_is_structure: bool = False) -> list:
     """Buy at source (sell orders), sell at target. Returns ranked deals.
