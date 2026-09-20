@@ -9242,6 +9242,110 @@ check("b82 duenne Quelle (nur 1 Stueck da): der echte Einzelpreis bleibt",
       _d82 is not None and _d82["source_sell"] == 100.0)
 
 
+# ---------------------------------------------------------------- (b83)
+# SOFORT-VERKAUF RECHNET MIT DER TIEFE DES KAUFBUCHS (Issue #3).
+# "Immediate to buy order" bewertete JEDE Einheit mit dem besten Kaufgebot
+# (`buy_max`), obwohl `buy_qty` die Menge ueber ALLE Preisstufen ist: 1 Stueck
+# zu 120 vor 999 zu 60 galt als "1000 Stueck zu 120". Jetzt werden Quell-
+# Verkaufsorders (guenstigste zuerst) gegen Ziel-Kaufgebote (hoechste zuerst)
+# abgearbeitet, solange gebot * (1 - Steuer) > Preis; Einkauf, Erloes und
+# Gewinn beziehen sich auf genau diese Menge (`units`, hoechstens 1000).
+# `target_buy` ist dabei der DURCHSCHNITTLICHE Erloes-Preis dieser Menge (so
+# wie `source_sell` der durchschnittliche Einkaufspreis ist); das beste Gebot
+# steht weiter in `target_buy_best`.
+_tax83 = 0.03375
+
+
+def _buchk83(sell=(), buy=()):
+    _b = _buch82(sell=sell, buy=buy)
+    _b["buy_ladder"] = sorted(buy, reverse=True)
+    return _b
+
+
+_d83 = _deal82(_buchk83(sell=[(100, 5000)]),
+               _buchk83(buy=[(120, 100), (110, 100), (60, 800)]), "instant")
+check("b83 Kaufbuch mit Stufen: gehandelt wird nur, was sich lohnt (200 Stueck)",
+      _d83 is not None and _d83.get("units") == 200)
+check("b83 ... der Gewinn ist der Durchschnitt dieser 200, nicht der des besten Gebots",
+      _d83 is not None
+      and abs(_d83["profit_unit"] - ((23000 * (1 - _tax83) - 20000) / 200.0)) < 1e-9)
+check("b83 ... target_buy ist der durchschnittliche Erloes-Preis, das beste Gebot bleibt separat",
+      _d83 is not None and abs(_d83["target_buy"] - 115.0) < 1e-9
+      and _d83.get("target_buy_best") == 120)
+check("b83 ... Score = Gewinn x gehandelte Menge (nicht x Gesamtnachfrage 1000)",
+      _d83 is not None and abs(_d83["score"] - _d83["profit_unit"] * 200) < 1e-6)
+
+_d83 = _deal82(_buchk83(sell=[(100, 50), (110, 50), (200, 5000)]),
+               _buchk83(buy=[(150, 120)]), "instant")
+check("b83 auch die Quell-Leiter wird abgeschritten (Einkauf 105 im Schnitt)",
+      _d83 is not None and _d83.get("units") == 100
+      and abs(_d83["source_sell"] - 105.0) < 1e-9
+      and abs(_d83["profit_unit"] - (15000 * (1 - _tax83) - 10500) / 100.0) < 1e-9)
+
+_d83 = _deal82(_buchk83(sell=[(100, 5000)]),
+               _buchk83(buy=[(120, 1), (60, 999)]), "instant")
+check("b83 das Beispiel aus dem Issue: 1 Stueck zu 120 vor 999 zu 60 = genau 1 Einheit",
+      _d83 is not None and _d83.get("units") == 1)
+
+_d83 = _deal82(_buchk83(sell=[(100, 5000)]), _buchk83(buy=[(90, 100)]), "instant")
+check("b83 lohnt sich kein einziges Stueck, gibt es keinen Treffer", _d83 is None)
+
+_d83 = _deal82(_buch82(sell=[(100, 5000)], buy=[(120, 50)]),
+               {"sell_min": 0, "sell_qty": 0, "buy_max": 120.0, "buy_qty": 50},
+               "instant")
+check("b83 ohne Kaufbuch-Leiter (alte Daten) gilt das beste Gebot fuer die ganze Menge",
+      _d83 is not None and _d83.get("units") == 50
+      and abs(_d83["profit_unit"] - (120 * (1 - _tax83) - 100)) < 1e-9)
+
+_d83 = _deal82(_buchk83(sell=[(100, 5000)]), _buchk83(buy=[(200, 5000)]), "instant")
+check("b83 die Menge ist bei 1000 Stueck gedeckelt", _d83 is not None and _d83.get("units") == 1000)
+
+_d83 = _deal82(_buchk83(sell=[(100, 5000)]),
+               _buchk83(sell=[(130, 100)], buy=[(120, 100), (110, 100)]), "relist")
+check("b83 Relist ist unberuehrt: target_buy ist das beste Gebot, keine Menge",
+      _d83 is not None and _d83["target_buy"] == 120 and _d83.get("units") is None)
+
+import eve_trader.esi as _esi83
+
+
+class _Seite83:
+    headers = {"X-Pages": "1"}
+
+    def json(self):
+        return [{"location_id": 60003760, "type_id": 7, "is_buy_order": True,
+                 "price": 120.0, "volume_remain": 10},
+                {"location_id": 60003760, "type_id": 7, "is_buy_order": True,
+                 "price": 110.0, "volume_remain": 20},
+                {"location_id": 60003760, "type_id": 7, "is_buy_order": False,
+                 "price": 130.0, "volume_remain": 5},
+                {"location_id": 999, "type_id": 7, "is_buy_order": True,
+                 "price": 999.0, "volume_remain": 1}]
+
+
+_alt83 = _esi83._get_with_retry
+_esi83._get_with_retry = lambda *a, **k: _Seite83()
+try:
+    _agg83 = _hb82.fetch_hub_orders(10000002, 60003760)
+finally:
+    _esi83._get_with_retry = _alt83
+check("b83 fetch_hub_orders liefert das Kaufbuch (nur diese Station)",
+      sorted(_agg83[7].get("buy_ladder", [])) == [(110.0, 20), (120.0, 10)])
+
+_alt83b = _esi83.fetch_structure_orders_full
+_esi83.fetch_structure_orders_full = lambda *a, **k: {
+    7: {"sell": [(130.0, 5)], "buy": [(120.0, 10), (110.0, 20)],
+        "sell_min": 130.0, "buy_max": 120.0, "sell_qty": 5, "buy_qty": 30,
+        "sell_orders": 1, "buy_orders": 2}}
+try:
+    _agg83b = _hb82.load_location_orders(
+        {"kind": "structure", "structure_id": 1, "character_id": 2, "name": "x"},
+        {"client_id": "c"})
+finally:
+    _esi83.fetch_structure_orders_full = _alt83b
+check("b83 auch das Struktur-Ziel liefert das Kaufbuch",
+      _agg83b[7].get("buy_ladder") == [(120.0, 10), (110.0, 20)])
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.

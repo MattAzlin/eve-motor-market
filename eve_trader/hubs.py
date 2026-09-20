@@ -86,10 +86,11 @@ def fetch_hub_orders(region_id: int, station_id: int, progress=None) -> dict:
             tid = o["type_id"]
             a = agg.setdefault(tid, {"sell_min": 0.0, "buy_max": 0.0,
                                      "sell_qty": 0, "buy_qty": 0,
-                                     "sell_orders": []})
+                                     "sell_orders": [], "buy_ladder": []})
             if o["is_buy_order"]:
                 a["buy_qty"] += o["volume_remain"]
                 a["buy_max"] = max(a["buy_max"], o["price"])
+                a["buy_ladder"].append((o["price"], o["volume_remain"]))
             else:
                 a["sell_qty"] += o["volume_remain"]
                 a["sell_min"] = o["price"] if a["sell_min"] == 0 else min(a["sell_min"], o["price"])
@@ -156,7 +157,8 @@ def load_location_orders(loc: dict, settings, progress=None) -> dict:
         raise
     return {tid: {"sell_min": b["sell_min"], "buy_max": b["buy_max"],
                   "sell_qty": b["sell_qty"], "buy_qty": b["buy_qty"],
-                  "sell_orders": list(b["sell"])}
+                  "sell_orders": list(b["sell"]),
+                  "buy_ladder": list(b["buy"])}
             for tid, b in book.items()}
 
 
@@ -272,6 +274,54 @@ def bewerte_leeren_markt(tid, quell_preis, hist, tax, broker, ziel_eintrag=None)
 # sell order ("relist"). If the source book holds fewer, the average is over all
 # of them.
 MIN_FILL_QTY = 100
+# Most units a single deal is sized to (source depth in relist mode, matched
+# quantity in instant mode).
+MAX_FILL_QTY = 1000
+
+
+def _buy_ladder(t: dict) -> list:
+    """Destination bids [(price, qty)], highest first. Data without a ladder
+    (older callers) falls back to one level: the best bid over the whole buy
+    quantity, which is what instant mode used to assume."""
+    ladder = t.get("buy_ladder")
+    if ladder:
+        return sorted(ladder, reverse=True)
+    if (t.get("buy_max") or 0) > 0 and (t.get("buy_qty") or 0) > 0:
+        return [(t["buy_max"], t["buy_qty"])]
+    return []
+
+
+def _match_instant(asks: list, bids: list, tax: float, cap: int):
+    """Flip as many units as still pay: walk the source asks (cheapest first)
+    against the destination bids (highest first) while bid * (1 - tax) > ask.
+    Returns (units, cost, gross) - gross is what the bids pay before tax."""
+    units = 0
+    cost = gross = 0.0
+    ai = bi = 0
+    ask_left = bid_left = 0
+    ask_p = bid_p = 0.0
+    while units < cap:
+        if ask_left <= 0:
+            if ai >= len(asks):
+                break
+            ask_p, ask_left = asks[ai]
+            ai += 1
+            continue
+        if bid_left <= 0:
+            if bi >= len(bids):
+                break
+            bid_p, bid_left = bids[bi]
+            bi += 1
+            continue
+        if bid_p * (1 - tax) <= ask_p:
+            break
+        n = min(ask_left, bid_left, cap - units)
+        units += n
+        cost += n * ask_p
+        gross += n * bid_p
+        ask_left -= n
+        bid_left -= n
+    return units, cost, gross
 
 
 def arbitrage(source: dict, target: dict, settings: dict, filters: dict,
@@ -302,24 +352,35 @@ def arbitrage(source: dict, target: dict, settings: dict, filters: dict,
         t = target.get(tid)
         if not t:
             continue
-        # DEPTH THE SOURCE PRICE IS AVERAGED OVER. Instant mode sells into the
-        # destination's buy orders, so their quantity is the size. Relist mode
-        # sells via a sell order: the destination's buy orders say nothing about
-        # how much you buy, and with none at all want was 1 - the "average" was
-        # then the single cheapest order, so one ghost listing at the bottom of
-        # the source book set the price (1 unit @ 10 before 5,000 @ 100 showed a
-        # 1137 % margin instead of ~25 %). Relist therefore gets a minimum depth.
-        want = min(max(int(t.get("buy_qty", 0)),
-                       1 if sell_mode == "instant" else MIN_FILL_QTY), 1000)
-        filled = 0
-        spent = 0.0
-        for price, vol in ladder:
-            take = min(want - filled, vol)
-            spent += take * price
-            filled += take
-            if filled >= want:
-                break
-        buy = (spent / filled) if filled else sell_min
+        units = None
+        if sell_mode == "instant":
+            # INSTANT: trade exactly what the two order books allow. Selling
+            # into the bids only pays the best price for the top order; deeper
+            # units get the lower levels, so cost, proceeds and profit are all
+            # for the same matched quantity (1 unit @ 120 in front of 999 @ 60
+            # is a 1-unit deal, not a 1000-unit one).
+            units, cost, gross = _match_instant(ladder, _buy_ladder(t), tax,
+                                                MAX_FILL_QTY)
+            if not units:
+                continue              # not a single unit pays after tax
+            buy = cost / units
+        else:
+            # RELIST: the source price is averaged over a representative depth.
+            # The destination's buy orders say nothing about how much you buy,
+            # and with none at all want was 1 - the "average" was then the
+            # single cheapest order, so one ghost listing at the bottom of the
+            # source book set the price (1 unit @ 10 before 5,000 @ 100 showed a
+            # 1137 % margin instead of ~25 %). Hence a minimum depth.
+            want = min(max(int(t.get("buy_qty", 0)), MIN_FILL_QTY), MAX_FILL_QTY)
+            filled = 0
+            spent = 0.0
+            for price, vol in ladder:
+                take = min(want - filled, vol)
+                spent += take * price
+                filled += take
+                if filled >= want:
+                    break
+            buy = (spent / filled) if filled else sell_min
         if buy <= 0:
             continue
         if pmin and buy < pmin:
@@ -327,7 +388,7 @@ def arbitrage(source: dict, target: dict, settings: dict, filters: dict,
         if pmax and buy > pmax:
             continue
         if sell_mode == "instant":
-            sell_price = t["buy_max"]
+            sell_price = gross / units    # average proceeds of the matched units
             net = sell_price * (1 - tax)
             liquidity = t["buy_qty"]
         else:
@@ -348,13 +409,19 @@ def arbitrage(source: dict, target: dict, settings: dict, filters: dict,
             "type_id": tid,
             "source_sell": buy,
             "target_sell": t["sell_min"],
-            "target_buy": t["buy_max"],
+            # Instant: the AVERAGE price the matched units sell at (like
+            # source_sell is the average cost), so the shown price and the
+            # profit beside it agree. Relist: the best bid, as before.
+            "target_buy": sell_price if sell_mode == "instant" else t["buy_max"],
+            "target_buy_best": t["buy_max"],
+            "units": units,
             "profit_unit": profit,
             "margin": margin,
             "target_demand": t["buy_qty"],
             "target_supply": t["sell_qty"],
             "sell_orders": sorted(s.get("sell_orders", [])),
-            "score": profit * max(1, min(liquidity, 10_000)),
+            "score": profit * max(1, min(liquidity if units is None else units,
+                                         10_000)),
         })
     out.sort(key=lambda r: r["score"], reverse=True)
     return out[:cap]
