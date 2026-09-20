@@ -4222,6 +4222,10 @@ KATALOG = {
             "Keine Client-ID gesetzt. Bitte in den Einstellungen eintragen.",
         "Login cancelled or timed out.":
             "Login abgebrochen oder Zeit\u00fcberschreitung.",
+        "Login successful":
+            "Login erfolgreich",
+        "You can close this window and return to the tool.":
+            "Du kannst dieses Fenster schliessen und ins Tool zur\u00fcckkehren.",
         "State does not match (possible error).":
             "State stimmt nicht \u00fcberein (m\u00f6glicher Fehler).",
         "No token for character {cid}. Link it again.":
