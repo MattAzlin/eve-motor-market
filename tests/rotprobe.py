@@ -3671,9 +3671,9 @@ Source: "settings.json"; DestDir: "{app}"''',
     # gruene Traum-Marge, die es nie gab.
     ('Zielpreis wird aus dem Tageshoch geschaetzt',
      'eve_trader/hubs.py',
-     '''    preise = [r.get("average") or 0 for r in hist[-30:]
+     '''    preise = [r.get("average") or 0 for r in monat
               if (r.get("volume") or 0) > 0 and (r.get("average") or 0) > 0]''',
-     '''    preise = [r.get("highest") or r.get("average") or 0 for r in hist[-30:]
+     '''    preise = [r.get("highest") or r.get("average") or 0 for r in monat
               if (r.get("volume") or 0) > 0]''',
      'der Zielpreis ist der Durchschnitt, nicht das Tageshoch'),
     # SCHAETZUNG SIEHT AUS WIE EIN ABGELESENER PREIS.

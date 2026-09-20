@@ -4516,6 +4516,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         self.gold_btn.setEnabled(False)
         self.deal_status.setText(t("Gold search running …"))
         region = store.get_scan_region()
+        # broker fee of the SCAN hub, as compute_deals and the Swing gold search
+        # do - it used to be whatever another hub had left in the settings
+        self._sync_fees_to_hub(region)
         settings = self.settings
 
         def job(progress=None, should_cancel=None):

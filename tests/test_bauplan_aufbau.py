@@ -10770,6 +10770,151 @@ finally:
     _sc95.history_cached = _alt_hc95
 
 
+# ---------------------------------------------------------------- (b96)
+# GOLD-SUCHE SYNCT DIE GEBUEHR (Issue #33) UND DIE HISTORIE ZAEHLT TAGE, NICHT
+# ZEILEN (Issue #34). #33: `compute_deals` und die Swing-Gold-Suche stellen die
+# Makler-Gebuehr auf den Scan-Hub; `open_gold_search` nicht - es rechnete mit dem
+# Wert, den ein anderer Hub zuletzt hinterlassen hatte. #34: ESI liefert fuer
+# Tage OHNE Handel KEINE Zeile (0 Null-Zeilen in 4.08 Mio gespeicherten). Die
+# Statistik nahm `history[-N:]` als "die letzten N Tage": "Tagesvolumen" war der
+# Schnitt je HANDELSTAG, `active_ratio` stets 1.0, und der Regional-Check "in den
+# letzten 7 Tagen gehandelt" (`hist[-7:]`) konnte bei einem Item mit irgendeiner
+# Historie nie durchfallen. Jetzt: Fenster in KALENDERTAGEN.
+import datetime as _dt96
+import eve_trader.scanner as _sc96
+import eve_trader.hubs as _hb96
+
+# ---- #33
+_alt96 = (_st89.get_snapshot, _st89.get_scan_region, _sc96.find_deals,
+          _esi83.resolve_names, win._run, win._show_gold_dialog,
+          {k: win.settings.get(k, _LEER85) for k in _KEYS85})
+_gesehen96 = {}
+try:
+    _st89.get_snapshot = lambda: [{"type_id": 34, "sell_min": 100.0, "buy_max": 90.0}]
+    _st89.get_scan_region = lambda: 10000043                      # Amarr
+    win.settings.update({
+        "fees_from_skills": True, "skill_broker_relations": 5,
+        "hub_standings": {"jita": {"corp": 5.0, "faction": 5.0},
+                          "amarr": {"corp": 0.0, "faction": 0.0}},
+        "sales_tax_pct": 3.375, "broker_fee_pct": 9.99})           # Rest von einem anderen Hub
+
+    def _fd96(snapshot, settings, days, mode, filt, **k):
+        _gesehen96["broker"] = settings["broker_fee_pct"]
+        return []
+    _sc96.find_deals = _fd96
+    _esi83.resolve_names = lambda ids: {}
+    win._show_gold_dialog = lambda *a, **k: None
+    win._run = lambda w, done, fail_cb=None, **k: done(w._fn(*w._args, **w._kwargs))
+    win.open_gold_search()
+    eq("b96 Gold-Suche rechnet mit der Makler-Gebuehr des SCAN-Hubs (Amarr 1.5 %)",
+       _gesehen96.get("broker"), _cfg85.effective_broker_fee(5, 0.0, 0.0))
+finally:
+    (_st89.get_snapshot, _st89.get_scan_region, _sc96.find_deals,
+     _esi83.resolve_names, win._run, win._show_gold_dialog, _alt_set96) = _alt96
+    for _k96, _v96 in _alt_set96.items():
+        if _v96 is _LEER85:
+            win.settings.pop(_k96, None)
+        else:
+            win.settings[_k96] = _v96
+
+# ---- #34: window_stats
+_ENDE96 = _dt96.date(2026, 9, 1)
+
+
+def _zeilen96(tage_zurueck, vol=100):
+    return [{"date": (_ENDE96 - _dt96.timedelta(days=n)).isoformat(),
+             "average": 1000.0, "highest": 1050.0, "lowest": 950.0,
+             "volume": vol, "order_count": 20}
+            for n in sorted(tage_zurueck, reverse=True)]
+
+
+_taeglich96 = _zeilen96(range(0, 28))
+_selten96 = _zeilen96(range(0, 30, 3))                      # jeder 3. Tag: 10 Handelstage
+_ws96 = _sc96.window_stats(_selten96, 28)
+check("b96 selten gehandeltes Item: Tagesvolumen je KALENDERTAG (1000 / 28 = 35.7), nicht je Handelstag (100)",
+      _nahe95(_ws96["daily_vol"], 1000 / 28.0, 1e-9))
+check("b96 ... active_ratio = Handelstage / Kalendertage (10 / 28), nicht 1.0",
+      _nahe95(_ws96["active_ratio"], 10 / 28.0, 1e-9))
+check("b96 ... n bleibt die Zahl der Historien-Punkte im Fenster (10)", _ws96["n"] == 10)
+_wt96 = _sc96.window_stats(_taeglich96, 28)
+check("b96 taeglich gehandeltes Item: unveraendert (100 pro Tag, active_ratio 1.0)",
+      _nahe95(_wt96["daily_vol"], 100.0) and _nahe95(_wt96["active_ratio"], 1.0))
+check("b96 Regelmaessigkeit wirkt jetzt im Tradability-Score (selten < taeglich)",
+      0 < _ws96["trade_score"] < _wt96["trade_score"])
+_lang96 = _zeilen96(range(0, 90, 3))                         # 30 Zeilen ueber 90 Tage
+_wl96 = _sc96.window_stats(_lang96, 28)
+check("b96 das 28-Tage-Fenster sind 28 KALENDERTAGE (10 Zeilen), nicht die letzten 28 Zeilen",
+      _wl96["n"] == 10 and _nahe95(_wl96["daily_vol"], 1000 / 28.0, 1e-9))
+_kurz96 = _zeilen96(range(0, 10))                            # erst seit 10 Tagen gehandelt
+_wk96 = _sc96.window_stats(_kurz96, 28)
+check("b96 Historie kuerzer als das Fenster: geteilt durch die vorhandenen Tage (100), nicht durch 28",
+      _nahe95(_wk96["daily_vol"], 100.0) and _nahe95(_wk96["active_ratio"], 1.0))
+_wa96 = _sc96.window_stats(_selten96, 0)
+check("b96 ohne Fenster (days=0): die ganze Spanne in Kalendertagen (28 Tage, 10 Handelstage)",
+      _nahe95(_wa96["active_ratio"], 10 / 28.0, 1e-9))
+_ohne96 = [{k: v for k, v in r.items() if k != "date"} for r in _selten96]
+_wo96 = _sc96.window_stats(_ohne96, 28)
+check("b96 Zeilen OHNE Datum (aeltere Daten/Fixtures): wie bisher zeilenweise, nichts bricht",
+      _nahe95(_wo96["daily_vol"], 100.0) and _wo96["n"] == 10)
+check("b96 leere Historie stuerzt nicht ab", _sc96.window_stats([], 28)["daily_vol"] == 0.0)
+
+# ---- #34: find_deals filtert das selten gehandelte Item jetzt am Volumen
+_snap96 = [{"type_id": 7, "sell_min": 1500.0, "buy_max": 1000.0, "sell_qty": 500,
+            "buy_qty": 500, "sell_orders": 3, "buy_orders": 3,
+            "sell_best_qty": 50, "buy_best_qty": 50}]
+_hist96 = _zeilen96(range(0, 30, 3), vol=300)               # 300 je Handelstag, 10 Tage
+_alt_hc96 = _sc96.history_cached
+_sc96.history_cached = lambda tid, region=10000002, *a, **k: _hist96
+try:
+    _dg96 = {}
+    _res96 = _sc96.find_deals(_snap96, _SET95, 28, "flip",
+                              {"min_buy_ratio": 25, "min_daily_vol": 200, "max_items": 10},
+                              region=10000002, diag=_dg96)
+    check("b96 find_deals: 300 je Handelstag waren 'Tagesvolumen 300' (Filter 200 bestanden);"
+          " real sind es 107 pro Tag - das Item faellt am Volumen-Filter durch",
+          _res96 == [] and _dg96.get("vol_filtered") == 1)
+    _res96 = _sc96.find_deals(_snap96, _SET95, 28, "flip",
+                              {"min_buy_ratio": 25, "min_daily_vol": 100, "max_items": 10},
+                              region=10000002)
+    check("b96 ... mit Filter 100 kommt es durch, mit dem echten Wert (107)",
+          len(_res96) == 1 and _nahe95(_res96[0]["daily_vol"], 3000 / 28.0, 1e-9))
+finally:
+    _sc96.history_cached = _alt_hc96
+
+# ---- #34: Regional "leerer Zielmarkt" - "in den letzten 7 Tagen gehandelt"
+_HEUTE96 = _dt96.date(2026, 9, 20)
+
+
+def _tage96(tage_zurueck, vol=10, preis=1000.0):
+    return [{"date": (_HEUTE96 - _dt96.timedelta(days=n)).isoformat(),
+             "volume": vol, "average": preis}
+            for n in sorted(tage_zurueck, reverse=True)]
+
+
+def _leer96(hist):
+    try:
+        return _hb96.bewerte_leeren_markt(1, 500.0, hist, 0.036, 0.015, today=_HEUTE96)
+    except TypeError:
+        return "TypeError"
+
+
+_tot96 = _tage96(range(20, 50))                              # zuletzt vor 20 Tagen gehandelt
+check("b96 toter Markt mit ECHTEN Daten (Tage ohne Handel fehlen einfach): wird verworfen",
+      _leer96(_tot96) is None)
+_lebt96 = _leer96(_tage96(range(1, 31)))
+check("b96 taeglich gehandelter Markt: Treffer, 7 Handelstage, Ziel-Volumen 10 pro Tag",
+      isinstance(_lebt96, dict) and _lebt96.get("tage_mit_umsatz_7") == 7
+      and _nahe95(_lebt96.get("target_vol"), 10.0))
+_sel96 = _leer96(_tage96(range(1, 90, 3)))                    # 30 Zeilen ueber 90 Tage
+check("b96 selten gehandelt: nur die Handelstage der letzten 7 Tage zaehlen (3, nicht 7)",
+      isinstance(_sel96, dict) and _sel96.get("tage_mit_umsatz_7") == 3)
+check("b96 ... und das Ziel-Volumen ist der Schnitt je KALENDERTAG der letzten 30 (100/30, nicht 10)",
+      isinstance(_sel96, dict) and _nahe95(_sel96.get("target_vol"), 100 / 30.0, 1e-9))
+check("b96 das alte Verhalten fuer Zeilen ohne Datum bleibt (b51: 10 Zeilen ohne Umsatz = tot)",
+      _hb96.bewerte_leeren_markt(1, 500.0, _h51([10] * 20 + [0] * 10), _T51, _B51) is None
+      and _hb96.bewerte_leeren_markt(1, 500.0, _h51([10] * 30), _T51, _B51) is not None)
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.
