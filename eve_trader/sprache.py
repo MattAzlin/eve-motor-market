@@ -665,6 +665,30 @@ KATALOG = {
             "Noch keine Preise geladen \u2013 \u201e{button}\u201c dr\u00fccken.",
         "Age of the loaded prices: {age} (ESI keeps market data cached for ~5 min).":
             "Alter der geladenen Preise: {age} (ESI h\u00e4lt Marktdaten ~5 Min im Cache).",
+        "\u2192 Sell list":
+            "\u2192 Verkaufsliste",
+        "\u2192 Sell list ({n} items)":
+            "\u2192 Verkaufsliste ({n} Items)",
+        "{name} added to the sell list.":
+            "{name} auf die Verkaufsliste gesetzt.",
+        "{n} items added to the sell list.":
+            "{n} Items auf die Verkaufsliste gesetzt.",
+        "Its margin ({m} %) is below your target ({want} %).":
+            "Die Marge ({m} %) liegt unter deinem Ziel ({want} %).",
+        "{name} is already on the sell list.":
+            "{name} steht schon auf der Verkaufsliste.",
+        "{n} items are already on the sell list.":
+            "{n} Items stehen schon auf der Verkaufsliste.",
+        "{n} already on the list.":
+            "{n} standen schon drauf.",
+        "added to the sell list \u2713":
+            "auf der Verkaufsliste \u2713",
+        "Added by hand from the portfolio.":
+            "Von Hand aus dem Portfolio hinzugef\u00fcgt.",
+        "Remove manual entry":
+            "Hand-Eintrag entfernen",
+        "Manual entry removed":
+            "Hand-Eintrag entfernt",
         'Load prices':
             'Preise laden',
         'Copy prices → in game':

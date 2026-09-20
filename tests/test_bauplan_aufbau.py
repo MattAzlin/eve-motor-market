@@ -10915,6 +10915,164 @@ check("b96 das alte Verhalten fuer Zeilen ohne Datum bleibt (b51: 10 Zeilen ohne
       and _hb96.bewerte_leeren_markt(1, 500.0, _h51([10] * 30), _T51, _B51) is not None)
 
 
+# ---------------------------------------------------------------- (b98)
+# EIN PORTFOLIO-ITEM PER HAND AUF DIE VERKAUFSLISTE (Nutzer-Wunsch). Die Liste
+# wird aus dem Portfolio ABGELEITET: nur "verkaufsbereite" Items (Marge >=
+# Ziel-Marge, nicht schon am Markt), im Ziel-Preis-Modus alle mit bekanntem
+# Einkaufspreis - ein Item, das diese Regeln nicht erfuellt, konnte man nie
+# draufsetzen. Jetzt: Rechtsklick im Portfolio -> "Sell list" legt es in eine
+# gemerkte Menge von Hand-Eintraegen (settings["sell_manual_ids"]), die die
+# Regeln uebersteuert. Sie verschwinden, wenn nichts mehr davon im Bestand ist,
+# und lassen sich in der Verkaufsliste wieder entfernen.
+from eve_trader.market import Holding as _H98
+
+_alt98 = (getattr(win, "_holdings", []), win._pf_price_source_ok, win._table_icon,
+          getattr(win, "_sell_order_ids", set()), getattr(win, "_buy_order_ids", set()),
+          getattr(win, "_sell_hidden_ids", set()), _cfg85.save_settings,
+          {k: win.settings.get(k, _LEER85) for k in ("sell_manual_ids", "target_margin")},
+          _sp87._aktuell)
+_gesp98 = []
+
+
+def _h98(tid, marge, ek=100.0):
+    return _H98(type_id=tid, name=f"Item{tid}", quantity=100, avg_buy=ek,
+                jita_sell_min=150.0, jita_buy_max=120.0, net_unit=140.0,
+                margin_pct=marge, profit_total=4000.0, flag=marge >= 10)
+
+
+def _ids98():
+    return sorted(h.type_id for h in getattr(win, "_sell_rows", []))
+
+
+def _add98(tids):
+    _f = getattr(win, "_pf_add_to_sell_list", None)
+    return _f(tids) if _f is not None else None
+
+
+try:
+    win.settings["target_margin"] = 10
+    win.settings.pop("sell_manual_ids", None)
+    win._pf_price_source_ok = lambda: True
+    win._table_icon = lambda *a, **k: None
+    _cfg85.save_settings = lambda d: _gesp98.append(list(d.get("sell_manual_ids") or []))
+    _sp87.sprache_setzen("en")
+    win._holdings = [_h98(34, 20.0), _h98(35, 2.0), _h98(36, 20.0), _h98(37, 5.0, ek=0.0)]
+    win._buy_order_ids = set()
+    win._sell_order_ids = {36}                      # 36 hat schon eine Sell-Order am Markt
+    win._sell_hidden_ids = set()
+    win._sell_rows = []
+    win._render_sell_list()
+    eq("b98 Ausgangslage: nur das verkaufsbereite Item (34) steht auf der Liste",
+       _ids98(), [34])
+    _add98([35])
+    eq("b98 ein Item UNTER der Ziel-Marge (35, 2 % < 10 %) kommt auf Wunsch dazu",
+       _ids98(), [34, 35])
+    eq("b98 ... die Hand-Eintraege sind gemerkt", win.settings.get("sell_manual_ids"), [35])
+    check("b98 ... und auf Platte geschrieben (nicht nur im Speicher)",
+          _gesp98 and _gesp98[-1] == [35])
+    check("b98 die Statuszeile nennt, dass die Marge unter dem Ziel liegt",
+          "below your target" in win.statusBar().currentMessage()
+          and "Item35" in win.statusBar().currentMessage())
+    _add98([36])
+    eq("b98 auch ein Item, das schon am Markt liegt (36), kommt auf Wunsch dazu",
+       _ids98(), [34, 35, 36])
+    _n98 = len(win.settings.get("sell_manual_ids") or [])
+    _add98([34])
+    eq("b98 ein Item, das SCHON auf der Liste steht (34), wird nicht doppelt eingetragen",
+       (_ids98(), len(win.settings.get("sell_manual_ids") or [])), ([34, 35, 36], _n98))
+    check("b98 ... die Statuszeile sagt es ('already')",
+          "already" in win.statusBar().currentMessage())
+    _add98([37])
+    check("b98 auch ohne bekannten Einkaufspreis (37): kommt dazu, ohne dass etwas abstuerzt",
+          37 in _ids98())
+    _add98([999])
+    check("b98 ein Item, das gar nicht im Portfolio ist (999), wird ignoriert",
+          999 not in _ids98() and 999 not in (win.settings.get("sell_manual_ids") or []))
+    _z98 = {win.sell_table.item(r, 1).data(Qt.UserRole + 1): r
+            for r in range(win.sell_table.rowCount())}
+    def _tt98(tid):
+        _i = win.sell_table.item(_z98[tid], 1) if tid in _z98 else None
+        return _i.toolTip() if _i is not None else None
+    check("b98 die Hand-Zeile ist im Tooltip gekennzeichnet, die automatische nicht",
+          "by hand" in (_tt98(35) or "") and _tt98(34) is not None
+          and "by hand" not in _tt98(34))
+    win._sell_hide_temp(35)
+    check("b98 'vorerst ausblenden' funktioniert auch bei einer Hand-Zeile", 35 not in _ids98())
+    _add98([35])
+    check("b98 erneut hinzufuegen blendet sie wieder ein", 35 in _ids98())
+
+    # ---- entfernen
+    _rm98 = getattr(win, "_sell_remove_manual", None)
+    if _rm98 is not None:
+        _rm98(35)
+    check("b98 'Hand-Eintrag entfernen' nimmt 35 von der Liste (unter Ziel-Marge, also weg)",
+          35 not in _ids98() and 35 not in (win.settings.get("sell_manual_ids") or []))
+    if _rm98 is not None:
+        _rm98(34)
+    check("b98 ... ein automatisch bereites Item (34) bleibt trotzdem stehen",
+          34 in _ids98())
+
+    # ---- aufraeumen
+    win._holdings = [_h98(34, 20.0), _h98(35, 2.0)]          # 36 und 37 sind verkauft
+    win._render_sell_list()
+    eq("b98 Hand-Eintraege ohne Bestand (36, 37) verschwinden von selbst - "
+       "und tauchen nicht auf, wenn man sie spaeter wieder kauft",
+       sorted(win.settings.get("sell_manual_ids") or []), [])
+    win.settings["sell_manual_ids"] = [35, 36]
+    win._holdings = []                                        # Portfolio noch nicht geladen
+    win._render_sell_list()
+    eq("b98 solange das Portfolio NICHT geladen ist, wird nichts weggeraeumt",
+       win.settings.get("sell_manual_ids"), [35, 36])
+    win._holdings = [_h98(34, 20.0), _h98(35, 2.0)]
+
+    # ---- mehrere / Portfolio-Tabelle
+    win.settings["sell_manual_ids"] = []
+    win.pf_table.setRowCount(3)
+    from PySide6.QtWidgets import QTableWidgetItem as _QTWI98
+    for _r98, _t98 in enumerate((34, 35, 36)):
+        _c98 = _QTWI98(f"Item{_t98}")
+        _c98.setData(Qt.UserRole, _t98)
+        win.pf_table.setItem(_r98, 0, _c98)
+    win.pf_table.clearSelection()
+    win.pf_table.selectRow(0)
+    _sel98 = win.pf_table.selectionModel()
+    from PySide6.QtCore import QItemSelectionModel as _QISM98
+    _sel98.select(win.pf_table.model().index(1, 0),
+                  _QISM98.Select | _QISM98.Rows)
+    _tf98 = getattr(win, "_pf_menu_tids", None)
+    eq("b98 Rechtsklick auf eine MARKIERTE Zeile: alle markierten Items (34, 35)",
+       sorted(_tf98(0)) if _tf98 else None, [34, 35])
+    eq("b98 Rechtsklick auf eine NICHT markierte Zeile: nur diese (36)",
+       _tf98(2) if _tf98 else None, [36])
+    _srcm98 = __import__("inspect").getsource(type(win)._pf_menu)
+    check("b98 das Portfolio-Menue bietet '-> Sell list' an und ruft die Funktion",
+          't("\\u2192 Sell list' in _srcm98.replace("→", "\\u2192")
+          and "_pf_add_to_sell_list" in _srcm98)
+    _srcs98 = __import__("inspect").getsource(type(win)._sell_menu)
+    check("b98 das Verkaufslisten-Menue bietet das Entfernen an (nur fuer Hand-Zeilen)",
+          "_sell_remove_manual" in _srcs98)
+    _add98([34, 35])
+    eq("b98 mehrere auf einmal: beide stehen drin, die Meldung nennt die Zahl",
+       (_ids98(), "2 items" in win.statusBar().currentMessage()), ([34, 35], True))
+    _sp87.sprache_setzen("de")
+    check("b98 deutsch: Menue-Eintrag und Meldungen sind uebersetzt",
+          _t4("→ Sell list") != "→ Sell list"
+          and _t4("{name} added to the sell list.") != "{name} added to the sell list."
+          and _t4("Remove manual entry") != "Remove manual entry")
+finally:
+    (win._holdings, win._pf_price_source_ok, win._table_icon, win._sell_order_ids,
+     win._buy_order_ids, win._sell_hidden_ids, _cfg85.save_settings, _set98,
+     _sp87._aktuell) = _alt98
+    for _k98, _v98 in _set98.items():
+        if _v98 is _LEER85:
+            win.settings.pop(_k98, None)
+        else:
+            win.settings[_k98] = _v98
+    win.pf_table.setRowCount(0)
+    win._sell_rows = []
+    win.sell_table.setRowCount(0)
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.

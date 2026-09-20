@@ -2551,6 +2551,10 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         a_open = m.addAction(t("Open market in game"))
         a_chart = m.addAction(t("Show history"))
         a_cart = m.addAction(t("→ Shopping list"))
+        _tids = self._pf_menu_tids(it.row())
+        a_sell = m.addAction(
+            t("\u2192 Sell list ({n} items)").format(n=len(_tids)) if len(_tids) > 1
+            else t("\u2192 Sell list"))
         chosen = m.exec(self.pf_table.viewport().mapToGlobal(pos))
         if chosen == a_open:
             self.open_ingame_market(tid)
@@ -2562,6 +2566,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             self.mk_item.setCurrentIndex(idx)
             self._go_tab("market")
             self._plot_history()
+        elif chosen == a_sell:
+            self._pf_add_to_sell_list(_tids)
         elif chosen == a_cart:
             if tid not in self._cart_ids():
                 store.add_shopping(tid, nm, 1, 0, 0)
@@ -21554,6 +21560,77 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         self.sell_table.horizontalHeader().setSortIndicator(
             col, _Qt.AscendingOrder if asc else _Qt.DescendingOrder)
 
+    def _sell_manual_ids(self):
+        """type_ids put on the sell list by hand (kept in the settings)."""
+        return [int(i) for i in (self.settings.get("sell_manual_ids") or [])]
+
+    def _pf_menu_tids(self, row):
+        """type_ids for a portfolio context menu: every selected row when the
+        clicked row is one of them, otherwise just the clicked row."""
+        sel = {i.row() for i in self.pf_table.selectionModel().selectedRows()}
+        out = []
+        for r in (sorted(sel) if row in sel else [row]):
+            cell = self.pf_table.item(r, 0)
+            tid = cell.data(Qt.UserRole) if cell else None
+            if tid and tid not in out:
+                out.append(tid)
+        return out
+
+    def _pf_add_to_sell_list(self, tids):
+        """Puts portfolio items on the sell list BY HAND, whatever the rules that
+        normally fill it say (margin below target, already on the market, ...).
+        Items that are not in the portfolio are ignored; ones already visible on
+        the list are not added twice; a temporarily hidden one comes back."""
+        holdings = {h.type_id: h for h in (getattr(self, "_holdings", []) or [])}
+        shown = {h.type_id for h in (getattr(self, "_sell_rows", []) or [])}
+        manual = self._sell_manual_ids()
+        hidden = getattr(self, "_sell_hidden_ids", None)
+        added, already = [], []
+        for tid in tids:
+            h = holdings.get(tid)
+            if h is None:
+                continue
+            if tid in shown:
+                already.append(h)
+                continue
+            if hidden:
+                hidden.discard(tid)
+            if tid not in manual:
+                manual.append(tid)
+            added.append(h)
+        if added:
+            self.settings["sell_manual_ids"] = manual
+            config.save_settings(self.settings)
+            self._render_sell_list()
+            self._flash_tip(t("added to the sell list \u2713"))
+        if added:
+            if len(added) == 1:
+                msg = t("{name} added to the sell list.").format(name=added[0].name)
+                want = float(self.settings.get("target_margin", 0) or 0)
+                if (added[0].avg_buy or 0) > 0 and added[0].margin_pct < want:
+                    msg += " " + t("Its margin ({m} %) is below your target ({want} %)."
+                                   ).format(m=f"{added[0].margin_pct:.1f}", want=f"{want:g}")
+            else:
+                msg = t("{n} items added to the sell list.").format(n=len(added))
+            if already:
+                msg += " " + t("{n} already on the list.").format(n=len(already))
+        elif already:
+            msg = (t("{name} is already on the sell list.").format(name=already[0].name)
+                   if len(already) == 1 else
+                   t("{n} items are already on the sell list.").format(n=len(already)))
+        else:
+            return
+        self.statusBar().showMessage(msg)
+
+    def _sell_remove_manual(self, type_id):
+        """Takes a hand entry off the list. An item that is ready to sell by the
+        normal rules stays on it."""
+        ids = [i for i in self._sell_manual_ids() if i != type_id]
+        self.settings["sell_manual_ids"] = ids
+        config.save_settings(self.settings)
+        self._render_sell_list()
+        self._flash_tip(t("Manual entry removed"))
+
     def _sell_hide_temp(self, type_id):
         """Blendet eine Zeile nur vor\u00fcbergehend aus (l\u00f6scht nichts) - taucht bei
         "Preise laden" oder n\u00e4chstem Neuladen wieder auf."""
@@ -21583,6 +21660,24 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             # eingekauft waren.
             rows = [h for h in self._filtered_holdings()
                    if self._sell_ready(h) and h.type_id not in buy_open_ids]
+        # ITEMS PUT ON THE LIST BY HAND override the rules above (ready to sell /
+        # target mode / open orders). An entry whose item is no longer in the
+        # portfolio is dropped for good, so it cannot reappear when the item is
+        # bought again later - but only once the portfolio has been loaded.
+        _manual = self._sell_manual_ids()
+        if _manual:
+            _all_h = getattr(self, "_holdings", []) or []
+            if _all_h:
+                _have = {h.type_id for h in _all_h}
+                _keep = [i for i in _manual if i in _have]
+                if len(_keep) != len(_manual):
+                    self.settings["sell_manual_ids"] = _keep
+                    config.save_settings(self.settings)
+                    _manual = _keep
+            _seen = {h.type_id for h in rows}
+            rows = rows + [h for h in self._filtered_holdings()
+                           if h.type_id in _manual and h.type_id not in _seen]
+        _manual_set = set(_manual)
         _sort_col, _sort_asc = getattr(self, "_sell_sort", (None, True))
         if _sort_col is not None:
             rows = sorted(rows, key=lambda h: self._sell_sort_value(
@@ -21647,6 +21742,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             else:
                 nm.setForeground(QColor(theme.MUTED if done else theme.TEXT))
                 nm.setToolTip(t("Double-click copies the name \u2013 for searching in the inventory."))
+            if h.type_id in _manual_set:
+                nm.setToolTip(nm.toolTip() + "\n" + t("Added by hand from the portfolio."))
             self.sell_table.setItem(i, 1, nm)
 
             # col 2: Preis + Öffnen (direkt hinter dem Namen)
@@ -21822,12 +21919,16 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         a_chart = m.addAction(t("Show history"))
         a_open = m.addAction(t("Open market in game"))
         m.addSeparator()
+        a_rm = (m.addAction(" " + t("Remove manual entry"))
+                if tid in self._sell_manual_ids() else None)
         a_hide = m.addAction(" " + t("Hide temporarily"))
         chosen = m.exec(self.sell_table.viewport().mapToGlobal(pos))
         if chosen == a_chart:
             self._open_chart_for(tid, cell.text())
         elif chosen == a_open:
             self.open_ingame_market(tid)
+        elif a_rm is not None and chosen == a_rm:
+            self._sell_remove_manual(tid)
         elif chosen == a_hide:
             self._sell_hide_temp(tid)
 
