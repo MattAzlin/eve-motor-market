@@ -508,8 +508,8 @@ KATALOG = {
             'Mindest-Gewinn pro Stück in ISK. Filtert Centartikel trotz hoher Prozente raus.',
         'Minimum demand at the destination: the quantity currently requested there by buy orders (a snapshot).':
             'Mindest-Nachfrage im Ziel: Stückzahl, die dort GERADE auf Buy-Orders nachgefragt wird (Momentaufnahme).',
-        'Minimum Ø daily volume at the destination: how many units are actually traded there PER DAY (from the market history). The honest test whether the item sells there. 0 = off. NPC hubs only (structures have no history).':
-            'Mindest Ø Tagesvolumen im Ziel: wie viele Stück dort tatsächlich PRO TAG gehandelt werden (aus der Markthistorie). Der ehrliche Test, ob das Item sich dort verkauft. 0 = aus. Nur für NPC-Hubs (Strukturen haben keine Historie).',
+        "Minimum \u00d8 daily volume in the destination REGION: how many units are traded per day across ALL stations of that region (market history; ESI has no per-station history). An upper bound for the hub: a low value shows it will not sell there, a high one does not prove it does \u2013 check demand, supply and the order share in the cell tooltip. 0 = off. NPC hubs only (structures have no history).":
+            "Mindest \u00d8 Tagesvolumen in der Ziel-REGION: wie viele St\u00fcck pro Tag \u00fcber ALLE Stationen dieser Region gehandelt werden (Markthistorie; ESI kennt keine Historie je Station). Eine Obergrenze f\u00fcr den Hub: ein niedriger Wert zeigt, dass es dort nicht l\u00e4uft, ein hoher beweist es nicht \u2013 Nachfrage, Angebot und den Order-Anteil im Zellen-Tooltip mitpr\u00fcfen. 0 = aus. Nur f\u00fcr NPC-Hubs (Strukturen haben keine Historie).",
         # ---- Tooltips: Filter-Feinheiten und Einstellungen ----
         'THE daytrade proof from the in-game price table: per trading day it measures how deep the daily LOW reaches towards the buy order AND how high the daily HIGH reaches towards the sell order - the MINIMUM of both sides counts, averaged over the window. 100 % = both order sides are fully served every day (a perfect flip item, low at the bottom + high at the top). 0 = filter off.':
             'DER Daytrade-Beleg aus der Ingame-Preistabelle: pro Handelstag wird gemessen, wie tief das Tages-LOW zur Buy-Order reicht UND wie hoch das Tages-HIGH zur Sell-Order reicht - gewertet wird das MINIMUM beider Seiten, gemittelt über das Fenster. 100 % = jeden Tag werden BEIDE Order-Seiten voll bedient (perfektes Flip-Item, Low unten + High oben). 0 = Filter aus.',
@@ -922,8 +922,8 @@ KATALOG = {
             'Min Gewinn/Stk (ISK)',
         'Min demand (buy now)':
             'Min Nachfrage (Buy jetzt)',
-        'Min Ø daily volume destination':
-            'Min Ø Tagesvolumen Ziel',
+        "Min \u00d8 daily volume dest. region":
+            "Min \u00d8 Tagesvolumen Zielregion",
         'Min profit/m³ (ISK)':
             'Min Gewinn/m³ (ISK)',
         'Price from':
@@ -940,8 +940,8 @@ KATALOG = {
             'Nachfrage Ziel',
         'Supply destination':
             'Angebot Ziel',
-        'Ø daily vol destination':
-            'Ø Tagesvol Ziel',
+        "\u00d8 daily vol dest. region":
+            "\u00d8 Tagesvol Zielregion",
         'Small safe dips · quick recovery':
             'Kleine sichere Dips · schnelle Erholung',
         'Deep dips · patience & a thick cushion':
@@ -1087,8 +1087,8 @@ KATALOG = {
             "Holt deine echten, aktuell offenen Sell-Order-Preise von ESI - zeigt in der Spalte \u201eIn Sell-Order zu\u201c, zu welchem Preis du ein Item TATS\u00c4CHLICH gerade listest (nicht nur den theoretischen Zielpreis).",
         "Which columns are visible. Default: Qty, \u00d8 buy, Margin, Status, Orders \u2013 the rest can be switched on.":
             "Welche Spalten sichtbar sind. Standard: Menge, \u00d8-Kauf, Marge, Status, Orders \u2013 der Rest ist zuschaltbar.",
-        "\u26a0 There is currently NO sell order at the destination. It traded there on {days} of the last 7 days \u2013 the market is alive, just empty. The destination price is the 30-day AVERAGE from history, not a price read off an order. Profit and margin are estimates.":
-            "\u26a0 Am Ziel liegt derzeit KEINE Verkaufs-Order. Gehandelt wurde dort an {days} der letzten 7 Tage \u2013 der Markt ist also lebendig, nur leer. Der Zielpreis ist der 30-Tage-DURCHSCHNITT aus der Historie, keine abgelesene Order. Gewinn und Marge sind gesch\u00e4tzt.",
+        "\u26a0 There is currently NO sell order at the destination. It traded in the destination region on {days} of the last 7 days (history is per region, not per station) \u2013 the market is alive, just empty. The destination price is the 30-day AVERAGE from history, not a price read off an order. Profit and margin are estimates.":
+            "\u26a0 Am Ziel liegt derzeit KEINE Verkaufs-Order. In der Zielregion wurde an {days} der letzten 7 Tage gehandelt (die Historie gilt je Region, nicht je Station) \u2013 der Markt ist also lebendig, nur leer. Der Zielpreis ist der 30-Tage-DURCHSCHNITT aus der Historie, keine abgelesene Order. Gewinn und Marge sind gesch\u00e4tzt.",
         "Buyer":
             "Kauft",
         "Seller":
@@ -2088,8 +2088,8 @@ KATALOG = {
             "Motor Market: Ein Klick auf eine Deal-Zeile zeigt unten die echte Order-Leiter (Sell-Orders) \u2013 so siehst du, wie viel sich zum Zielpreis wirklich lohnt, bevor ein Geister-Auftrag dich t\xe4uscht.",
         "Motor Market: \u201eMin \xd8 daily volume\u201c is your most important filter against shelf warmers \u2013 a huge spread is worthless if the item barely trades.":
             "Motor Market: \u201eMin \xd8-Tagesvolumen\u201c ist dein wichtigster Filter gegen Ladenh\xfcter \u2013 ein riesiger Spread n\xfctzt nichts, wenn das Item kaum gehandelt wird.",
-        "Motor Market: in Regional Trading, \u201e\xd8 daily vol destination\u201c shows whether an item sells at the destination at all. Red = hardly anyone buys, better keep away.":
-            "Motor Market: Im Regional-Trading zeigt \u201e\xd8 Tagesvol Ziel\u201c, ob ein Item am Zielort \xfcberhaupt verkauft wird. Rot = kauft kaum jemand, lieber Finger weg.",
+        "Motor Market: in Regional Trading, \u201e\u00d8 daily vol dest. region\u201c shows whether an item sells in the destination region at all. Red = hardly anyone buys, better keep away.":
+            "Motor Market: Im Regional-Trading zeigt \u201e\u00d8 Tagesvol Zielregion\u201c, ob ein Item in der Zielregion \u00fcberhaupt verkauft wird. Rot = kauft kaum jemand, lieber Finger weg.",
         "Motor Market: add your own stations or citadels for regional trading via \u201e\uff0b Structure\u201c \u2013 park a character with market access there and link it.":
             "Motor Market: Eigene Stationen oder Citadels f\xfcrs Regional-Trading \xfcber \u201e\uff0b Struktur\u201c hinzuf\xfcgen \u2013 Charakter mit Marktzugang davor abstellen und verkn\xfcpfen.",
         "Motor Market: right-click on a row opens the item in the in-game market (market window must be open in game) or puts it on the shopping list.":
@@ -2212,8 +2212,8 @@ KATALOG = {
             "Gewinn/m\u00b3 zu klein",
         "destination demand (order book) too thin":
             "Ziel-Nachfrage (Orderbuch) zu d\u00fcnn",
-        "destination sales (history) too small":
-            "Ziel-Absatz (Historie) zu klein",
+        "destination region sales (history) too small":
+            "Absatz in der Zielregion (Historie) zu klein",
         "\u2193 falling":
             "\u2193 f\u00e4llt",
         "\u2192 sideways":
@@ -2736,8 +2736,8 @@ KATALOG = {
             "Nachfrage im Ziel JETZT: St\u00fcck auf offenen Buy-Orders (Momentaufnahme).",
         "Supply at the destination: units on sell orders.":
             "Angebot im Ziel: St\u00fcck auf Sell-Orders.",
-        "\u00d8 daily volume at the destination (market history): how many units actually trade there per day. \u201e\u2014\u201c = no history (e.g. structure).":
-            "\u00d8 Tagesvolumen im Ziel (Markthistorie): wie viele St\u00fcck dort pro Tag tats\u00e4chlich gehandelt werden. \u201e\u2014\u201c = keine Historie (z. B. Struktur).",
+        "\u00d8 daily volume in the destination region (market history, covers every station of the region \u2013 ESI has no per-station history): an upper bound for the hub. \u201e\u2014\u201c = no history (e.g. structure).":
+            "\u00d8 Tagesvolumen in der Zielregion (Markthistorie, umfasst jede Station der Region \u2013 ESI kennt keine Historie je Station): eine Obergrenze f\u00fcr den Hub. \u201e\u2014\u201c = keine Historie (z. B. Struktur).",
         "Best all-round flips: provably BOTH sides served daily, real depth at the best price, short cycles. Competition is not filtered hard - weak deals slide down the ranking.":
             "Beste Allround-Flips: beweisbar t\xe4glich BEIDE Seiten bedient, echte Tiefe am Bestpreis, kurze Zyklen. Konkurrenz wird nicht hart gefiltert - schwache Deals rutschen im Ranking nach unten.",
         "Cheap bulk goods only pay off with VOLUME: \u2265300 units/day, \u226525 at the best price, \u226520 units/day realistic for you.":
@@ -3946,10 +3946,12 @@ KATALOG = {
             "\u26a0 Dump-Verdacht: Der Preissturz lief bei MASSIV erh\u00f6htem Volumen (\u22652.5x Median) - das riecht nach echter Neubewertung (Patch/Meta), nicht nach Dip. Der alte Preis kommt dann oft NICHT zur\u00fcck. Wertung ist bereits stark ged\u00e4mpft.",
         "The window's normal price was distorted upwards by a short spike (user case: outlier months ago, decay phase inside the window). The target was secured to the yearly baseline (median of the full history) - the expectation is honest accordingly.":
             "Der Fenster-Normalpreis war durch einen Kurz-Spike nach oben verzerrt (Nutzer-Fall: Ausrei\u00dfer vor Monaten, Abkling-Phase im Fenster). Ziel wurde auf die Jahres-Basislinie (Median der vollen Historie) abgesichert - Erwartung ist entsprechend ehrlich.",
-        "S % = sell exit evidence at the DESTINATION: share of the spread the daily highs there reach on average towards the sell order. High = your sell order at the destination is realistically served; low = trading only happens on the buy side \u2013 you would sit on the goods.":
-            "S % = Sell-Exit-Beleg am ZIEL: Anteil des Spreads, den die Tages-Hochs dort im Schnitt Richtung Sell-Order erreichen. Hoch = deine Sell-Order am Ziel wird realistisch bedient; niedrig = Handel findet nur an der Buy-Seite statt \u2013 du s\u00e4\u00dfest auf der Ware.",
-        "Hardly anything is traded here at the destination \u2013 careful, it may not sell.":
-            "Im Ziel wird hier kaum/nichts gehandelt \u2013 Vorsicht, bleibt evtl. liegen.",
+        "S % = sell exit evidence for the destination: share of the spread the daily highs in the destination region reach on average towards the sell order. High = your sell order at the destination is realistically served; low = trading only happens on the buy side \u2013 you would sit on the goods.":
+            "S % = Sell-Exit-Beleg f\u00fcr das Ziel: Anteil des Spreads, den die Tages-Hochs in der Zielregion im Schnitt Richtung Sell-Order erreichen. Hoch = deine Sell-Order am Ziel wird realistisch bedient; niedrig = Handel findet nur an der Buy-Seite statt \u2013 du s\u00e4\u00dfest auf der Ware.",
+        "Hardly anything is traded in the destination region \u2013 careful, it may not sell.":
+            "In der Zielregion wird kaum/nichts gehandelt \u2013 Vorsicht, bleibt evtl. liegen.",
+        "{pct} % of the open orders for this item in the destination region stand at this hub station.":
+            "{pct} % der offenen Orders f\u00fcr dieses Item in der Zielregion liegen an dieser Hub-Station.",
         "Copies build plan/swing/manual items (name + quantity) as multibuy for instant purchase from sell orders. Daytrade items are deliberately NOT copied \u2013 they need their own, cheaper buy order instead of buying instantly at the sell price.":
             "Kopiert Bauplan-/Swing-/manuelle Items (Name + Menge) als Multibuy f\u00fcr den Sofortkauf aus Sell-Orders. Daytrade-Items werden bewusst NICHT mitkopiert \u2013 die brauchen eine eigene, g\u00fcnstigere Buy-Order statt sofort zum Sell-Preis zu kaufen.",
         "Fetches your open market orders and marks in red which items you already have in a buy order in game.":

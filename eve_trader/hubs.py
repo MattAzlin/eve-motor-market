@@ -78,9 +78,11 @@ def fetch_hub_orders(region_id: int, station_id: int, progress=None) -> dict:
                                 headers=_UA, timeout=40)
     pages = int(first.headers.get("X-Pages", "1"))
     agg = {}
+    region_n = {}          # orders per type in the WHOLE region, all stations
 
     def fold(orders):
         for o in orders:
+            region_n[o["type_id"]] = region_n.get(o["type_id"], 0) + 1
             if o["location_id"] != station_id:
                 continue
             tid = o["type_id"]
@@ -130,6 +132,10 @@ def fetch_hub_orders(region_id: int, station_id: int, progress=None) -> dict:
             "loaded (e.g. page {p}) \u2013 the comparison would be distorted, "
             "please try again.").format(n=len(still_failed), pages=pages,
                                          p=still_failed[0]))
+    # ESI has market history per REGION only. How many of the region's orders
+    # for the item stand at this station is the evidence we have for the hub.
+    for tid, a in agg.items():
+        a["region_orders"] = region_n.get(tid, 0)
     return agg
 
 
@@ -437,6 +443,15 @@ def arbitrage(source: dict, target: dict, settings: dict, filters: dict,
             continue
         if min_liq and liquidity < min_liq:
             continue
+        # Share of the region's orders for this item that stand at the
+        # destination station (None when the region count is unknown, e.g. a
+        # structure). Evidence for the hub, not an estimate of its volume.
+        region_n = t.get("region_orders")
+        share = None
+        if region_n:
+            here = sum(len(x) for x in (t.get("sell_orders"), t.get("buy_ladder"))
+                       if isinstance(x, (list, tuple)))
+            share = min(1.0, here / region_n)
         out.append({
             "type_id": tid,
             "source_sell": buy,
@@ -451,6 +466,7 @@ def arbitrage(source: dict, target: dict, settings: dict, filters: dict,
             "margin": margin,
             "target_demand": t["buy_qty"],
             "target_supply": t["sell_qty"],
+            "target_order_share": share,
             "sell_orders": sorted(s.get("sell_orders", [])),
             "score": profit * max(1, min(liquidity if units is None else units,
                                          10_000)),
