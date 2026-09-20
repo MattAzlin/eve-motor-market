@@ -10041,6 +10041,152 @@ finally:
     win._ord_laeuft = False
 
 
+# ---------------------------------------------------------------- (b91)
+# ORDER UPDATE: UEBERHOLTE LAEUFE ZAEHLEN NICHT, EIN AUSGEFALLENER CHARAKTER
+# WIRD GENANNT (Issues #19 und #20). `_load_order_mods` startet der Knopf, die
+# Charakterauswahl und das Oeffnen des Reiters; `_ord_laeuft` wurde gesetzt,
+# aber nie geprueft, und die Ergebnisse galten in der Reihenfolge des EINTREFFENS:
+# ein aelterer Lauf, der zuletzt fertig wurde, ueberschrieb die neuen Daten
+# ("899 top" wurde zu "1'000 undercut"). Jetzt traegt jeder Lauf eine Nummer,
+# nur der juengste zaehlt (Ergebnis UND Fehler). Ausserdem: scheiterte der Abruf
+# EINES Charakters (`except: pass`), fehlten dessen Orders wortlos - jetzt nennt
+# ein Hinweis den Namen, und die Statuszeile zaehlt mit.
+_alt91 = (_st89.list_characters, _esi83.fetch_character_orders,
+          _esi83.fetch_type_orders, _esi83.resolve_names, win._run,
+          win._table_icon, _sp87._aktuell)
+_queue91 = []
+
+
+def _neu91():
+    _queue91.clear()
+    win.sellord_table.setRowCount(0)
+    win._ordmod_sell = []
+    win._ordmod_buy = []
+    win._ord_laeuft = False
+
+
+def _job91(preis):
+    """Den Job des zuletzt eingereihten Laufs jetzt ausfuehren (Netz gestellt)."""
+    _esi83.fetch_character_orders = lambda c, cid: [_order89(34, preis, 1)]
+    _w, _done, _fail = _queue91[-1]
+    return _w._fn(*_w._args, **_w._kwargs), _done, _fail
+
+
+def _preis91():
+    return (win.sellord_table.rowCount(),
+            win.sellord_table.item(0, 1).text() if win.sellord_table.rowCount() else None)
+
+
+try:
+    _st89.list_characters = lambda: [{"character_id": 1, "character_name": "Alpha"}]
+    _esi83.fetch_type_orders = lambda tid, s, r: {"sell": [(900.0, 5)], "buy": []}
+    _esi83.resolve_names = lambda ids: {i: f"Item{i}" for i in ids}
+    win._run = lambda w, done, fail_cb=None, **k: _queue91.append((w, done, fail_cb))
+    win._table_icon = lambda *a, **k: None
+    _sp87.sprache_setzen("en")
+
+    # ---- #19: aelterer Lauf trifft NACH dem neueren ein
+    _neu91()
+    win._load_order_mods()
+    _d1, _done1, _fail1 = _job91(1000.0)          # aelterer Lauf, alter Preis
+    win._load_order_mods()
+    _d2, _done2, _fail2 = _job91(899.0)           # juengerer Lauf, neuer Preis
+    _done2(_d2)
+    _done1(_d1)
+    eq("b91 aelterer Lauf trifft NACH dem neueren ein: es bleibt der neue Stand (899)",
+       _preis91(), (1, "899"))
+
+    # ---- #19: aelterer Lauf trifft VOR dem neueren ein
+    _neu91()
+    win._load_order_mods()
+    _d1, _done1, _fail1 = _job91(1000.0)
+    win._load_order_mods()
+    _d2, _done2, _fail2 = _job91(899.0)
+    _done1(_d1)
+    eq("b91 aelterer Lauf trifft VOR dem neueren ein: er wird uebergangen (Tabelle leer)",
+       _preis91()[0], 0)
+    check("b91 ... und der neuere Lauf gilt weiter als laufend",
+          getattr(win, "_ord_laeuft", None) is True)
+    _done2(_d2)
+    eq("b91 dann kommt der neue Stand", _preis91(), (1, "899"))
+    check("b91 ... und erst jetzt ist nichts mehr in Arbeit",
+          getattr(win, "_ord_laeuft", None) is False)
+
+    # ---- #19: der Fehler eines ueberholten Laufs meldet nichts
+    _neu91()
+    win._load_order_mods()
+    _d1, _done1, _fail1 = _job91(1000.0)
+    win._load_order_mods()
+    _d2, _done2, _fail2 = _job91(899.0)
+    _done2(_d2)
+    _vorher91 = win.statusBar().currentMessage()
+    _fail1("boom")
+    check("b91 der Fehler eines ueberholten Laufs ueberschreibt die Statuszeile nicht",
+          win.statusBar().currentMessage() == _vorher91
+          and "boom" not in win.statusBar().currentMessage())
+
+    # ---- #19: ein einzelner Lauf funktioniert wie vorher
+    _neu91()
+    win._load_order_mods()
+    _d1, _done1, _fail1 = _job91(1000.0)
+    _done1(_d1)
+    eq("b91 ein einzelner Lauf zeigt seinen Stand (1'000, undercut)",
+       (_preis91(), win.sellord_table.item(0, 5).text()),
+       ((1, "1'000"), _t4("⚠ undercut")))
+
+    # ---- #20: ein Charakter faellt aus
+    _st89.list_characters = lambda: [{"character_id": 1, "character_name": "Alpha"},
+                                     {"character_id": 2, "character_name": "Beta"}]
+    _neu91()
+
+    def _chars91(fehl):
+        def _f(c, cid):
+            if cid in fehl:
+                raise RuntimeError("403")
+            return [_order89(34, 1000.0, cid)]
+        return _f
+    _esi83.fetch_character_orders = _chars91({2})
+    win._load_order_mods()
+    _w91, _done91, _ = _queue91[-1]
+    _done91(_w91._fn(*_w91._args, **_w91._kwargs))
+    _lab91 = getattr(win, "ord_fehl", None)
+    eq("b91 die Orders des anderen Charakters werden weiter gezeigt (1 Zeile)",
+       win.sellord_table.rowCount(), 1)
+    check("b91 Hinweis nennt den ausgefallenen Charakter (Beta), nicht den anderen",
+          _lab91 is not None and not _lab91.isHidden()
+          and "Beta" in _lab91.text() and "Alpha" not in _lab91.text()
+          and "could not be loaded" in _lab91.text())
+    check("b91 die Statuszeile zaehlt den Ausfall mit",
+          "1 character(s) could not be loaded" in win.statusBar().currentMessage())
+    _sp87.sprache_setzen("de")
+    _neu91()
+    win._load_order_mods()
+    _w91, _done91, _ = _queue91[-1]
+    _done91(_w91._fn(*_w91._args, **_w91._kwargs))
+    check("b91 deutsch: Hinweis und Statuszeile uebersetzt",
+          _lab91 is not None and "konnten nicht geladen" in _lab91.text()
+          and "nicht geladen" in win.statusBar().currentMessage())
+    _sp87.sprache_setzen("en")
+    _neu91()
+    _esi83.fetch_character_orders = _chars91(set())
+    win._load_order_mods()
+    _w91, _done91, _ = _queue91[-1]
+    _done91(_w91._fn(*_w91._args, **_w91._kwargs))
+    check("b91 faellt kein Charakter mehr aus, verschwindet der Hinweis wieder",
+          _lab91 is not None and _lab91.isHidden()
+          and "could not be loaded" not in win.statusBar().currentMessage())
+    eq("b91 dann sind beide Charaktere in der Liste (2 Zeilen)",
+       win.sellord_table.rowCount(), 2)
+finally:
+    (_st89.list_characters, _esi83.fetch_character_orders, _esi83.fetch_type_orders,
+     _esi83.resolve_names, win._run, win._table_icon, _sp87._aktuell) = _alt91
+    win._ordmod_sell = []
+    win._ordmod_buy = []
+    win.sellord_table.setRowCount(0)
+    win.buyord_table.setRowCount(0)
+    win._ord_laeuft = False
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.

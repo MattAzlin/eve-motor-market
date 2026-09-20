@@ -681,6 +681,10 @@ KATALOG = {
             "Der Marktabruf f\u00fcr dieses Item ist fehlgeschlagen \u2013 der aktuelle Preis ist unbekannt, der Status l\u00e4sst sich nicht beurteilen. \u201e{button}\u201c erneut dr\u00fccken.",
         ", {n} could not be checked":
             ", {n} nicht pr\u00fcfbar",
+        "\u26a0 Orders of {names} could not be loaded \u2013 the lists below are incomplete. Press \u201e{button}\u201c again.":
+            "\u26a0 Orders von {names} konnten nicht geladen werden \u2013 die Listen unten sind unvollst\u00e4ndig. \u201e{button}\u201c erneut dr\u00fccken.",
+        ", {n} character(s) could not be loaded":
+            ", {n} Charakter(e) nicht geladen",
         'Check orders':
             'Orders prüfen',
         'Next ▶':
