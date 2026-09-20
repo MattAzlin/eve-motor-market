@@ -647,6 +647,24 @@ KATALOG = {
             'Suche Regional-Arbitrage …',
         'Sell list':
             'Verkaufsliste',
+        "Age":
+            "Alter",
+        "How old the data behind a row is: the older of your orders and the market prices. Amber after 5 min, red after 20 min.":
+            "Wie alt die Daten hinter einer Zeile sind: das \u00c4ltere aus deinen Orders und den Marktpreisen. Bernstein nach 5 Min, rot nach 20 Min.",
+        "How old the loaded prices are. Amber after 5 min, red after 20 min.":
+            "Wie alt die geladenen Preise sind. Bernstein nach 5 Min, rot nach 20 Min.",
+        "No market data for this row \u2013 the lookup failed.":
+            "F\u00fcr diese Zeile gibt es keine Marktdaten \u2013 der Abruf ist fehlgeschlagen.",
+        "Age of the data behind this row \u2013 the older of the two counts.":
+            "Alter der Daten hinter dieser Zeile \u2013 das \u00c4ltere von beiden z\u00e4hlt.",
+        "Your orders: {age} (ESI keeps your orders cached for up to ~20 min).":
+            "Deine Orders: {age} (ESI h\u00e4lt deine Orders bis zu ~20 Min im Cache).",
+        "Market prices: {age} (ESI keeps market data cached for ~5 min).":
+            "Marktpreise: {age} (ESI h\u00e4lt Marktdaten ~5 Min im Cache).",
+        "No prices loaded yet \u2013 press \u201e{button}\u201c.":
+            "Noch keine Preise geladen \u2013 \u201e{button}\u201c dr\u00fccken.",
+        "Age of the loaded prices: {age} (ESI keeps market data cached for ~5 min).":
+            "Alter der geladenen Preise: {age} (ESI h\u00e4lt Marktdaten ~5 Min im Cache).",
         'Load prices':
             'Preise laden',
         'Copy prices → in game':

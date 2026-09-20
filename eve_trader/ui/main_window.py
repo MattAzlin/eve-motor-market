@@ -17,6 +17,7 @@ from .. import (auth, config, esi, hubs, industry, market, reprocess, scanner,
 from ..sprache import t
 from ..workers import Worker
 from . import theme
+from . import dataage
 from . import icons
 from .mw_basis import (KEIN_DECRYPTOR, IskGroupedSpin, IskMillionSpin,
                        KartenSortierer, MinimizableDialog, NumericItem,
@@ -648,6 +649,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         self._age_timer.setInterval(30000)
         self._age_timer.timeout.connect(self.update_ages)
         self._age_timer.start()
+        # Age cells of the order tables and the shopping list tick every 10 s.
+        self._age_cell_timer = QTimer(self)
+        self._age_cell_timer.setInterval(10000)
+        self._age_cell_timer.timeout.connect(self._age_tick)
+        self._age_cell_timer.start()
         # NUTZER (Sitzung 8): "Der Update-Knopf kommt ganz oben rechts, auf
         # Hoehe der Markt-Scan-/Baurezepte-Knoepfe." Stretch davor schiebt
         # ihn an den rechten Rand DIESER Zeile.
@@ -20310,10 +20316,18 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         (der Stand ist dann der alte oder leer - "unbekannt", nicht "keine Orders")."""
         book, failed = self._structure_agg_ex(structure, force=force)
         book = book or {}
+        # when the DATA was generated (ESI's Last-Modified); a book written by a
+        # scan has no such time - then the time we stored it
+        _as_of = getattr(book, "as_of", None)
+        if _as_of is None:
+            _c = (getattr(self, "_struct_cache", None) or {}).get(structure["structure_id"])
+            _as_of = _c[0] if _c else None
         out = {}
         for t in type_ids:
             b = book.get(t, {})
             out[t] = {"sell": list(b.get("sell", [])), "buy": list(b.get("buy", []))}
+            if _as_of is not None:
+                out[t]["as_of"] = _as_of
             if failed:
                 out[t]["failed"] = True
         return out
@@ -20760,7 +20774,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         # wurde bewusst entfernt (Feature raus, vereinfacht den Wagen). Die
         # 'done'-Spalte in der DB bleibt aus Kompatibilität bestehen, wird aber
         # nicht mehr gelesen/geschrieben.
-        self.sh_table = QTableWidget(0, 10)
+        self.sh_table = QTableWidget(0, 11)
         self.sh_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.sh_table.setSelectionMode(QTableWidget.SingleSelection)
         # SPALTEN-AUSDUENNUNG (Nutzer, Layout-Programm: "zu viele Zahlen -
@@ -20770,7 +20784,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         # AUSGEBLENDET - nichts geloescht, nur weggeraeumt (Regel 6).
         self.sh_table.setHorizontalHeaderLabels(
             [t("Item"), "", t("Qty"), t("\u00d8 buy now"), t("Buy order"), t("\u00d8 sale"),
-             t("Margin"), t("Proceeds (net)"), t("Profit"), ""])
+             t("Margin"), t("Proceeds (net)"), t("Profit"), t("Age"), ""])
+        self.sh_table.horizontalHeaderItem(9).setToolTip(
+            t("How old the loaded prices are. Amber after 5 min, red after 20 min."))
         self.sh_table.setColumnHidden(4, True)
         self.sh_table.setColumnHidden(7, True)
         # NUTZER-UMENTSCHEIDUNG (Sitzung 8, woertlich): "Erwarteter Erloes
@@ -20790,10 +20806,10 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         hdr.setSectionResizeMode(0, QHeaderView.Stretch)    # Item-Name
         hdr.setSectionResizeMode(1, QHeaderView.Fixed)      # Buy/Öffnen-Buttons
         self.sh_table.setColumnWidth(1, 290)
-        for col in range(2, 9):
+        for col in range(2, 10):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(9, QHeaderView.Fixed)      # Löschen
-        self.sh_table.setColumnWidth(9, 80)
+        hdr.setSectionResizeMode(10, QHeaderView.Fixed)     # Löschen
+        self.sh_table.setColumnWidth(10, 80)
         self.sh_table.verticalHeader().setVisible(False)
         self.sh_table.cellChanged.connect(self._shopping_cell_changed)
         self.sh_table.horizontalHeader().setSectionsClickable(True)
@@ -20927,8 +20943,13 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         else:
             best_sell = cost = net = 0.0; order_price = 0.0; buy_now_avg = 0.0
         profit = net - cost
+        import time as _t
+        _as = ((lad or {}).get("as_of") or getattr(self, "_sh_loaded_at", None)
+               ) if lad else None
+        _age = dataage.age_seconds(_as, _t.time())
         return {0: (r.get("name") or "").lower(), 2: qty, 3: buy_now_avg,
-               4: order_price, 5: best_sell, 6: cost, 7: net, 8: profit}.get(col, 0)
+               4: order_price, 5: best_sell, 6: cost, 7: net, 8: profit,
+               9: _age if _age is not None else float("inf")}.get(col, 0)
 
     def _shopping_sort_by(self, col):
         cur_col, cur_asc = getattr(self, "_sh_sort", (None, True))
@@ -21133,7 +21154,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 f"QPushButton:hover{{background:{theme.RED}; color:{theme.BG};}}")
             rmb.clicked.connect(lambda _, rid=r["id"]: self._remove_shopping(rid))
             rl.addWidget(rmb)
-            self.sh_table.setCellWidget(i, 9, rmw)
+            self.sh_table.setCellWidget(i, 10, rmw)
+            # AGE of the loaded prices (nothing loaded for this item: an em dash)
+            _as = ((lad or {}).get("as_of") or getattr(self, "_sh_loaded_at", None)
+                   ) if lad else None
+            self.sh_table.setItem(i, 9, self._age_make_item("price", None, _as))
 
             if in_order:                       # ganze Zeile rot markieren
                 for c in (0, 2, 3, 4, 5, 6, 7, 8):
@@ -21853,7 +21878,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         # neben dem Item vergleichen kann, zu welchem Preis ich es damals
         # eingekauft habe" + Marge beim Unterbieten auf einen Blick).
         from ..sprache import t as _txt   # `t` ist hier lokal belegt
-        t = QTableWidget(0, 7 if is_buy else 9)
+        t = QTableWidget(0, 8 if is_buy else 10)
         # KEINE Sortierung (Auftrag A, Sitzung 9 gestrichen): die Spalten 4-6
         # tragen Zell-Widgets (neuer Preis, Zaehler, Aktionsknoepfe). Qts
         # Sortierung verwirft die beim Umordnen - die Zeilen blieben ohne ihre
@@ -21871,11 +21896,12 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         if is_buy:
             t.setHorizontalHeaderLabels(
                 [_txt("Item"), _txt("Your order"), last, _txt("Status"),
-                 _txt("New price"), _txt("Redo"), ""])
+                 _txt("Age"), _txt("New price"), _txt("Redo"), ""])
         else:
             t.setHorizontalHeaderLabels(
                 [_txt("Item"), _txt("Your order"), last, _txt("\u00d8 purchase"),
-                 _txt("New margin"), _txt("Status"), _txt("New price"), _txt("Redo"), ""])
+                 _txt("New margin"), _txt("Status"), _txt("Age"), _txt("New price"),
+                 _txt("Redo"), ""])
             t.horizontalHeaderItem(3).setToolTip(
                 _txt("\u00d8 purchase price from your collected transactions \u2013 the "
                      "same number as in the portfolio."))
@@ -21889,6 +21915,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             h.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         h.setSectionResizeMode(_nc - 1, QHeaderView.Fixed)
         t.setColumnWidth(_nc - 1, 190)
+        t.horizontalHeaderItem(_nc - 4).setToolTip(
+            _txt("How old the data behind a row is: the older of your orders and the "
+                 "market prices. Amber after 5 min, red after 20 min."))
         t.horizontalHeaderItem(_nc - 2).setToolTip(
             _txt("How often this order has already been repriced via \u201e\u25b6 Work-through "
                  "mode\u201c. Every repricing costs a broker fee again (Advanced Broker "
@@ -21987,11 +22016,15 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
 
         def job():
             import concurrent.futures as cf
+            import time as _t_job
             myorders = []
             failed_chars = []
+            orders_asof = {}
             for cid in cid_list:
                 try:
-                    for o in esi.fetch_character_orders(client_id, cid):
+                    _lst = esi.fetch_character_orders(client_id, cid)
+                    orders_asof[cid] = getattr(_lst, "as_of", None)
+                    for o in _lst:
                         tid = o.get("type_id")
                         if not tid:
                             continue
@@ -22054,7 +22087,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     _andere.append((_n or str(_lid), _anz))
             return {"orders": myorders, "books": books, "names": names,
                     "hub": active_loc, "andere": _andere,
-                    "failed_chars": failed_chars}
+                    "failed_chars": failed_chars,
+                    "orders_asof": orders_asof, "fetched": _t_job.time()}
 
         self._ord_laeuft = True
 
@@ -22068,6 +22102,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             self._ord_geladen_at = _t_ord2.time()
             self._ord_geladen_hub = res.get("hub")
             names = res.get("names") or {}
+            _fetched = res.get("fetched") or _t_ord2.time()   # fallback for the age column
             costs = {h.type_id: (h.avg_buy or 0) for h in getattr(self, "_holdings", [])}
             # HANDELS-CHARAKTERE (Nutzer, Sitzung 16). Ist eine Menge gesetzt,
             # wird der Einstand AUSSCHLIESSLICH aus ihren Transaktionen
@@ -22126,6 +22161,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 tax, broker = _fees_row9(char_id)
                 book = res["books"].get(tid, {})
                 unknown = bool(book.get("failed"))     # lookup failed: status unknown
+                _oa = (res.get("orders_asof") or {}).get(char_id) or _fetched
+                _ma = None if unknown else (book.get("as_of") or _fetched)
                 mod_count = mod_counts.get(order_id, 0)
                 # Bisher schon bezahlte Nachbesserungs-Gebühren (grobe Schätzung:
                 # aktueller Preis × Restmenge × Broker-Satz, je Nachbesserung -
@@ -22161,6 +22198,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                                      "mod_count": mod_count, "cum_fee": cum_fee,
                                      "fee_wiped_out": fee_wiped_out,
                                      "unknown": unknown,
+                                     "orders_asof": _oa, "market_asof": _ma,
                                      "vol_remain": vol_remain})
                 else:
                     sells = [p for p, _v in (book.get("sell") or [])]
@@ -22208,6 +22246,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                                       "mod_count": mod_count, "cum_fee": cum_fee,
                                       "fee_wiped_out": fee_wiped_out,
                                       "unknown": unknown,
+                                      "orders_asof": _oa, "market_asof": _ma,
                                       "vol_remain": vol_remain})
             self._ordmod_buy = buy_rows
             self._ordmod_sell = sell_rows
@@ -22306,7 +22345,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             num(1, isk(r["mine"], suffix=False), r["mine"])
             num(2, isk(r["best"], suffix=False) if r["best"] else "—", r["best"])
             # Sell-Zusatzspalten: Oe-Einkauf + Marge-beim-Nachbessern. Die
-            # Folgespalten ruecken um _off nach rechts (Buy bleibt bei 7).
+            # Folgespalten ruecken um _off nach rechts (Buy: 8 Spalten, Verkauf: 10).
             _off = 0
             if not is_buy:
                 _off = 2
@@ -22372,7 +22411,12 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     t("\u26a0 Purchase price unknown \u2013 no loss check. "
                       "Check the price yourself."))
             table.setItem(i, 3 + _off, st)
-            npit = num(4 + _off, isk(r["newp"], suffix=False) if flag else "—",
+            # AGE: the older of your orders and the market data; nothing is
+            # invented for a row whose market lookup failed.
+            _oa, _ma = ((None, None) if r.get("unknown")
+                        else (r.get("orders_asof"), r.get("market_asof")))
+            table.setItem(i, 4 + _off, self._age_make_item("order", _oa, _ma))
+            npit = num(5 + _off, isk(r["newp"], suffix=False) if flag else "—",
                        r["newp"] if flag else 0)
             if flag:
                 npit.setForeground(QColor(theme.RED if loss else theme.AMBER))
@@ -22394,7 +22438,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                                    "\u00d7 remaining quantity, as the exact prices of "
                                    "earlier steps are unknown).").format(
                                      n=mc, fee=cum_fee_txt))
-            table.setItem(i, 5 + _off, mc_it)
+            table.setItem(i, 6 + _off, mc_it)
 
             act = QWidget(); al = QHBoxLayout(act); al.setContentsMargins(4, 2, 4, 2)
             al.setSpacing(10)
@@ -22427,7 +22471,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 lambda _=0, tid=r["tid"]: self.open_ingame_market(
                     tid, getattr(self, "_ord_char_cid", None)))
             al.addWidget(copyb); al.addWidget(openb); al.addStretch()
-            table.setCellWidget(i, 6 + _off, act)
+            table.setCellWidget(i, 7 + _off, act)
             table.setRowHeight(i, 44)
 
         # Fehlende Item-Bilder nachholen (gleiche Luecke wie Wagen/Verkauf).
@@ -22587,7 +22631,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                                     "\u2248{fee} (approximation - recalculated with real "
                                     "values at the next \u201eCheck orders\u201c).").format(
                                       n=count, fee=isk(cum_fee)))
-                table.setItem(i, 5, it)
+                table.setItem(i, 6 + (0 if table is self.buyord_table else 2), it)
                 return
 
     def _highlight_order_row(self, table, tid, done=None):
@@ -23020,6 +23064,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
 
         def done(res):
             ladders, stats = res
+            import time as _t_sh
+            self._sh_loaded_at = _t_sh.time()   # fallback time for the age column
             self._sh_ladders = ladders
             self._sh_stats = stats
             self._sh_hidden_ids = set()   # echtes Neuladen -> ausgeblendete Items zurück
@@ -25891,6 +25937,74 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         if sec < 86400:
             return t("{n} h ago").format(n=int(sec / 3600))
         return t("{n} d ago").format(n=int(sec / 86400))
+
+    # Roles of an age cell: what it shows (order rows / shopping prices), the time
+    # of the customer's orders, and the time of the market data.
+    _AGE_KIND = Qt.UserRole + 20
+    _AGE_ORD = Qt.UserRole + 21
+    _AGE_MKT = Qt.UserRole + 22
+
+    def _age_make_item(self, kind, orders_asof, market_asof):
+        """A table cell that shows how old its data is. `kind` is "order" (the
+        older of your orders and the market data counts) or "price"."""
+        import time as _t
+        it = QTableWidgetItem("")
+        it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+        it.setData(self._AGE_KIND, kind)
+        it.setData(self._AGE_ORD, orders_asof)
+        it.setData(self._AGE_MKT, market_asof)
+        self._age_apply(it, _t.time())
+        return it
+
+    def _age_apply(self, it, now):
+        """Text, colour and tooltip of one age cell for the time `now`."""
+        kind = it.data(self._AGE_KIND)
+        if not kind:
+            return
+        oa, ma = it.data(self._AGE_ORD), it.data(self._AGE_MKT)
+        sec = dataage.age_seconds(dataage.oldest(oa, ma), now)
+        lvl = dataage.level(sec)
+        it.setText(dataage.format_age(sec))
+        it.setForeground(QColor({"ok": theme.TEXT, "amber": theme.AMBER,
+                                 "red": theme.RED}.get(lvl, theme.MUTED)))
+
+        def fmt(stamp):
+            return (dataage.format_age(dataage.age_seconds(stamp, now))
+                    if stamp is not None else t("unknown"))
+        if kind == "order":
+            if oa is None and ma is None:
+                it.setToolTip(t("No market data for this row \u2013 the lookup failed."))
+            else:
+                it.setToolTip("\n".join([
+                    t("Age of the data behind this row \u2013 the older of the two counts."),
+                    t("Your orders: {age} (ESI keeps your orders cached for up to ~20 min)."
+                      ).format(age=fmt(oa)),
+                    t("Market prices: {age} (ESI keeps market data cached for ~5 min)."
+                      ).format(age=fmt(ma))]))
+        elif ma is None:
+            it.setToolTip(t("No prices loaded yet \u2013 press \u201e{button}\u201c.").format(
+                button=t("Load prices")))
+        else:
+            it.setToolTip(t("Age of the loaded prices: {age} (ESI keeps market data "
+                            "cached for ~5 min).").format(age=fmt(ma)))
+
+    def _age_tick(self, now=None):
+        """Bring every age cell (order tables, shopping list) up to date."""
+        import time as _t
+        now = _t.time() if now is None else now
+        for name, col in (("buyord_table", 4), ("sellord_table", 6), ("sh_table", 9)):
+            tbl = getattr(self, name, None)
+            if tbl is None:
+                continue
+            tbl.blockSignals(True)          # setText would fire cellChanged
+            try:
+                for i in range(tbl.rowCount()):
+                    it = tbl.item(i, col)
+                    if it is not None:
+                        self._age_apply(it, now)
+            finally:
+                tbl.blockSignals(False)
 
     def update_ages(self):
         import time as _t
