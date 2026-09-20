@@ -8,6 +8,7 @@ Two data passes:
 """
 import concurrent.futures as cf
 import time
+from datetime import date as _date, timedelta as _timedelta
 
 import requests
 
@@ -374,8 +375,37 @@ def price_spike_pct(history: list, days: int, recent_n: int = 3) -> float:
     return (sum(recent) / len(recent) / med - 1.0) * 100.0
 
 
+def _calendar_window(history: list, days: int):
+    """(rows, span): the rows of the last `days` CALENDAR days, counted back from
+    the newest row, and the number of calendar days that window covers.
+
+    ESI's market history has NO row for a day without trades (0 zero-volume rows
+    in 4 million cached rows), so `history[-days:]` is the last N TRADING days -
+    for a thinly traded item far more than N calendar days. A "daily volume"
+    taken over those rows is the average per trading day, and "active days /
+    rows" is always 1. A history shorter than the window (a new item) is divided
+    by the days it actually has. `days` falsy = the whole history. Rows without
+    a usable date (older data) fall back to the row-based window."""
+    if not history:
+        return [], 0
+    try:
+        last = _date.fromisoformat(str(history[-1]["date"])[:10])
+        first = _date.fromisoformat(str(history[0]["date"])[:10])
+    except (KeyError, ValueError, TypeError):
+        rows = history[-days:] if days else history
+        return rows, len(rows)
+    total = (last - first).days + 1
+    if not days:
+        return history, total
+    cutoff = (last - _timedelta(days=days - 1)).isoformat()
+    i = len(history)
+    while i > 0 and str(history[i - 1]["date"])[:10] >= cutoff:
+        i -= 1
+    return history[i:], min(days, total)
+
+
 def window_stats(history: list, days: int) -> dict:
-    rows = history[-days:] if days else history
+    rows, span = _calendar_window(history, days)
     if not rows:
         return {"avg": 0.0, "low": 0.0, "high": 0.0, "spread": 0.0,
                 "spread_med_isk": 0.0, "vol_med": 0.0,
@@ -395,9 +425,9 @@ def window_stats(history: list, days: int) -> dict:
     #   • how many separate fills per day (order_count)    → txn_day
     #   • the daily high–low band that repeats every day   → day_range_pct
     #     (price bounces between buy side and sell side → both get hit)
-    n = len(rows)
+    n = len(rows)                 # history points in the window
     active_days = sum(1 for v in vols if v > 0)
-    active_ratio = active_days / n if n else 0.0
+    active_ratio = active_days / span if span else 0.0
     txns = sorted(r.get("order_count") or 0 for r in rows if (r.get("volume") or 0) > 0)
     txn_day = txns[len(txns) // 2] if txns else 0.0        # median transactions/day
     day_ranges = [((r["highest"] - r["lowest"]) / r["average"] * 100.0)
@@ -439,7 +469,7 @@ def window_stats(history: list, days: int) -> dict:
         "spread": ((high - low) / avg * 100.0) if avg else 0.0,
         "spread_med_isk": spread_med_isk,
         "vol_med": vol_med,
-        "daily_vol": sum(vols) / len(vols),
+        "daily_vol": sum(vols) / span if span else 0.0,
         "n": n,
         "active_ratio": active_ratio,
         "txn_day": txn_day,

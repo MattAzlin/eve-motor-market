@@ -1,6 +1,7 @@
 """Regional / structure arbitrage: compare two trade locations and find items
 that are cheaper at the source than they sell for at the target."""
 import concurrent.futures as cf
+from datetime import date as _date, datetime, timedelta, timezone
 
 
 from . import config, esi
@@ -217,7 +218,23 @@ def leere_zielmaerkte(source: dict, target: dict, deals: list, cap: int = 200) -
     return [tid for _w, tid in kandidaten[:max(0, int(cap))]]
 
 
-def bewerte_leeren_markt(tid, quell_preis, hist, tax, broker, ziel_eintrag=None):
+def _letzte_tage(hist, tage, heute):
+    """Die Zeilen der letzten `tage` KALENDERTAGE bis `heute`.
+
+    ESI liefert fuer einen Tag OHNE Handel keine Zeile (0 Null-Zeilen in 4 Mio
+    gespeicherten). `hist[-7:]` waren deshalb die letzten 7 HANDELSTAGE - bei
+    einem Item, das vor Monaten zuletzt lief, immer noch 7 Zeilen "mit Umsatz".
+    Zeilen ohne brauchbares Datum (aeltere Daten): das alte zeilenweise Fenster."""
+    try:
+        _date.fromisoformat(str(hist[-1]["date"])[:10])
+        grenze = (heute - timedelta(days=tage)).isoformat()
+        return [r for r in hist if str(r["date"])[:10] >= grenze]
+    except (KeyError, ValueError, TypeError, IndexError):
+        return hist[-tage:]
+
+
+def bewerte_leeren_markt(tid, quell_preis, hist, tax, broker, ziel_eintrag=None,
+                         today=None):
     """Macht aus einem leeren Zielmarkt einen Treffer - oder None.
 
     ES GIBT AM ZIEL KEINEN PREIS. Das ist der ganze Punkt und zugleich das
@@ -238,11 +255,13 @@ def bewerte_leeren_markt(tid, quell_preis, hist, tax, broker, ziel_eintrag=None)
     """
     if not hist or quell_preis <= 0:
         return None
-    letzte7 = hist[-7:]
+    heute = today or datetime.now(timezone.utc).date()
+    letzte7 = _letzte_tage(hist, 7, heute)
     tage_mit_umsatz = sum(1 for r in letzte7 if (r.get("volume") or 0) > 0)
     if tage_mit_umsatz < 1:
         return None                       # am Ziel wird gar nicht gehandelt
-    preise = [r.get("average") or 0 for r in hist[-30:]
+    monat = _letzte_tage(hist, 30, heute)
+    preise = [r.get("average") or 0 for r in monat
               if (r.get("volume") or 0) > 0 and (r.get("average") or 0) > 0]
     if not preise:
         return None
@@ -251,7 +270,7 @@ def bewerte_leeren_markt(tid, quell_preis, hist, tax, broker, ziel_eintrag=None)
     gewinn = netto - quell_preis
     if gewinn <= 0:
         return None
-    tagesmenge = sum((r.get("volume") or 0) for r in hist[-30:]) / 30.0
+    tagesmenge = sum((r.get("volume") or 0) for r in monat) / 30.0
     t = ziel_eintrag or {}
     return {
         "type_id": tid,
