@@ -10438,6 +10438,83 @@ finally:
     win._render_shopping()
 
 
+# ---------------------------------------------------------------- (b93)
+# DER ITEM-NAME STEHT OBEN IM AUSWAHL-PANEL, NEBEN DER MENGE (Issue #22). Das
+# Panel oben rechts (Daytrade, Swing, Regional teilen es) zeigte die Order-Leiter
+# eines Items, aber nicht, WELCHES Item das ist. Der fruehere Info-Text war aus
+# gutem Grund versteckt (Sitzung 12): er brach auf mehrere Zeilen um und schob die
+# Item-Liste darunter bei jedem Klick. Deshalb EINE Zeile, hinten mit "..."
+# gekuerzt (ElideLabel, Mindestbreite 0), voller Name im Tooltip. Der Name folgt
+# der Leiter, die darunter steht: gesetzt wird er dort, wo die Leiter gezeichnet
+# wird - scheitert ein Abruf, bleiben beide beim vorigen Item.
+_alt93 = (win._run, getattr(win, "_hub_orders", None), _sp87._aktuell)
+try:
+    _sp87.sprache_setzen("en")
+    for _k93 in ("day", "swing", "region"):
+        _c93 = win._ladder_ctx.get(_k93) or {}
+        _l93 = _c93.get("name_lbl")
+        check(f"b93 {_k93}: das Panel hat ein Namens-Label (ElideLabel, eine Zeile)",
+              _l93 is not None and type(_l93).__name__ == "ElideLabel"
+              and not _l93.wordWrap())
+        _box93 = _c93["table"].parentWidget() if _c93 else None
+        _head93 = _box93.layout().itemAt(0).layout() if _box93 is not None else None
+        check(f"b93 {_k93}: der Name steht in der Kopfzeile VOR dem Mengen-Feld",
+              _l93 is not None and _head93 is not None
+              and 0 <= _head93.indexOf(_l93) < _head93.indexOf(_c93["spin"]))
+    _c93 = win._ladder_ctx["day"]
+    _l93 = _c93.get("name_lbl")
+    win._render_ladder("day", 34, "Tritanium", [(5.0, 100), (5.1, 200)], 0)
+    eq("b93 nach dem Zeichnen der Leiter steht der Name da",
+       _l93.text() if _l93 is not None else None, "Tritanium")
+    eq("b93 ... und der volle Name auch im Tooltip",
+       _l93.toolTip() if _l93 is not None else None, "Tritanium")
+    _h_kurz93 = _l93.sizeHint().height() if _l93 is not None else None
+    _lang93 = "Medium Capacitor Control Circuit II " * 6
+    win._render_ladder("day", 35, _lang93, [(6.0, 50)], 0)
+    check("b93 ein sehr langer Name bricht NICHT um: gleiche Hoehe wie ein kurzer",
+          _l93 is not None and _l93.sizeHint().height() == _h_kurz93)
+    check("b93 ... und verbreitert das Panel nicht (Mindestbreite 0, Breite ignoriert)",
+          _l93 is not None and _l93.minimumSizeHint().width() == 0
+          and _l93.sizePolicy().horizontalPolicy().name == "Ignored")
+    eq("b93 ... der volle lange Name bleibt lesbar (Text und Tooltip)",
+       (_l93.text(), _l93.toolTip()) if _l93 is not None else None, (_lang93, _lang93))
+    # Abruf per Klick: Erfolg setzt den Namen, ein Fehler laesst Name UND Leiter stehen
+    win._render_ladder("day", 34, "Tritanium", [(5.0, 100)], 0)
+
+    def _sync93(w, done, fail_cb=None, **k):
+        try:
+            _r = w._fn(*w._args, **w._kwargs)
+        except Exception as _e:
+            if fail_cb:
+                fail_cb(str(_e))
+            return
+        done(_r)
+    win._run = _sync93
+    win._hub_orders = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("420"))
+    win._load_ladder("day", 36, "Pyerite")
+    eq("b93 scheitert der Abruf, bleibt der Name beim Item, dessen Leiter noch da steht",
+       _l93.text() if _l93 is not None else None, "Tritanium")
+    win._hub_orders = lambda *a, **k: {"buy": [(7.0, 10)], "sell": [(8.0, 10)]}
+    win._load_ladder("day", 36, "Pyerite")
+    eq("b93 klappt der Abruf, steht der neue Name da",
+       _l93.text() if _l93 is not None else None, "Pyerite")
+    _sp87.sprache_setzen("de")
+    win._render_ladder("day", 34, "Tritanium", [(5.0, 100)], 0)
+    eq("b93 Item-Namen kommen aus EVE und werden nicht uebersetzt (auch auf Deutsch)",
+       _l93.text() if _l93 is not None else None, "Tritanium")
+finally:
+    win._run = _alt93[0]
+    if _alt93[1] is not None:
+        win._hub_orders = _alt93[1]
+    _sp87.sprache_setzen(_alt93[2] if _alt93[2] in ("en", "de") else "en")
+    for _k93 in ("day", "swing", "region"):
+        _c93 = win._ladder_ctx.get(_k93)
+        if _c93:
+            _c93["table"].setRowCount(0)
+            _c93["current"] = None
+            _c93["ladder"] = []
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.

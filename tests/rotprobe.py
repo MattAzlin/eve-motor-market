@@ -2531,8 +2531,8 @@ MUTATIONEN = [
 
     ('Info-Zeile ueber der Order-Leiter kommt zurueck',
      'eve_trader/ui/main_window.py',
-     '        info = QLabel("")\n        info.setVisible(False)\n        head.addStretch()',
-     '        info = QLabel("Item anklicken \u2026")\n        info.setVisible(True)\n        head.addStretch()',
+     '        info = QLabel("")\n        info.setVisible(False)\n        # THE ITEM NAME, on ONE line',
+     '        info = QLabel("Item anklicken \u2026")\n        info.setVisible(True)\n        # THE ITEM NAME, on ONE line',
      'keine sichtbare Info-Zeile ueber der Order-Leiter'),
 
     ('Dauerhinweis unter der Strategie-Karte kehrt zurueck',
