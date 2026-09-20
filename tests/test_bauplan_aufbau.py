@@ -10653,6 +10653,123 @@ finally:
     win.deals_table.setRowCount(0)
 
 
+# ---------------------------------------------------------------- (b95)
+# DAYTRADE RECHNET UND ZEIGT DEN REALISTISCHEN GEWINN (Issue #32, Variante B).
+# find_deals kannte den realistischen Gewinn (Spread auf den Median-Tagesspread
+# der Historie gedeckelt, "spread_capped"), aber Tabelle, Filter (Gewinn/Stueck,
+# ROI, Gewinn/Tag) und Standard-Sortierung liefen auf dem PAPIER-Gewinn aus dem
+# Momentanbuch; der realistische Wert skalierte nur den Score (mit Boden 10 %).
+# Jetzt: bei gedeckeltem Spread SIND profit_unit / roi / profit_day / capture_day
+# die realistischen Werte (Filter wirken darauf, ein realistisch negativer Deal
+# faellt raus), die Papier-Zahlen stehen in profit_paper / roi_paper /
+# profit_day_paper, die Tabelle kennzeichnet sie mit einer Tilde.
+# Zahlenbasis (Steuer 3.375 %, Broker 1.5 %):
+#   A kauf 1000 / verkauf 1500, Tagesspanne 300: Papier 411.875, real 221.625
+#   B kauf 1000 / verkauf 1200, Tagesspanne 250: nicht gedeckelt, 126.5
+#   C kauf 1000 / verkauf 1300, Tagesspanne  50: Papier 221.625, real -16.1875
+import eve_trader.scanner as _sc95
+
+
+def _hist95(lo, hi):
+    return [{"date": f"2026-08-{d + 1:02d}", "average": (lo + hi) / 2.0,
+             "highest": float(hi), "lowest": float(lo), "volume": 100,
+             "order_count": 20} for d in range(28)]
+
+
+_HIST95 = {1: _hist95(1000, 1300), 2: _hist95(1000, 1250), 3: _hist95(1000, 1050)}
+_SNAP95 = [{"type_id": t95, "sell_min": s95, "buy_max": 1000.0, "sell_qty": 500,
+            "buy_qty": 500, "sell_orders": 3, "buy_orders": 3,
+            "sell_best_qty": 50, "buy_best_qty": 50}
+           for t95, s95 in ((1, 1500.0), (2, 1200.0), (3, 1300.0))]
+_SET95 = {"sales_tax_pct": 3.375, "broker_fee_pct": 1.5}
+_alt_hc95 = _sc95.history_cached
+_sc95.history_cached = lambda tid, region=10000002, *a, **k: _HIST95[tid]
+
+
+def _deals95(**filt):
+    _f = {"min_buy_ratio": 25, "max_items": 100}
+    _f.update(filt)
+    return {d["type_id"]: d for d in
+            _sc95.find_deals(_SNAP95, _SET95, 28, "flip", _f, region=10000002)}
+
+
+def _nahe95(a, b, tol=1e-6):
+    return a is not None and abs(a - b) < tol
+
+
+try:
+    _r95 = _deals95()
+    _a95, _b95 = _r95.get(1) or {}, _r95.get(2) or {}
+    check("b95 A (gedeckelt): profit_unit ist der REALISTISCHE Gewinn (221.625)",
+          _a95.get("spread_capped") is True and _nahe95(_a95.get("profit_unit"), 221.625))
+    check("b95 ... das Papier steht in profit_paper (411.875)",
+          _nahe95(_a95.get("profit_paper"), 411.875))
+    check("b95 ... ROI real 22.16 %, ROI Papier 41.19 %",
+          _nahe95(_a95.get("roi"), 22.1625, 1e-4) and _nahe95(_a95.get("roi_paper"), 41.1875, 1e-4))
+    check("b95 ... Gewinn/Tag real 22'162.5, Papier 41'187.5",
+          _nahe95(_a95.get("profit_day"), 22162.5) and _nahe95(_a95.get("profit_day_paper"), 41187.5))
+    check("b95 ... einnehmbar/Tag folgt dem realistischen Wert (durch 3 + 1 Konkurrenten)",
+          _nahe95(_a95.get("capture_day"), 22162.5 / 4))
+    check("b95 B (nicht gedeckelt): Papier = real = 126.5, keine Kennzeichnung",
+          _b95.get("spread_capped") is False and _nahe95(_b95.get("profit_unit"), 126.5)
+          and _nahe95(_b95.get("profit_paper"), 126.5) and _nahe95(_b95.get("roi"), 12.65, 1e-4))
+    check("b95 C (realistisch negativ) faellt raus, obwohl das Papier +221.6 zeigte",
+          3 not in _r95)
+    eq("b95 min. Gewinn/Stueck 300 liegt zwischen real und Papier: A faellt raus, B auch",
+       sorted(_deals95(min_profit_isk=300)), [])
+    eq("b95 min. Gewinn/Stueck 200: A bleibt (real 221.6), B faellt (126.5)",
+       sorted(_deals95(min_profit_isk=200)), [1])
+    eq("b95 min. ROI 30 % (real 22 %, Papier 41 %): A faellt raus",
+       sorted(_deals95(min_roi=30)), [])
+    eq("b95 min. ROI 20 %: A bleibt, B (12.65 %) faellt",
+       sorted(_deals95(min_roi=20)), [1])
+    eq("b95 min. Gewinn/Tag 30'000 (real 22'162, Papier 41'187): A faellt raus",
+       sorted(_deals95(min_profit_day=30000)), [])
+    eq("b95 min. Gewinn/Tag 20'000: A bleibt, B (12'650) faellt",
+       sorted(_deals95(min_profit_day=20000)), [1])
+
+    # ---- Tabelle
+    _alt_ui95 = (win._icon_prefetch_pending, win._table_icon,
+                 getattr(win, "_deals_last", (None, None)), _sp87._aktuell)
+    win._icon_prefetch_pending = lambda *a, **k: None
+    win._table_icon = lambda *a, **k: None
+    try:
+        _sp87.sprache_setzen("en")
+        win._render_deals([_a95, _b95], "flip")
+        _zeilen95 = {win.deals_table.item(r, 0).data(Qt.UserRole): r
+                     for r in range(win.deals_table.rowCount())}
+        _ra, _rb = _zeilen95.get(1), _zeilen95.get(2)
+
+        def _z95(zeile, spalte):
+            return win.deals_table.item(zeile, spalte) if zeile is not None else None
+        check("b95 Tabelle A: Gewinn, ROI und Gewinn/Tag tragen die Tilde (real)",
+              all(_z95(_ra, c) is not None and _z95(_ra, c).text().startswith("≈")
+                  for c in (6, 7, 11)))
+        check("b95 ... der Tooltip nennt den Papier-Wert (Gewinn 412, ROI 41.2 %, Gewinn/Tag 41'188)",
+              "412" in _z95(_ra, 6).toolTip() and "41.2 %" in _z95(_ra, 7).toolTip()
+              and "41'188" in _z95(_ra, 11).toolTip().replace(",", "'"))
+        check("b95 ... und erklaert es (Median-Tagesspread)",
+              "median daily spread" in _z95(_ra, 6).toolTip())
+        check("b95 Tabelle B (nicht gedeckelt): keine Tilde, kein Zusatz-Tooltip",
+              all(_z95(_rb, c).text()[:1] != "≈" and _z95(_rb, c).toolTip() == ""
+                  for c in (6, 7, 11)))
+        check("b95 Tradability-Tooltip von A: 'nutzt den realistischen Gewinn' (kein 'Bewertung')",
+              "profit, ROI and profit/day use the realistic profit" in _z95(_ra, 17).toolTip())
+        _sp87.sprache_setzen("de")
+        win._render_deals([_a95], "flip")
+        _tipd95 = win.deals_table.item(0, 6).toolTip()
+        check("b95 deutsch: der Tooltip ist uebersetzt",
+              "Realistic figure" not in _tipd95 and "Median" in _tipd95
+              and "412" in _tipd95)
+    finally:
+        win._icon_prefetch_pending, win._table_icon = _alt_ui95[0], _alt_ui95[1]
+        win._deals_last = _alt_ui95[2]
+        _sp87.sprache_setzen("en")
+        win.deals_table.setRowCount(0)
+finally:
+    _sc95.history_cached = _alt_hc95
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.

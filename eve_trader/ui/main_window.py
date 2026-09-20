@@ -5097,6 +5097,11 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 dev_val = d["under_pct"]
                 if mode == "drop" and spike >= 1.5:
                     dev_txt += f"  ▲{spike:.1f}×"
+            # A capped flip (book spread wider than the item yields per day) shows
+            # the REALISTIC figures, marked with a tilde; the order-book figure is
+            # in the tooltip. (Mode "flip" only - the other modes never cap.)
+            _cap = bool(d.get("spread_capped")) and mode == "flip"
+            _mk = "\u2248 " if _cap else ""
             bc = d.get("build_cost")
             trend = d.get("trend", "—")
             trend_txt = {"falling": t("\u2193 falling"), "sideways": t("\u2192 sideways"),
@@ -5109,12 +5114,12 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 (isk(d["avg"], suffix=False) if d["avg"] else "—", d["avg"]),
                 (dev_txt, dev_val),
                 (isk(bc, suffix=False) if bc else "—", bc or 0),
-                (isk(d["profit_unit"], suffix=False), d["profit_unit"]),
-                (f"{d['roi']:.1f} %", d["roi"]),
+                (_mk + isk(d["profit_unit"], suffix=False), d["profit_unit"]),
+                (_mk + f"{d['roi']:.1f} %", d["roi"]),
                 (f"{round(d['daily_vol']):,}".replace(",", "'"), d["daily_vol"]),
                 (f"{d.get('volatility', 0):.0f} %", d.get("volatility", 0)),
                 (dos_txt, dos),
-                (isk(d["profit_day"], suffix=False), d["profit_day"]),
+                (_mk + isk(d["profit_day"], suffix=False), d["profit_day"]),
                 (trend_txt, d.get("trend_pct", 0)),
                 (isk(d.get("target_sell", 0), suffix=False) if d.get("target_sell") else "—",
                  d.get("target_sell", 0)),
@@ -5145,8 +5150,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                     prof=f"{d.get('profit_real', 0):,.0f}".replace(",", "'"),
                     roi=f"{d.get('roi_real', 0):.1f}")
                 + (t("\n\u26a0 Current book spread is WIDER than what the item "
-                     "historically yields daily (throwaway-order suspicion) - the "
-                     "rating uses the realistic profit.")
+                     "historically yields daily (throwaway-order suspicion) - "
+                     "profit, ROI and profit/day use the realistic profit.")
                    if d.get("spread_capped") else ""))
             for j, (text, val) in enumerate(cells):
                 it = NumericItem(text, val) if j >= 1 else QTableWidgetItem(text)
@@ -5174,6 +5179,15 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                                                 else theme.MUTED))
                 if j in (6, 7, 11):
                     it.setForeground(green if d["profit_unit"] > 0 else red)
+                    if _cap:
+                        _paper = {6: isk(d.get("profit_paper", 0), suffix=False),
+                                  7: f"{d.get('roi_paper', 0):.1f} %",
+                                  11: isk(d.get("profit_day_paper", 0), suffix=False)}[j]
+                        it.setToolTip(t(
+                            "\u2248 Realistic figure: the current order-book spread is wider "
+                            "than what the item yields per day, so the median daily spread of "
+                            "the history is used. Order-book figure: {paper}.").format(
+                                paper=_paper))
                 if j == 12:
                     tc = {"falling": theme.RED, "sideways": theme.GREEN,
                           "rising": theme.AMBER}.get(trend, theme.MUTED)

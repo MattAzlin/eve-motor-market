@@ -900,6 +900,9 @@ def find_deals(snapshot, settings, days, mode, filters, progress=None,
             # neue Qualitäts-Felder - IMMER pro Item initialisiert (kein
             # Übertrag aus der vorherigen Schleifenrunde)
             profit_real, roi_real, spread_capped = profit_unit, roi, False
+            # what the CURRENT order book shows (flip: kept when the realistic
+            # figure below replaces profit_unit / roi / profit_day)
+            profit_paper, roi_paper, profit_day_paper = profit_unit, roi, profit_day
             cycle_days = 0.0
             long_norm = 0.0
             spike_distorted = False
@@ -925,6 +928,27 @@ def find_deals(snapshot, settings, days, mode, filters, progress=None,
                 if min_buy_ratio and sell > 0 and (buy / sell * 100) < min_buy_ratio:
                     _d("ghost_buy_order")
                     continue
+                # ---- SPREAD REALITY CHECK (D1), applied BEFORE the filters ------
+                # The profit from the CURRENT order book is a snapshot (one
+                # throwaway order can fake a dream spread); the history knows the
+                # item's real median daily spread. When the book spread is wider
+                # than that, the achievable exit is bid + median daily spread.
+                # profit_unit / roi / profit_day / capture_day then ARE the
+                # realistic numbers - so the table shows them and the filters
+                # (min profit, min ROI, min profit/day) act on them, and a deal
+                # that is negative when realistic is dropped. The order-book
+                # figures stay in profit_paper / roi_paper / profit_day_paper.
+                # (It used to only scale the score, floored at 10 %, while table,
+                # filters and default sort used the paper numbers.)
+                spread_med = st.get("spread_med_isk", 0.0) or 0.0
+                if spread_med > 0 and buy > 0 and (sell - buy) > spread_med:
+                    eff_sell = buy + spread_med
+                    profit_real = eff_sell * (1 - tax - broker) - buy * (1 + broker)
+                    roi_real = profit_real / buy * 100
+                    spread_capped = True
+                    profit_unit, roi = profit_real, roi_real
+                    profit_day = profit_unit * daily_vol
+                    capture_day = profit_day / (competitors + 1)
                 if profit_unit < min_profit:
                     _d("profit_low")
                     continue
@@ -999,20 +1023,9 @@ def find_deals(snapshot, settings, days, mode, filters, progress=None,
                 if trend == "rising" and trend_pct > 15:   # scharfer Anstieg → extra
                     entry_factor *= max(0.45, 1.0 - (trend_pct - 15) / 70.0)
                 score *= entry_factor
-                # ---- D1 SPREAD-REALITÄTSCHECK: der Gewinn aus dem AKTUELLEN
-                # Orderbuch ist eine Momentaufnahme (eine Wegwerf-Order kann
-                # eine Traumspanne vorgaukeln). Die Historie kennt den ECHTEN
-                # Median-Tagesspread. Realistischer Exit = min(Ask, Bid +
-                # Medianspread); der Score wird auf den realistischen Gewinn
-                # normiert - Fassaden-Deals rutschen nach unten.
-                spread_med = st.get("spread_med_isk", 0.0) or 0.0
-                if spread_med > 0 and buy > 0 and (sell - buy) > spread_med:
-                    eff_sell = buy + spread_med
-                    profit_real = eff_sell * (1 - tax - broker) - buy * (1 + broker)
-                    roi_real = profit_real / buy * 100
-                    spread_capped = True
-                    if profit_unit > 0:
-                        score *= max(0.10, max(0.0, profit_real) / profit_unit)
+                # ---- D1 SPREAD-REALITAETSCHECK: siehe oben, VOR den Filtern. Der
+                # Score baut schon auf capture_day (= realistischer Gewinn), ein
+                # zweiter Abschlag hier waere doppelt gezaehlt.
                 # ---- D3 ZYKLUSDAUER: wie lange steht dein Kapital je Flip in
                 # der Warteschlange? Buchtiefe je Seite geteilt durch den
                 # Tagesdurchsatz, der die jeweilige Seite BEWEISBAR erreicht
@@ -1278,6 +1291,9 @@ def find_deals(snapshot, settings, days, mode, filters, progress=None,
                 "spread_med_isk": st.get("spread_med_isk", 0.0),
                 "profit_real": profit_real,
                 "roi_real": roi_real,
+                "profit_paper": profit_paper,
+                "roi_paper": roi_paper,
+                "profit_day_paper": profit_day_paper,
                 "spread_capped": spread_capped,
                 "cycle_days": cycle_days,
                 "long_normal": long_norm,
