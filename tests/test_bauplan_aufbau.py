@@ -9346,6 +9346,49 @@ check("b83 auch das Struktur-Ziel liefert das Kaufbuch",
       _agg83b[7].get("buy_ladder") == [(120.0, 10), (110.0, 20)])
 
 
+# ---------------------------------------------------------------- (b84)
+# DIE ANMELDE-SEITE FOLGT DER SPRACHE (Issue #8). Nach dem EVE-Login zeigt
+# der lokale Rueckruf-Server eine Seite im Browser; sie stand fest auf
+# Deutsch und lief an t() vorbei, ein englischer Nutzer las "Login
+# erfolgreich". Geprueft wird der ECHTE Handler auf einem freien Port.
+import threading as _th84
+import urllib.request as _ur84
+from http.server import HTTPServer as _HS84
+import eve_trader.auth as _au84
+import eve_trader.sprache as _sp84
+
+
+def _seite84(sprache):
+    _alt = _sp84._aktuell
+    _sp84.sprache_setzen(sprache)
+    _srv = _HS84(("127.0.0.1", 0), _au84._CallbackHandler)
+    _t = _th84.Thread(target=_srv.handle_request)
+    _t.start()
+    try:
+        _r = _ur84.urlopen(
+            f"http://127.0.0.1:{_srv.server_address[1]}/callback?code=abc&state=xyz",
+            timeout=10)
+        return _r.read().decode("utf-8"), _r.headers.get("Content-Type", "")
+    finally:
+        _t.join(10)
+        _srv.server_close()
+        _sp84.sprache_setzen(_alt)
+
+
+_en84, _kopf84 = _seite84("en")
+check("b84 englisch: die Seite sagt 'Login successful' und nennt das Fenster",
+      "Login successful" in _en84 and "close this window" in _en84)
+check("b84 englisch: kein deutscher Text auf der Seite",
+      "erfolgreich" not in _en84 and "schliessen" not in _en84)
+_de84, _kopf84 = _seite84("de")
+check("b84 deutsch: 'Login erfolgreich' mit Umlaut (UTF-8)",
+      "Login erfolgreich" in _de84 and "zurückkehren" in _de84
+      and "Login successful" not in _de84)
+check("b84 die Seite kommt als UTF-8-HTML", "utf-8" in _kopf84.lower())
+check("b84 der Handler merkt sich weiter code und state des Rueckrufs",
+      _au84._CallbackHandler.result == {"code": "abc", "state": "xyz"})
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.
