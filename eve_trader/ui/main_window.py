@@ -21954,13 +21954,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             t.horizontalHeaderItem(4).setToolTip(
                 _txt("NET margin (after tax + broker of your order character) IF you reprice "
                      "to the new price \u2013 i.e. undercut the best sell."))
-        h = t.horizontalHeader()
-        h.setSectionResizeMode(0, QHeaderView.Stretch)
         _nc = t.columnCount()
-        for c in range(1, _nc - 1):
-            h.setSectionResizeMode(c, QHeaderView.ResizeToContents)
-        h.setSectionResizeMode(_nc - 1, QHeaderView.Fixed)
-        t.setColumnWidth(_nc - 1, 190)
+        self._order_table_layout(t, is_buy)
         t.horizontalHeaderItem(_nc - 4).setToolTip(
             _txt("How old the data behind a row is: the older of your orders and the "
                  "market prices. Amber after 5 min, red after 20 min."))
@@ -21979,6 +21974,36 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         t.customContextMenuRequested.connect(self._ord_menu)
         t.cellDoubleClicked.connect(self._ord_dblclick)
         return t
+
+    def _order_table_layout(self, t, is_buy):
+        """Default layout of an order table: like the rest of the app, every
+        column can be dragged wider/narrower and moved, and the action buttons
+        (Price / Open) sit right after the item name so they stay in reach.
+
+        Content-sized columns plus a fixed button column at the far right made
+        the table wider than the window's minimum width once the Age column
+        existed: the item name was squeezed to "Medium ..." and the buttons
+        were cut off behind a scrollbar. Only the DISPLAY order changes (the
+        logical columns, and every index the code uses, stay as they are)."""
+        h = t.horizontalHeader()
+        h.setSectionsMovable(True)
+        h.setStretchLastSection(False)
+        h.setMinimumSectionSize(48)
+        nc = t.columnCount()
+        for c in range(nc):
+            h.setSectionResizeMode(c, QHeaderView.Interactive)
+        fm = t.fontMetrics()
+        for c in range(nc):
+            item = t.horizontalHeaderItem(c)
+            head_w = fm.horizontalAdvance(item.text()) + 34 if item else 0
+            t.setColumnWidth(c, max(head_w, 92))
+        t.setColumnWidth(0, 160)                    # item name
+        t.setColumnWidth(nc - 4, 70)                # Age
+        t.setColumnWidth(nc - 2, 64)                # Redo
+        t.setColumnWidth(nc - 1, 192)               # Price + Open buttons (+ cell padding)
+        vis = h.visualIndex(nc - 1)
+        if vis != 1:
+            h.moveSection(vis, 1)
 
     def _ord_menu(self, pos):
         from PySide6.QtWidgets import QMenu
@@ -26951,8 +26976,6 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         gleich wieder ueberschreibt."""
         from PySide6.QtCore import QByteArray
         _alle = self.settings.get("ui_spalten") or {}
-        if not _alle:
-            return
         for _n, _hv in self._tabellen_register():
             _s = _alle.get(_n)
             if not _s:
@@ -26962,6 +26985,16 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 self._sized.add(_n)
             except Exception:
                 continue
+        # The order tables got a new column layout (draggable columns, buttons
+        # right after the name). A header state saved by an older version would
+        # bring back its fixed widths and the buttons at the far right, so it is
+        # replaced ONCE; afterwards the user's own layout is kept as usual.
+        if int(self.settings.get("ui_order_layout") or 0) < 1:
+            for _tb, _buy in ((getattr(self, "buyord_table", None), True),
+                              (getattr(self, "sellord_table", None), False)):
+                if _tb is not None:
+                    self._order_table_layout(_tb, _buy)
+            self.settings["ui_order_layout"] = 1
 
     @staticmethod
     def _bp_zeilen_gruppieren(rows):
