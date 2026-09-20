@@ -20135,7 +20135,15 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         # stoert es niemanden. Es wird nur nicht mehr eingehaengt.
         info = QLabel("")
         info.setVisible(False)
-        head.addStretch()
+        # THE ITEM NAME, on ONE line: it takes the space left of the quantity and
+        # is cut with "..." when it does not fit (full name in the tooltip). One
+        # line and minimum width 0 are what keep the item list below from moving
+        # (the reason the multi-line info text above was hidden).
+        name_lbl = ElideLabel("")
+        _fn = name_lbl.font(); _fn.setBold(True); name_lbl.setFont(_fn)
+        from PySide6.QtWidgets import QSizePolicy as _QSPn
+        name_lbl.setSizePolicy(_QSPn.Ignored, _QSPn.Preferred)
+        head.addWidget(name_lbl, 1)
         head.addWidget(QLabel(t("Qty:")))
         spin = QSpinBox(); spin.setRange(0, 1_000_000_000)
         spin.setGroupSeparatorShown(True)
@@ -20178,7 +20186,8 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         parent.addWidget(box)
 
         ctx = {"info": info, "spin": spin, "table": table, "current": None,
-               "deals": {}, "addb": addb, "added": set(), "ladder": [], "name": ""}
+               "deals": {}, "addb": addb, "added": set(), "ladder": [], "name": "",
+               "name_lbl": name_lbl}
         addb.clicked.connect(lambda: self._ladder_add(key))
         # click a row → select all orders up to (and including) it
         table.cellClicked.connect(lambda r, _c, k=key: self._ladder_pick(k, r))
@@ -20491,6 +20500,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         ctx["current"] = (type_id, name)
         ctx["ladder"] = ladder
         ctx["name"] = name
+        # the name follows the ladder that is drawn below it
+        ctx["name_lbl"].setText(name or "")
+        ctx["name_lbl"].setToolTip(name or "")
         ctx["cutoff"] = cutoff
         already = type_id in self._cart_ids()
         if already:
