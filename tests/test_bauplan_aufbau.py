@@ -10515,6 +10515,144 @@ finally:
             _c93["ladder"] = []
 
 
+# ---------------------------------------------------------------- (b94)
+# DAYTRADE: EIN FEHLER LEERT DIE TABELLE (Issue #23) UND DER WAGEN NIMMT DEN
+# TAGESBEDARF (Issue #24). #23: schlug "Deals berechnen" fehl, stand nur die
+# Fehlerzeile da - die Tabelle des VORIGEN Laufs blieb und sah aus wie das
+# Ergebnis der aktuellen Einstellungen (Regional hat dafuer seit langem einen
+# Stale-Schutz). #24: nach dem Einfuegen sagte die Meldung "Menge = Tages-
+# bedarf", der Wagen bekam aber Menge 1 (der Vorschlag lag nur in sugg_qty).
+# Nutzer-Entscheid: die MENGE wird angepasst - Tagesbedarf = Anteil am
+# Tagesvolumen nach Konkurrenz, mindestens 1.
+import eve_trader.scanner as _sc94
+from PySide6.QtWidgets import QTableWidgetItem as _QTWI94
+_alt94 = (_st89.get_snapshot, _sc94.find_deals, _esi83.resolve_names, win._run,
+          _sp87._aktuell)
+_kopf94 = "  – no results (old table discarded)."
+
+
+def _seed94():
+    win.deals_table.setRowCount(2)
+    for _r in range(2):
+        win.deals_table.setItem(_r, 0, _QTWI94(f"Old{_r}"))
+    win._last_deals = [{"type_id": 34}]
+    win._deals_last = ([{"type_id": 34}], "flip")
+    win._ladder_ctx["day"]["deals"] = {34: {"type_id": 34}}
+
+
+def _boom94(*a, **k):
+    raise RuntimeError("420 error limited")
+
+
+def _lauf94(w, done, fail_cb=None, **k):
+    try:
+        _r = w._fn(*w._args, **w._kwargs)
+    except Exception as _e:
+        if fail_cb:
+            fail_cb(str(_e))
+        return
+    done(_r)
+
+
+try:
+    _st89.get_snapshot = lambda: [{"type_id": 34, "sell_min": 100.0, "buy_max": 90.0,
+                                   "sell_qty": 5, "buy_qty": 5}]
+    _esi83.resolve_names = lambda ids: {}
+    win._run = _lauf94
+    _sp87.sprache_setzen("en")
+    _seed94()
+    _sc94.find_deals = _boom94
+    win.compute_deals()
+    eq("b94 Fehler beim Berechnen: die Tabelle des vorigen Laufs ist weg",
+       win.deals_table.rowCount(), 0)
+    check("b94 ... auch die gemerkten Deals und die der Leiter (nichts Altes bleibt)",
+          win._last_deals == [] and win._ladder_ctx["day"]["deals"] == {})
+    try:
+        win._rerender_deals()
+        _neu94 = win.deals_table.rowCount()
+    except Exception:
+        _neu94 = -1
+    eq("b94 ... und ein spaeteres Neuzeichnen (Bilder-Nachtrag) holt sie nicht zurueck",
+       _neu94, 0)
+    check("b94 die Statuszeile nennt den Fehler UND dass die alte Tabelle verworfen wurde",
+          "Error: " in win.deal_status.text() and "420 error limited" in win.deal_status.text()
+          and _kopf94 in win.deal_status.text())
+    check("b94 der Knopf ist wieder frei", win.deals_btn.isEnabled())
+    _sp87.sprache_setzen("de")
+    _seed94()
+    win.compute_deals()
+    check("b94 deutsch: der Hinweis 'alte Tabelle verworfen' ist uebersetzt",
+          _t4(_kopf94) != _kopf94 and _t4(_kopf94) in win.deal_status.text())
+    _sp87.sprache_setzen("en")
+    _sc94.find_deals = lambda *a, **k: []
+    win.compute_deals()
+    check("b94 danach klappt ein normaler Lauf wieder (kein Fehler in der Statuszeile)",
+          "Error: " not in win.deal_status.text() and win.deals_btn.isEnabled())
+finally:
+    (_st89.get_snapshot, _sc94.find_deals, _esi83.resolve_names, win._run,
+     _sp87._aktuell) = _alt94
+    win.deals_table.setRowCount(0)
+    win._last_deals = []
+    win._deals_last = (None, None)
+    win._ladder_ctx["day"]["deals"] = {}
+
+# ---- #24: der Wagen bekommt den Tagesbedarf
+_wagen94 = []
+_alt2_94 = (_st89.add_shopping, win._cart_ids, win._render_shopping,
+            win._cart_conflict_filter)
+_deals94 = win._ladder_ctx["day"]["deals"]
+try:
+    _st89.add_shopping = (lambda tid, name, qty, buy=0.0, sell=0.0, source="",
+                          sugg_qty=0: _wagen94.append((tid, qty, source, sugg_qty)))
+    win._cart_ids = lambda: set()
+    win._render_shopping = lambda: None
+    win._cart_conflict_filter = lambda items: items
+    win._ladder_ctx["day"]["deals"] = {
+        34: {"type_id": 34, "daily_vol": 300, "competitors": 2},
+        35: {"type_id": 35, "daily_vol": 0.4, "competitors": 0}}
+    _r94 = win._add_deal_to_cart(34, "Item34")
+    check("b94 Wagen: Menge = Tagesbedarf (300 / (2 + 1 Konkurrenten) = 100), Vorschlag gleich",
+          _wagen94[-1] == (34, 100, "daytrade", 100) and _r94 == 100)
+    win._add_deal_to_cart(34, "Item34", qty=7)
+    check("b94 ... eine ausdrueckliche Menge gilt weiter (7), der Vorschlag wird trotzdem gemerkt",
+          _wagen94[-1] == (34, 7, "daytrade", 100))
+    win._add_deal_to_cart(35, "Item35")
+    check("b94 ... sehr kleines Volumen: mindestens 1", _wagen94[-1][1] == 1)
+    win._add_deal_to_cart(99, "Unknown")
+    check("b94 ... Deal nicht bekannt: Menge 1, kein Vorschlag",
+          _wagen94[-1] == (99, 1, "daytrade", 0))
+    _n94 = len(_wagen94)
+    win._cart_ids = lambda: {34}
+    _r94 = win._add_deal_to_cart(34, "Item34")
+    check("b94 ... schon im Wagen: False, nichts wird hinzugefuegt",
+          _r94 is False and len(_wagen94) == _n94)
+    # die Mehrfachauswahl im Daytrade-Tab
+    win._cart_ids = lambda: set()
+    win.deals_table.setRowCount(1)
+    _z94 = _QTWI94("Item34")
+    _z94.setData(Qt.UserRole, 34)
+    win.deals_table.setItem(0, 0, _z94)
+    _n94 = len(_wagen94)
+    win._deals_add_selection([0])
+    check("b94 Daytrade-Auswahl -> Wagen: Menge 100 (Tagesbedarf), wie die Meldung sagt",
+          len(_wagen94) == _n94 + 1 and _wagen94[-1][:2] == (34, 100)
+          and "1-day intake" in win.statusBar().currentMessage())
+    _src94 = __import__("inspect").getsource(type(win)._show_gold_dialog)
+    check("b94 Gold-Suche (Kontextmenue): die Meldung nennt die WIRKLICHE Menge",
+          "(quantity {qty})" in _src94 and "(quantity 1)" not in _src94)
+    _sp87.sprache_setzen("de")
+    _m94 = _t4("{name} added to the shopping cart (quantity {qty}).")
+    check("b94 ... und ist uebersetzt (mit beiden Platzhaltern)",
+          "{qty}" in _m94 and "{name}" in _m94
+          and _m94 != "{name} added to the shopping cart (quantity {qty}).")
+finally:
+    (_st89.add_shopping, win._cart_ids, win._render_shopping,
+     win._cart_conflict_filter) = _alt2_94
+    _sp87.sprache_setzen("en")
+    win._ladder_ctx["day"]["deals"] = _deals94
+    win.deals_table.setRowCount(0)
+
+
 # ---------------------------------------------------------------- (b79)
 # FEHLER.LOG-NETZ (siehe Kopf der Datei): alles, was dieser Lauf an
 # fehler.log angehaengt hat, darf keinen Programmierfehler enthalten.
