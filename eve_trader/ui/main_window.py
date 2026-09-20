@@ -21778,6 +21778,13 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         self.ord_andere.setStyleSheet(f"color:{theme.AMBER}; padding:2px 0;")
         self.ord_andere.setVisible(False)
         root.addWidget(self.ord_andere)
+        # A character whose orders could not be fetched (token, network, limit):
+        # without this its orders were simply missing from the lists.
+        self.ord_fehl = QLabel("")
+        self.ord_fehl.setWordWrap(True)
+        self.ord_fehl.setStyleSheet(f"color:{theme.AMBER}; padding:2px 0;")
+        self.ord_fehl.setVisible(False)
+        root.addWidget(self.ord_fehl)
 
         head = QHBoxLayout()
         load = QPushButton(t("Check orders")); load.setObjectName("Primary")
@@ -21967,12 +21974,21 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         active_loc = structure["structure_id"] if structure else station
         hub_lbl = self._active_hub_label()
         self.statusBar().showMessage(t("Loading open orders + market prices ({hub}) \u2026").format(hub=hub_lbl))
+        # Every load gets a number and only the NEWEST counts. The button, the
+        # character box and opening the tab can all start one; results used to
+        # apply in the order they ARRIVED, so an older load that finished last
+        # overwrote the newer data.
+        self._ord_load_id = getattr(self, "_ord_load_id", 0) + 1
+        load_id = self._ord_load_id
+        _char_namen = {c["character_id"]: c.get("character_name") or str(c["character_id"])
+                       for c in chars}
 
         _woanders = {}
 
         def job():
             import concurrent.futures as cf
             myorders = []
+            failed_chars = []
             for cid in cid_list:
                 try:
                     for o in esi.fetch_character_orders(client_id, cid):
@@ -21989,7 +22005,9 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                                          o.get("order_id"), cid,
                                          int(o.get("volume_remain", 0) or 0)))
                 except Exception:
-                    pass
+                    # Not silent: this character's orders are missing from the
+                    # lists, and the user has to be told.
+                    failed_chars.append(_char_namen.get(cid, str(cid)))
             tids = list({_ti for _ti, _p, _b, _oid, _cid, _v in myorders})
             books = {}
             if structure:                       # Upwell: ein Orderbuch-Fetch für alles
@@ -22035,12 +22053,15 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                                 continue
                     _andere.append((_n or str(_lid), _anz))
             return {"orders": myorders, "books": books, "names": names,
-                    "hub": active_loc, "andere": _andere}
+                    "hub": active_loc, "andere": _andere,
+                    "failed_chars": failed_chars}
 
         self._ord_laeuft = True
 
         def done(res):
             import time as _t_ord2
+            if load_id != self._ord_load_id:
+                return          # superseded by a newer load: that one counts
             self._ord_laeuft = False
             # Merken, WANN und fuer WELCHEN Hub geladen wurde - danach
             # entscheidet _on_tab_changed, ob neu geholt werden muss.
@@ -22199,6 +22220,15 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             ns = sum(1 for r in sell_rows if r["flag"])
             nl = sum(1 for r in sell_rows if r.get("loss"))
             nu = sum(1 for r in buy_rows + sell_rows if r.get("unknown"))
+            _fc = res.get("failed_chars") or []
+            if _fc:
+                self.ord_fehl.setText(t(
+                    "\u26a0 Orders of {names} could not be loaded \u2013 the lists below "
+                    "are incomplete. Press \u201e{button}\u201c again.").format(
+                        names=", ".join(_fc), button=t("Check orders")))
+                self.ord_fehl.setVisible(True)
+            else:
+                self.ord_fehl.setVisible(False)
             # HINWEIS AUF ANDERE ORTE - vor allem, wenn hier gar nichts steht.
             _and = res.get("andere") or []
             if _and:
@@ -22219,8 +22249,12 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
                 _txt("Orders checked: {b} buy ({nb} to adjust), {s} sell ({ns} to adjust"
                      ).format(b=len(buy_rows), nb=nb, s=len(sell_rows), ns=ns)
                 + (_txt(", {n} of them only at a loss").format(n=nl) if nl else "")
-                + (_txt(", {n} could not be checked").format(n=nu) if nu else "") + ").")
+                + (_txt(", {n} could not be checked").format(n=nu) if nu else "")
+                + (_txt(", {n} character(s) could not be loaded").format(n=len(_fc))
+                   if _fc else "") + ").")
         def _ord_fehler(msg):
+            if load_id != self._ord_load_id:
+                return          # an error of a superseded load says nothing now
             # WICHTIG: ohne das bliebe die Laufsperre nach einem Netzfehler
             # fuer immer stehen - und das automatische Laden waere tot.
             self._ord_laeuft = False
