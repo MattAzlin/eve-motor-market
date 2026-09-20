@@ -18940,6 +18940,13 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         self.rg_status.setVisible(False)   # leer -> versteckt (kein Platz über ROUTE)
         self._auto_hide_when_empty(self.rg_status)
         _rbl.addWidget(self.rg_status)
+        # Notice while the profit shown leaves out hauling or a sales check
+        # (freight 0 / minimum destination volume 0 - the defaults).
+        self.rg_warn = QLabel("")
+        self.rg_warn.setWordWrap(True)
+        self.rg_warn.setStyleSheet(f"color:{theme.AMBER};")
+        self._auto_hide_when_empty(self.rg_warn)
+        _rbl.addWidget(self.rg_warn)
         _rbl.addWidget(rg_strat_card); _rbl.addWidget(rg_fracht_card)
         _rbl.addWidget(rg_filter_card)
 
@@ -19754,6 +19761,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
             self._rg_raw = None
             self._rg_last_key = None
             self._last_rg_diag = {}
+            self.rg_warn.setText("")
             self.rg_table.setRowCount(0)
             self.rg_status.setText("\u26a0 " + msg + _txt("  \u2013 no results "
                                                             "(old table discarded)."))
@@ -19773,6 +19781,22 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         if getattr(self, "_rg_raw", None) is not None:
             self._apply_rg_view()
 
+    def _rg_cost_warning(self, haul, min_vol):
+        """Notice for the Regional table: the profit shown is BEFORE freight when
+        the transport cost is 0, and nothing checks that the item sells at the
+        destination when the minimum volume is 0. Both are the defaults, so a
+        first "Load deals" would otherwise look better than it is. Empty when
+        neither applies."""
+        parts = []
+        if not haul:
+            parts.append(t("Transport cost (ISK/m\u00b3) is 0 \u2013 the profit shown "
+                           "does not include hauling."))
+        if not min_vol:
+            parts.append(t("\u201e{name}\u201c (Fine filters) is 0 \u2013 nothing checks "
+                           "that the item sells at the destination.").format(
+                name=t("Min \u00d8 daily volume dest. region")))
+        return ("\u26a0 " + " ".join(parts)) if parts else ""
+
     def _apply_rg_view(self):
         """Wendet Fracht (Transportkosten) + alle Feinfilter LIVE auf die zuletzt
         gesuchten Roh-Deals an und rendert neu – ohne neuen ESI-Ladevorgang.
@@ -19786,6 +19810,7 @@ class MainWindow(BauplanFenster, BauplanTabs, Optimizer, MainWindowHelpers,
         min_profit = self.rg_profit.value()
         min_liq = self.rg_liq.value()
         min_vol = self.rg_vol.value()
+        self.rg_warn.setText(self._rg_cost_warning(haul, min_vol))
         pmin = self.rg_pmin.value(); pmax = self.rg_pmax.value()
         # Trichter-Zähler (dieselbe Ehrlichkeits-Regel wie die Swing-
         # Diagnosezeile): jeder Ausschluss wird gezählt, die Statuszeile
